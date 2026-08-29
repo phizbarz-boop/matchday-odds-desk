@@ -1,0 +1,18 @@
+{
+  "name": "matchday-odds-desk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Daily football match probability dashboard using a Poisson goal-expectancy model.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "refresh": "node jobs/refresh.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "redis": "^4.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
