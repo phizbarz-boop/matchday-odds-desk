@@ -1,0 +1,15 @@
+name: Daily Predictions Refresh
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC = 07:00 WAT (Africa/Lagos)
+  workflow_dispatch: {}    # allows manually running this from the Actions tab
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the refresh endpoint
+        run: |
+          curl -sf -X POST "https://matchday-odds-desk.onrender.com/api/refresh" \
+            -H "X-Refresh-Secret: EVNd1bw5FbupB6MlzyGiW3QKnxQBQ3r5"
