@@ -107,7 +107,7 @@ async function main() {
       all = all.concat(rows);
       console.log(`${code}: ${rows.length} fixtures`);
     } catch (err) {
-      console.error(`Failed to build ${code}:`, err.message);
+      console.log(`Failed to build ${code}:`, err.message);
     }
   }
   all.sort((x, y) => y.pickProb - x.pickProb);
