@@ -46,6 +46,10 @@ function sanitizeTelegramSlip(items) {
     marketReliability: Number(x?.marketReliability) || null,
     qualityScore: Number(x?.qualityScore) || null,
     edgeType: String(x?.edgeType || '').slice(0, 40),
+    fairOdds: Number(x?.fairOdds) || null,
+    fullWinProbability: Number(x?.fullWinProbability) || null,
+    nonLossProbability: Number(x?.nonLossProbability) || null,
+    settlementNote: String(x?.settlementNote || '').slice(0, 100),
     specifier: x?.specifier ? String(x.specifier).slice(0, 120) : null,
   }));
 }
@@ -95,14 +99,15 @@ function telegramManualSlipText(payload) {
     `Combined odds: ${combined.toFixed(2)}`,
     `Selections: ${slip.length}`,
     ...(avg !== null ? [`Average leg probability: ${avg.toFixed(1)}%`] : []),
-    ...(slipProb !== null ? [`Estimated full-slip probability: ${slipProb.toFixed(3)}%`] : []),
+    ...(slipProb !== null ? [`Estimated slip fair-price probability: ${slipProb.toFixed(3)}%`] : []),
     ...(avgEdge !== null ? [`Average probability edge: ${avgEdge.toFixed(1)} pts`] : []),
     ...(avgQ !== null ? [`Average quality score: ${avgQ.toFixed(1)}/100`] : []),
     '',
   ];
   slip.forEach((x, i) => {
     lines.push(`${i + 1}. [${x.sport || 'Sport'}] ${x.home} vs ${x.away}`);
-    lines.push(`   ${x.outcomeDesc || x.marketDesc || 'Selection'} @ ${Number(x.odds || 0).toFixed(2)}${Number.isFinite(Number(x.probability)) ? ` | prob ${Number(x.probability).toFixed(1)}%` : ''}${Number.isFinite(Number(x.impliedProbability)) ? ` | implied ${Number(x.impliedProbability).toFixed(1)}%` : ''}${Number.isFinite(Number(x.edge)) ? ` | edge ${Number(x.edge).toFixed(1)}` : ''}${Number.isFinite(Number(x.qualityScore)) ? ` | Q ${Number(x.qualityScore).toFixed(1)}` : ''}`);
+    lines.push(`   ${x.outcomeDesc || x.marketDesc || 'Selection'} @ ${Number(x.odds || 0).toFixed(2)}${Number.isFinite(Number(x.probability)) ? ` | model/fair ${Number(x.probability).toFixed(1)}%` : ''}${Number.isFinite(Number(x.impliedProbability)) ? ` | implied ${Number(x.impliedProbability).toFixed(1)}%` : ''}${Number.isFinite(Number(x.edge)) ? ` | edge ${Number(x.edge).toFixed(1)}` : ''}${Number.isFinite(Number(x.qualityScore)) ? ` | Q ${Number(x.qualityScore).toFixed(1)}` : ''}`);
+    if (x.settlementNote && x.settlementNote !== 'Win/lose market') lines.push(`   Settlement: ${x.settlementNote}${Number.isFinite(Number(x.fullWinProbability)) ? ` | full-win ${Number(x.fullWinProbability).toFixed(1)}%` : ''}${Number.isFinite(Number(x.nonLossProbability)) ? ` | non-loss ${Number(x.nonLossProbability).toFixed(1)}%` : ''}`);
   });
   if (payload?.shareURL) lines.push('', `SportyBet link: ${payload.shareURL}`);
   return lines.join('\n');
@@ -190,12 +195,12 @@ app.get('/api/predictions', async (req, res) => {
 
 
 // Live-ish SportyBet price layer. The Parse API key never reaches the browser.
-// Supported values: 1x2, gg, ou. Results are cached (Redis when available).
+// Supported football values: 1x2, gg, dc, dnb, ou15, ou45, ah. O/U 2.5 is intentionally not used by the Auto Builder.
 app.get('/api/sportybet/odds', async (req, res) => {
   try {
     const kind = String(req.query.market || '1x2').toLowerCase();
-    if (!['1x2', 'gg', 'ou'].includes(kind)) {
-      return res.status(400).json({ error: 'market must be one of: 1x2, gg, ou' });
+    if (!['1x2', 'gg', 'dc', 'dnb', 'ou15', 'ou45', 'ah'].includes(kind)) {
+      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou15, ou45, ah' });
     }
     const payload = await loadSportyBetMarket(kind);
     res.set('Cache-Control', 'public, max-age=60');
@@ -250,30 +255,35 @@ function normalizeSportScope(value) {
   return ['all', 'football', 'basketball', 'hockey'].includes(v) ? v : 'all';
 }
 
-async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, minEdge = 0, leagues = null } = {}) {
+async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, minEdge = 0, leagues = null, betTypes = null } = {}) {
   const scope = normalizeSportScope(sportScope);
   const wantsFootball = scope === 'all' || scope === 'football';
   const wantsBasketball = scope === 'all' || scope === 'basketball';
   const wantsHockey = scope === 'all' || scope === 'hockey';
 
-  const [predictions, f1x2, fgg, fou, basketballWinner, hockeyWinner] = await Promise.all([
+  const [predictions, f1x2, fgg, fdc, fdnb, fou15, fou45, fah, basketballWinner, hockeyWinner] = await Promise.all([
     wantsFootball ? loadPredictions() : Promise.resolve({ matches: [] }),
     wantsFootball ? loadSportyBetMarket('1x2', 'football') : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('gg', 'football') : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('ou', 'football') : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('dc', 'football') : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('dnb', 'football') : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('ou15', 'football') : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('ou45', 'football') : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('ah', 'football') : Promise.resolve({ rows: [] }),
     wantsBasketball ? loadSportyBetMarket('winner', 'basketball') : Promise.resolve({ rows: [] }),
     wantsHockey ? loadSportyBetMarket('winner', 'hockey') : Promise.resolve({ rows: [] }),
   ]);
 
   return buildCandidates({
     predictions,
-    footballMarkets: { '1x2': f1x2, gg: fgg, ou: fou },
+    footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou15: fou15, ou45: fou45, ah: fah },
     basketballWinner,
     hockeyWinner,
     minProbability,
     minEdge,
     leagues,
     sportScope: scope,
+    betTypes,
   });
 }
 
@@ -286,8 +296,9 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const minEdge = Math.min(50, Math.max(-25, Number(body.minEdge) || 0));
     const leagues = Array.isArray(body.leagues) ? body.leagues.map(String) : null;
     const sportScope = normalizeSportScope(body.sportScope);
+    const betTypes = Array.isArray(body.betTypes) ? body.betTypes.map(String) : null;
 
-    const candidates = await loadAutoCandidates({ sportScope, minProbability, minEdge, leagues });
+    const candidates = await loadAutoCandidates({ sportScope, minProbability, minEdge, leagues, betTypes });
     const result = selectAutoBet(candidates, { targetOdds, maxSelections });
     if (!result.selections.length) {
       return res.status(404).json({
@@ -305,8 +316,9 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       minProbability,
       minEdge,
       maxSelections,
+      betTypes,
       generatedAt: new Date().toISOString(),
-      note: 'Value engine: implied probability = 1/odds; football edge compares Poisson+H2H to bookmaker price. Basketball/hockey remain no-vig market estimates, not independent model predictions.',
+      note: 'Value engine: football uses 1X2, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap +0/+0.25/-0.25. O/U 2.5 is excluded. DNB/AH use settlement-aware fair odds and EV; basketball/hockey remain no-vig market estimates.',
     });
   } catch (err) {
     console.error('SportyBet auto-pick error:', err.message);
@@ -337,7 +349,7 @@ function telegramSlipText(target, result, booking, sportScope) {
     `Actual odds: ${Number(result.combinedOdds || 1).toFixed(2)}`,
     `Average leg probability: ${Number(result.averageProbability || 0).toFixed(1)}%`,
     `Minimum leg probability: ${Number(result.minimumProbability || 0).toFixed(1)}%`,
-    `Estimated full-slip probability: ${Number(result.estimatedSlipProbability || 0).toFixed(3)}%`,
+    `Estimated slip fair-price probability: ${Number(result.estimatedSlipProbability || 0).toFixed(3)}%`,
     `Average probability edge: ${Number(result.averageEdge || 0).toFixed(1)} pts`,
     `Average quality score: ${Number(result.averageQualityScore || 0).toFixed(1)}/100`,
     `Estimated slip EV: ${Number(result.estimatedSlipEVPct || 0).toFixed(1)}%`,
@@ -347,7 +359,8 @@ function telegramSlipText(target, result, booking, sportScope) {
   ];
   result.selections.forEach((x, i) => {
     lines.push(`${i + 1}. [${x.sport}] ${x.home} vs ${x.away}`);
-    lines.push(`   ${x.outcomeDesc || x.marketDesc} @ ${Number(x.odds).toFixed(2)} | model/market ${Number(x.probability).toFixed(1)}% | implied ${Number(x.impliedProbability || 0).toFixed(1)}% | edge ${Number(x.edge || 0).toFixed(1)} | Q ${Number(x.qualityScore || 0).toFixed(1)}`);
+    lines.push(`   ${x.outcomeDesc || x.marketDesc} @ ${Number(x.odds).toFixed(2)} | model/fair ${Number(x.probability).toFixed(1)}% | implied ${Number(x.impliedProbability || 0).toFixed(1)}% | edge ${Number(x.edge || 0).toFixed(1)} | Q ${Number(x.qualityScore || 0).toFixed(1)}`);
+    if (x.settlementNote && x.settlementNote !== 'Win/lose market') lines.push(`   Settlement: ${x.settlementNote} | full-win ${Number(x.fullWinProbability || 0).toFixed(1)}% | non-loss ${Number(x.nonLossProbability || 0).toFixed(1)}% | fair odds ${Number(x.fairOdds || 0).toFixed(2)}`);
   });
   if (booking?.shareURL) lines.push('', `SportyBet link: ${booking.shareURL}`);
   if (Array.isArray(booking?.unavailableOutcomes) && booking.unavailableOutcomes.length) {

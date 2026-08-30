@@ -28,7 +28,8 @@ H2H_MAX_WEIGHT=0.18
 
 The UI now has three sport sessions/tabs:
 
-- Football: 1X2, GG/NG, Over/Under 2.5
+- Football: 1X2, GG/NG, Double Chance, Draw No Bet, Over 1.5 Goals, Under 4.5 Goals, Asian Handicap +0 / +0.25 / -0.25
+- Over/Under 2.5 is intentionally excluded from the Auto Builder
 - Basketball: Winner incl. overtime, Handicap incl. overtime, Over/Under incl. overtime
 - Ice Hockey: Winner/1X2, Puck Line/Handicap, Over/Under Goals
 
@@ -71,7 +72,11 @@ For deeper historical H2H, use a football-data.org plan with history access (for
 ```text
 GET /api/sportybet/odds?market=1x2
 GET /api/sportybet/odds?market=gg
-GET /api/sportybet/odds?market=ou
+GET /api/sportybet/odds?market=dc
+GET /api/sportybet/odds?market=dnb
+GET /api/sportybet/odds?market=ou15
+GET /api/sportybet/odds?market=ou45
+GET /api/sportybet/odds?market=ah
 
 GET /api/sportybet/sport/basketball?market=winner
 GET /api/sportybet/sport/basketball?market=handicap
@@ -111,7 +116,9 @@ Example JSON body:
 
 The auto builder scans:
 
-- Football 1X2, GG/NG and Over/Under 2.5 using the Poisson + H2H model probability.
+- Football 1X2, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap 0/±0.25 using Poisson + capped H2H probabilities.
+- DNB and Asian quarter-handicap EV/fair odds are settlement-aware: pushes, half wins and half losses are explicitly priced.
+- O/U 2.5 is not used by the Auto Builder.
 - Basketball Winner using no-vig SportyBet market probability.
 - Ice Hockey Winner using no-vig SportyBet market probability.
 

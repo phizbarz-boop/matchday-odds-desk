@@ -10,8 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Kick off the refresh job
+        env:
+          REFRESH_SECRET: ${{ secrets.REFRESH_SECRET }}
         run: |
+          test -n "$REFRESH_SECRET" || (echo "Missing GitHub secret REFRESH_SECRET" && exit 1)
           curl -sS -X POST "https://matchday-odds-desk.onrender.com/api/refresh" \
-            -H "X-Refresh-Secret: EVNd1bw5FbupB6MlzyGiW3QKnxQBQ3r5" \
+            -H "X-Refresh-Secret: $REFRESH_SECRET" \
             -w "\nHTTP_STATUS:%{http_code}\n" \
             --max-time 30
