@@ -1,2 +1,2 @@
-{"ok":true,"log":"PL: 5 fixtures\nPD: 6 fixtures\nSA: 5 fixtures\nBL1: 2 fixtures\nFL1: 4 fixtures\nWrote predictions to Redis key \"predictions:latest\"\nDone. 22 total fixtures.\n"}
+{"ok":true,"log":"LEAGUES env raw = \"PL,PD,SA,BL1,FL1,ELC,DED,PPL,CL\"\nLEAGUE_CODES = [\"PL\",\"PD\",\"SA\",\"BL1\",\"FL1\",\"ELC\",\"DED\",\"PPL\",\"CL\"]\nPL: 5 fixtures\nPD: 6 fixtures\nSA: 5 fixtures\nBL1: 2 fixtures\nFL1: 4 fixtures\nWrote predictions to Redis key \"predictions:latest\"\nDone. 22 total fixtures.\n"}
 HTTP_STATUS:200
