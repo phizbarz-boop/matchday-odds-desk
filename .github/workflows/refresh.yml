@@ -5,13 +5,27 @@ on:
     - cron: '0 6 * * *'   # 06:00 UTC = 07:00 WAT (Africa/Lagos)
   workflow_dispatch: {}    # allows manually running this from the Actions tab
 
+permissions:
+  contents: write
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Ping the refresh endpoint
         run: |
           curl -sS -X POST "https://matchday-odds-desk.onrender.com/api/refresh" \
             -H "X-Refresh-Secret: EVNd1bw5FbupB6MlzyGiW3QKnxQBQ3r5" \
             -w "\nHTTP_STATUS:%{http_code}\n" \
-            --max-time 120
+            --max-time 120 > refresh-log.txt 2>&1 || true
+          cat refresh-log.txt
+
+      - name: Commit log for debugging
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "github-actions"
+          git add refresh-log.txt
+          git commit -m "Refresh run log [skip ci]" || echo "nothing to commit"
+          git push
