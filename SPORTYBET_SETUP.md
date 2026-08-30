@@ -148,3 +148,16 @@ PARSE_BOOKING_SCRAPER_ID=8ffd9f0c-6174-43af-80dc-4898f47f074b
 ```
 
 The booking lookup is a separate Parse request and therefore consumes the credits charged by that endpoint. Current market data may also be fetched if it is not already cached.
+
+
+## Booking Code Analyzer extended horizon
+
+The Analyzer uses its own future-match window and does not change the normal Auto Builder horizon. Optional Render variables:
+
+```text
+ANALYZER_DAYS=14
+ANALYZER_MAX_PAGES=12
+PREDICTION_DAYS_AHEAD=21
+```
+
+The website lets the user choose 7, 14, or 21 days for each analysis. The build defaults the football prediction refresh to 21 days so all three Analyzer choices can be scored when football-data.org exposes the fixture. You may explicitly set `PREDICTION_DAYS_AHEAD=21` in Render to make that behavior visible in your configuration. `SPORTYBET_HOURS` can remain at 120 for the normal Auto Builder.

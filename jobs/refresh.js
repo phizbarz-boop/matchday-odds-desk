@@ -9,7 +9,9 @@ const { teamStrength, predictMatch, summarizeH2H, blendPredictionWithH2H } = req
 
 const TOKEN = process.env.FOOTBALL_DATA_TOKEN;
 const LEAGUE_CODES = (process.env.LEAGUES || 'PL,PD,SA,BL1,FL1').split(',').map(s => s.trim());
-const DAYS_AHEAD = parseInt(process.env.DAYS_AHEAD || '4', 10);
+// Keep enough model fixtures for the Analyzer without forcing the normal SportyBet Auto Builder to scan the same horizon.
+const ANALYZER_DAYS = Math.max(7, Math.min(21, parseInt(process.env.ANALYZER_DAYS || '14', 10)));
+const DAYS_AHEAD = Math.max(parseInt(process.env.DAYS_AHEAD || '4', 10), parseInt(process.env.PREDICTION_DAYS_AHEAD || '21', 10));
 const H2H_PREVIOUS_SEASONS = Math.max(0, Math.min(3, parseInt(process.env.H2H_PREVIOUS_SEASONS || '1', 10)));
 const H2H_MAX_WEIGHT = Math.max(0, Math.min(0.35, parseFloat(process.env.H2H_MAX_WEIGHT || '0.18')));
 const H2H_MAX_MEETINGS = Math.max(1, Math.min(20, parseInt(process.env.H2H_MAX_MEETINGS || '8', 10)));

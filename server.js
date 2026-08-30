@@ -113,9 +113,13 @@ function telegramManualSlipText(payload) {
   return lines.join('\n');
 }
 
-async function loadSportyBetMarket(kind, sport = 'football') {
+async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   const ttlSeconds = Math.max(60, parseInt(process.env.SPORTYBET_CACHE_SECONDS || '43200', 10));
-  const cacheKey = `sportybet:${sport}:${kind}:latest`;
+  const normalHours = Math.max(1, parseInt(process.env.SPORTYBET_HOURS || String((parseInt(process.env.DAYS_AHEAD || '4', 10) + 1) * 24), 10));
+  const hours = Math.max(1, Math.min(24 * 21, parseInt(options.hours || normalHours, 10)));
+  const maxPages = Math.max(1, Math.min(20, parseInt(options.maxPages || process.env.SPORTYBET_MAX_PAGES || '5', 10)));
+  // Keep Analyzer's 14/21-day cache completely separate from the normal Auto Builder cache.
+  const cacheKey = `sportybet:${sport}:${kind}:h${hours}:p${maxPages}`;
   const client = await getRedis();
 
   if (client) {
@@ -126,10 +130,9 @@ async function loadSportyBetMarket(kind, sport = 'football') {
     if (hit && hit.expiresAt > Date.now()) return hit.payload;
   }
 
-  const hours = Math.max(1, parseInt(process.env.SPORTYBET_HOURS || String((parseInt(process.env.DAYS_AHEAD || '4', 10) + 1) * 24), 10));
   const payload = sport === 'football'
-    ? await getFootballMarket(kind, { hours })
-    : await getSportMarket(sport, kind, { hours });
+    ? await getFootballMarket(kind, { hours, maxPages })
+    : await getSportMarket(sport, kind, { hours, maxPages });
 
   if (client) {
     await client.set(cacheKey, JSON.stringify(payload), { EX: ttlSeconds });
@@ -255,7 +258,7 @@ function normalizeSportScope(value) {
   return ['all', 'football', 'basketball', 'hockey'].includes(v) ? v : 'all';
 }
 
-async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, minEdge = 0, leagues = null, betTypes = null } = {}) {
+async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null } = {}) {
   const scope = normalizeSportScope(sportScope);
   const wantsFootball = scope === 'all' || scope === 'football';
   const wantsBasketball = scope === 'all' || scope === 'basketball';
@@ -263,17 +266,17 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
 
   const [predictions, f1x2, fgg, fdc, fdnb, fou15, fou45, fah, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
     wantsFootball ? loadPredictions() : Promise.resolve({ matches: [] }),
-    wantsFootball ? loadSportyBetMarket('1x2', 'football') : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('gg', 'football') : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('dc', 'football') : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('dnb', 'football') : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('ou15', 'football') : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('ou45', 'football') : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('ah', 'football') : Promise.resolve({ rows: [] }),
-    wantsBasketball ? loadSportyBetMarket('winner', 'basketball') : Promise.resolve({ rows: [] }),
-    wantsBasketball ? loadSportyBetMarket('totals', 'basketball') : Promise.resolve({ rows: [] }),
-    wantsHockey ? loadSportyBetMarket('winner', 'hockey') : Promise.resolve({ rows: [] }),
-    wantsHockey ? loadSportyBetMarket('totals', 'hockey') : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('1x2', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('gg', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('dc', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('dnb', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('ou15', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('ou45', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('ah', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsBasketball ? loadSportyBetMarket('winner', 'basketball', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsBasketball ? loadSportyBetMarket('totals', 'basketball', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsHockey ? loadSportyBetMarket('winner', 'hockey', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsHockey ? loadSportyBetMarket('totals', 'hockey', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
   ]);
 
   return buildCandidates({
@@ -358,6 +361,9 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
   try {
     const bookingCode = String(req.body?.bookingCode || '').trim().toUpperCase();
     const minProbability = Math.min(95, Math.max(0, Number(req.body?.minProbability) || 55));
+    const horizonDays = [7, 14, 21].includes(Number(req.body?.horizonDays)) ? Number(req.body.horizonDays) : Math.max(7, Math.min(21, parseInt(process.env.ANALYZER_DAYS || '14', 10)));
+    const analyzerHours = horizonDays * 24;
+    const analyzerMaxPages = Math.max(5, Math.min(20, parseInt(process.env.ANALYZER_MAX_PAGES || '12', 10)));
     if (!bookingCode) return res.status(400).json({ error: 'Enter a SportyBet booking code' });
 
     const booking = await getBooking(bookingCode);
@@ -366,10 +372,14 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
 
     // Build the complete supported candidate universe with filtering disabled. The Analyzer
     // then applies the user's chosen probability threshold to the exact imported selections.
-    const candidates = await loadAutoCandidates({ sportScope: 'all', minProbability: 0, minEdge: -25, leagues: null, betTypes: null });
+    const candidates = await loadAutoCandidates({ sportScope: 'all', minProbability: 0, minEdge: -25, leagues: null, betTypes: null, marketHours: analyzerHours, marketMaxPages: analyzerMaxPages });
     const analyzed = sourceRows.map((leg, index) => {
       let best = null, bestScore = -1;
-      for (const c of candidates) {
+      // Exact SportyBet event ID is the strongest signal. Only fall back to team-name
+      // matching when the imported booking does not provide a usable event ID.
+      const exactEventCandidates = leg.eventId ? candidates.filter(c => String(c.eventId || '') === leg.eventId) : [];
+      const pool = exactEventCandidates.length ? exactEventCandidates : candidates;
+      for (const c of pool) {
         const sc = analyzerCandidateScore(leg, c);
         if (sc > bestScore) { bestScore = sc; best = c; }
       }
@@ -405,6 +415,8 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
     res.json({
       bookingCode,
       minProbability,
+      horizonDays,
+      analyzerHours,
       originalSelectionCount: sourceRows.length,
       supportedCount: analyzed.filter(x=>x.supported).length,
       qualifiedCount: qualifiedSelections.length,
@@ -413,7 +425,7 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
       analyzed,
       qualifiedSelections,
       generatedAt: new Date().toISOString(),
-      note: 'Only markets supported by the current Matchday probability engine are scored. Unsupported selections are never assigned a guessed probability.',
+      note: `Analyzer searched up to ${horizonDays} days ahead. Only markets supported by the current Matchday probability engine are scored. Unsupported selections are never assigned a guessed probability.`,
     });
   } catch (err) {
     console.error('SportyBet analyzer error:', err.message);
