@@ -93,21 +93,18 @@ async function storeResult(payload) {
 }
 
 async function main() {
-  console.log('LEAGUES env raw =', JSON.stringify(process.env.LEAGUES));
-  console.log('LEAGUE_CODES =', JSON.stringify(LEAGUE_CODES));
   if (!TOKEN) {
     console.error('Missing FOOTBALL_DATA_TOKEN env var.');
     process.exit(1);
   }
   let all = [];
   for (const code of LEAGUE_CODES) {
-    console.log('Attempting', code);
     try {
       const rows = await buildLeague(code);
       all = all.concat(rows);
       console.log(`${code}: ${rows.length} fixtures`);
     } catch (err) {
-      console.log(`Failed to build ${code}:`, err.message);
+      console.error(`Failed to build ${code}:`, err.message);
     }
   }
   all.sort((x, y) => y.pickProb - x.pickProb);

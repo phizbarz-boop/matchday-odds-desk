@@ -42,25 +42,28 @@ app.get('/api/predictions', async (req, res) => {
   }
 });
 
-// Manual trigger to run the refresh job on-demand (protected by a shared secret).
-app.post('/api/refresh', express.json(), async (req, res) => {
+// Manual/scheduled trigger to run the refresh job (protected by a shared secret).
+// Pulling every league while respecting football-data.org's rate limit can take
+// a couple of minutes, so this kicks the job off in the background and returns
+// immediately rather than holding the HTTP request open the whole time.
+app.post('/api/refresh', express.json(), (req, res) => {
   if (!process.env.REFRESH_SECRET || req.headers['x-refresh-secret'] !== process.env.REFRESH_SECRET) {
     return res.status(401).json({ error: 'unauthorized' });
   }
-  try {
-    delete require.cache[require.resolve('./jobs/refresh')];
-    // refresh.js runs main() on require; simplest is to spawn it as a child process.
-    const { execFile } = require('child_process');
-    execFile('node', [path.join(__dirname, 'jobs', 'refresh.js')], { env: process.env }, (err, stdout, stderr) => {
-      if (err) {
-        console.error(stderr);
-        return res.status(500).json({ error: 'refresh failed', detail: stderr });
-      }
-      res.json({ ok: true, log: stdout });
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  const { spawn } = require('child_process');
+  const child = spawn('node', [path.join(__dirname, 'jobs', 'refresh.js')], {
+    env: process.env,
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let log = '';
+  child.stdout.on('data', (d) => { log += d; console.log(d.toString().trim()); });
+  child.stderr.on('data', (d) => { log += d; console.error(d.toString().trim()); });
+  child.on('exit', (code) => {
+    console.log(`refresh job exited with code ${code}`);
+  });
+  child.unref();
+  res.json({ ok: true, started: true, message: 'Refresh started in the background; check /api/predictions in a couple of minutes.' });
 });
 
 app.listen(PORT, () => console.log(`Matchday site listening on :${PORT}`));
