@@ -128,3 +128,23 @@ The frontend exposes both **Auto Pick Best Bets** and **Auto Pick + Generate Cod
 
 No additional Render environment variable is required for this feature. It reuses
 `PARSE_API_KEY`, the existing SportyBet cache settings, and the existing football prediction data.
+
+## Booking Code Analyzer
+
+The website includes a Booking Code Analyzer for SportyBet share/booking codes created outside Matchday Odds Desk.
+
+Flow:
+1. Paste the outside SportyBet booking code.
+2. Choose the minimum probability to keep (for example 60%).
+3. Press **Analyze Code**.
+4. Each supported leg is matched to the current Matchday probability/value engine and marked **KEEP** or **REMOVE**.
+5. Unsupported markets are shown as **NOT SCORED**; the app never invents a probability for them.
+6. Press **Generate New SportyBet Code** to rebuild a code from only the qualifying selections.
+
+The analyzer uses the same `PARSE_API_KEY` already configured in Render. It retrieves existing booking-code details through Parse's SportyBet `get_booking` endpoint. The default decoder scraper is built in. To override it, add this optional Render environment variable:
+
+```text
+PARSE_BOOKING_SCRAPER_ID=8ffd9f0c-6174-43af-80dc-4898f47f074b
+```
+
+The booking lookup is a separate Parse request and therefore consumes the credits charged by that endpoint. Current market data may also be fetched if it is not already cached.

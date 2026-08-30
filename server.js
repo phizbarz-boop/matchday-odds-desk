@@ -7,7 +7,7 @@ const app = express();
 app.set('trust proxy', 1); // Render forwards the real client IP.
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
-const { getFootballMarket, getSportMarket, bookBet, SPORT_CONFIG } = require('./lib/sportybet');
+const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG } = require('./lib/sportybet');
 const { buildCandidates, selectAutoBet } = require('./lib/autoPicker');
 const { sendTelegramMessage } = require('./lib/telegram');
 
@@ -261,7 +261,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
   const wantsBasketball = scope === 'all' || scope === 'basketball';
   const wantsHockey = scope === 'all' || scope === 'hockey';
 
-  const [predictions, f1x2, fgg, fdc, fdnb, fou15, fou45, fah, basketballWinner, hockeyWinner] = await Promise.all([
+  const [predictions, f1x2, fgg, fdc, fdnb, fou15, fou45, fah, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
     wantsFootball ? loadPredictions() : Promise.resolve({ matches: [] }),
     wantsFootball ? loadSportyBetMarket('1x2', 'football') : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('gg', 'football') : Promise.resolve({ rows: [] }),
@@ -271,14 +271,18 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
     wantsFootball ? loadSportyBetMarket('ou45', 'football') : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('ah', 'football') : Promise.resolve({ rows: [] }),
     wantsBasketball ? loadSportyBetMarket('winner', 'basketball') : Promise.resolve({ rows: [] }),
+    wantsBasketball ? loadSportyBetMarket('totals', 'basketball') : Promise.resolve({ rows: [] }),
     wantsHockey ? loadSportyBetMarket('winner', 'hockey') : Promise.resolve({ rows: [] }),
+    wantsHockey ? loadSportyBetMarket('totals', 'hockey') : Promise.resolve({ rows: [] }),
   ]);
 
   return buildCandidates({
     predictions,
     footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou15: fou15, ou45: fou45, ah: fah },
     basketballWinner,
+    basketballTotals,
     hockeyWinner,
+    hockeyTotals,
     minProbability,
     minEdge,
     leagues,
@@ -286,6 +290,140 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
     betTypes,
   });
 }
+
+
+function analyzerNormText(v) {
+  return String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function analyzerNormTeam(v) {
+  return analyzerNormText(v).replace(/\b(fc|cf|afc|sc|ssc|club|football|futbol|calcio)\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function analyzerTeamMatch(a, b) {
+  const x = analyzerNormTeam(a), y = analyzerNormTeam(b);
+  if (!x || !y) return false;
+  return x === y || (Math.min(x.length, y.length) >= 6 && (x.includes(y) || y.includes(x)));
+}
+
+function extractBookingOutcomes(booking) {
+  if (!booking || typeof booking !== 'object') return [];
+  for (const key of ['outcomes', 'selections', 'bets', 'items']) {
+    if (Array.isArray(booking[key])) return booking[key];
+  }
+  if (booking.data && typeof booking.data === 'object') return extractBookingOutcomes(booking.data);
+  return [];
+}
+
+function normalizeBookingLeg(row) {
+  const home = row.homeTeamName ?? row.home_team ?? row.homeTeam ?? row.home ?? '';
+  const away = row.awayTeamName ?? row.away_team ?? row.awayTeam ?? row.away ?? '';
+  return {
+    sport: String(row.sport ?? row.sport_name ?? ''),
+    eventId: String(row.eventId ?? row.event_id ?? row.matchId ?? row.match_id ?? ''),
+    home: String(home),
+    away: String(away),
+    tournament: String(row.tournament ?? row.tournament_name ?? row.league ?? ''),
+    marketId: String(row.marketId ?? row.market_id ?? ''),
+    marketDesc: String(row.marketDesc ?? row.market_name ?? row.market ?? row.bet_market ?? ''),
+    outcomeId: String(row.outcomeId ?? row.outcome_id ?? ''),
+    outcomeDesc: String(row.selectedOutcome ?? row.selected_outcome ?? row.outcomeDesc ?? row.outcome_name ?? row.outcome ?? row.pick ?? ''),
+    odds: Number(row.odds ?? row.price ?? row.selection_odds) || null,
+    specifier: row.specifier ?? row.market_specifier ?? null,
+  };
+}
+
+function analyzerCandidateScore(leg, c) {
+  let score = 0;
+  if (leg.eventId && c.eventId && leg.eventId === String(c.eventId)) score += 60;
+  if (leg.marketId && c.marketId && leg.marketId === String(c.marketId)) score += 18;
+  if (leg.outcomeId && c.outcomeId && leg.outcomeId === String(c.outcomeId)) score += 18;
+  if (leg.specifier && c.specifier && analyzerNormText(leg.specifier) === analyzerNormText(c.specifier)) score += 10;
+  if (analyzerTeamMatch(leg.home, c.home) && analyzerTeamMatch(leg.away, c.away)) score += 28;
+  if (analyzerNormText(leg.marketDesc) && analyzerNormText(c.marketDesc).includes(analyzerNormText(leg.marketDesc))) score += 8;
+  const lo = analyzerNormText(leg.outcomeDesc), co = analyzerNormText(c.outcomeDesc);
+  if (lo && co && (lo === co || lo.includes(co) || co.includes(lo))) score += 14;
+  return score;
+}
+
+function bookingMetaNumber(booking, keys) {
+  for (const k of keys) {
+    const n = Number(booking?.[k]);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
+  try {
+    const bookingCode = String(req.body?.bookingCode || '').trim().toUpperCase();
+    const minProbability = Math.min(95, Math.max(0, Number(req.body?.minProbability) || 55));
+    if (!bookingCode) return res.status(400).json({ error: 'Enter a SportyBet booking code' });
+
+    const booking = await getBooking(bookingCode);
+    const sourceRows = extractBookingOutcomes(booking).map(normalizeBookingLeg).filter(x => x.home || x.away || x.eventId);
+    if (!sourceRows.length) return res.status(404).json({ error: 'The booking code was found, but no selections could be read from it' });
+
+    // Build the complete supported candidate universe with filtering disabled. The Analyzer
+    // then applies the user's chosen probability threshold to the exact imported selections.
+    const candidates = await loadAutoCandidates({ sportScope: 'all', minProbability: 0, minEdge: -25, leagues: null, betTypes: null });
+    const analyzed = sourceRows.map((leg, index) => {
+      let best = null, bestScore = -1;
+      for (const c of candidates) {
+        const sc = analyzerCandidateScore(leg, c);
+        if (sc > bestScore) { bestScore = sc; best = c; }
+      }
+      const supported = !!best && bestScore >= 60;
+      if (!supported) return { index, ...leg, supported: false, qualified: false, reason: 'Not scored by current probability model' };
+      const probability = Number(best.probability) || 0;
+      const qualified = probability >= minProbability;
+      return {
+        index,
+        ...leg,
+        // Use current SportyBet identifiers/odds from the matched market candidate for re-booking.
+        eventId: String(best.eventId), marketId: String(best.marketId), outcomeId: String(best.outcomeId), specifier: best.specifier || null,
+        sport: best.sport || leg.sport, home: best.home || leg.home, away: best.away || leg.away, tournament: best.tournament || leg.tournament,
+        marketDesc: best.marketDesc || leg.marketDesc, outcomeDesc: best.outcomeDesc || leg.outcomeDesc, odds: Number(best.odds) || leg.odds,
+        supported: true, qualified,
+        probability,
+        probabilitySource: best.probabilitySource || '',
+        impliedProbability: Number(best.impliedProbability) || null,
+        edge: Number(best.edge) || 0,
+        expectedValuePct: Number(best.expectedValuePct) || 0,
+        qualityScore: Number(best.qualityScore) || null,
+        fairOdds: Number(best.fairOdds) || null,
+        settlementNote: best.settlementNote || '',
+        fullWinProbability: Number(best.fullWinProbability) || null,
+        nonLossProbability: Number(best.nonLossProbability) || null,
+        reason: qualified ? `Meets ${minProbability}% minimum` : `Below ${minProbability}% minimum`,
+      };
+    });
+
+    const qualifiedSelections = analyzed.filter(x => x.supported && x.qualified);
+    const originalOdds = bookingMetaNumber(booking, ['total_odds','totalOdds','combined_odds','combinedOdds']) || sourceRows.reduce((p,x)=>p*(Number(x.odds)||1),1);
+    const filteredOdds = qualifiedSelections.reduce((p,x)=>p*(Number(x.odds)||1),1);
+    res.json({
+      bookingCode,
+      minProbability,
+      originalSelectionCount: sourceRows.length,
+      supportedCount: analyzed.filter(x=>x.supported).length,
+      qualifiedCount: qualifiedSelections.length,
+      originalCombinedOdds: Math.round(originalOdds*100)/100,
+      filteredCombinedOdds: Math.round(filteredOdds*100)/100,
+      analyzed,
+      qualifiedSelections,
+      generatedAt: new Date().toISOString(),
+      note: 'Only markets supported by the current Matchday probability engine are scored. Unsupported selections are never assigned a guessed probability.',
+    });
+  } catch (err) {
+    console.error('SportyBet analyzer error:', err.message);
+    const status = err.code === 'INVALID_BOOKING_CODE' ? 400 : err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
+    res.status(status).json({
+      error: err.code === 'PARSE_API_KEY_MISSING' ? 'SportyBet integration is not configured yet' : 'Could not analyze this booking code',
+      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
+  }
+});
 
 app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
   try {
