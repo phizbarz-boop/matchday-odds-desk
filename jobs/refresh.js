@@ -93,6 +93,8 @@ async function storeResult(payload) {
 }
 
 async function main() {
+  console.log('LEAGUES env raw =', JSON.stringify(process.env.LEAGUES));
+  console.log('LEAGUE_CODES =', JSON.stringify(LEAGUE_CODES));
   if (!TOKEN) {
     console.error('Missing FOOTBALL_DATA_TOKEN env var.');
     process.exit(1);
