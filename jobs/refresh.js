@@ -101,6 +101,7 @@ async function main() {
   }
   let all = [];
   for (const code of LEAGUE_CODES) {
+    console.log('Attempting', code);
     try {
       const rows = await buildLeague(code);
       all = all.concat(rows);
