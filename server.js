@@ -7,6 +7,7 @@ app.set('trust proxy', 1); // Render forwards the real client IP.
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
 const { getFootballMarket, getSportMarket, bookBet, SPORT_CONFIG } = require('./lib/sportybet');
+const { buildCandidates, selectAutoBet } = require('./lib/autoPicker');
 
 let redisClient = null;
 async function getRedis() {
@@ -152,6 +153,64 @@ app.get('/api/sportybet/sport/:sport', async (req, res) => {
       error: err.code === 'PARSE_API_KEY_MISSING'
         ? 'SportyBet integration is not configured yet'
         : 'Failed to load SportyBet sport odds',
+      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
+  }
+});
+
+// Automatic slip builder. It combines the football model/H2H probabilities with
+// SportyBet prices and the strongest no-vig basketball/hockey winner prices.
+// The response contains selections only; booking-code creation still uses /book.
+app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const targetOdds = Math.min(500, Math.max(1.05, Number(body.targetOdds) || 5));
+    const minProbability = Math.min(95, Math.max(0, Number(body.minProbability) || 55));
+    const maxSelections = Math.min(20, Math.max(1, parseInt(body.maxSelections || '8', 10)));
+    const leagues = Array.isArray(body.leagues) ? body.leagues.map(String) : null;
+
+    const [predictions, f1x2, fgg, fou, basketballWinner, hockeyWinner] = await Promise.all([
+      loadPredictions(),
+      loadSportyBetMarket('1x2', 'football'),
+      loadSportyBetMarket('gg', 'football'),
+      loadSportyBetMarket('ou', 'football'),
+      loadSportyBetMarket('winner', 'basketball'),
+      loadSportyBetMarket('winner', 'hockey'),
+    ]);
+
+    const candidates = buildCandidates({
+      predictions,
+      footballMarkets: { '1x2': f1x2, gg: fgg, ou: fou },
+      basketballWinner,
+      hockeyWinner,
+      minProbability,
+      leagues,
+    });
+
+    const result = selectAutoBet(candidates, { targetOdds, maxSelections });
+    if (!result.selections.length) {
+      return res.status(404).json({
+        error: 'No eligible SportyBet selections matched the requested minimum probability',
+        targetOdds,
+        minProbability,
+        candidateCount: candidates.length,
+      });
+    }
+
+    res.json({
+      ...result,
+      minProbability,
+      maxSelections,
+      generatedAt: new Date().toISOString(),
+      note: 'Football probability = Poisson + H2H. Basketball/hockey probability = no-vig SportyBet market probability.',
+    });
+  } catch (err) {
+    console.error('SportyBet auto-pick error:', err.message);
+    const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
+    res.status(status).json({
+      error: err.code === 'PARSE_API_KEY_MISSING'
+        ? 'SportyBet integration is not configured yet'
+        : 'Failed to build automatic SportyBet slip',
       detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
     });
   }

@@ -87,3 +87,37 @@ POST /api/sportybet/book
 ## Deploy
 
 Commit the modified project to the GitHub repository connected to Render, add the environment variables above, and redeploy. Run the normal refresh job once after deploying so stored football predictions include the new H2H fields.
+
+## Automatic target-odds bet builder
+
+This version also includes a server-side automatic slip builder.
+
+Endpoint:
+
+```text
+POST /api/sportybet/auto-pick
+```
+
+Example JSON body:
+
+```json
+{
+  "targetOdds": 5.0,
+  "minProbability": 55,
+  "maxSelections": 8,
+  "leagues": ["Premier League", "La Liga", "Serie A"]
+}
+```
+
+The auto builder scans:
+
+- Football 1X2, GG/NG and Over/Under 2.5 using the Poisson + H2H model probability.
+- Basketball Winner using no-vig SportyBet market probability.
+- Ice Hockey Winner using no-vig SportyBet market probability.
+
+It uses controlled probability-weighted randomness, allows only one selection per event,
+and searches many possible combinations for combined odds close to the requested target.
+The frontend exposes both **Auto Pick Best Bets** and **Auto Pick + Generate Code**.
+
+No additional Render environment variable is required for this feature. It reuses
+`PARSE_API_KEY`, the existing SportyBet cache settings, and the existing football prediction data.
