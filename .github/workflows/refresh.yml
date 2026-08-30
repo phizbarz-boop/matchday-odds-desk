@@ -11,5 +11,7 @@ jobs:
     steps:
       - name: Ping the refresh endpoint
         run: |
-          curl -sf -X POST "https://matchday-odds-desk.onrender.com/api/refresh" \
-            -H "X-Refresh-Secret: EVNd1bw5FbupB6MlzyGiW3QKnxQBQ3r5"
+          curl -sS -X POST "https://matchday-odds-desk.onrender.com/api/refresh" \
+            -H "X-Refresh-Secret: EVNd1bw5FbupB6MlzyGiW3QKnxQBQ3r5" \
+            -w "\nHTTP_STATUS:%{http_code}\n" \
+            --max-time 120
