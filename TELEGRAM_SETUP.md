@@ -147,3 +147,30 @@ TELEGRAM_TARGET_ODDS=100,50,20
 ```
 
 No source-code change is required.
+
+## Website: Send generated code to Telegram
+
+After a SportyBet code is generated on the website, the code box now includes a **Send to Telegram** button. The browser never receives your Telegram bot token or Telegram job secret. The server creates a short-lived one-time token (10 minutes), and pressing the button sends the exact current slip, combined odds, probabilities, booking code, and SportyBet link to the configured Telegram channel.
+
+No additional Render environment variable is required for this button. It uses the existing `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+
+## Probability + value engine (v2)
+
+The Auto Builder now calculates, for each eligible selection:
+
+- **Bookmaker implied probability** = `100 / decimal odds`
+- **Probability edge** = selection probability minus bookmaker implied probability
+- **Estimated EV %** = `(probability × decimal odds - 1) × 100`
+- **Market reliability weight** based on the supported market type
+- **Quality score (0–100)** combining probability, edge and market reliability
+- **Estimated full-slip probability** by multiplying the leg probabilities (assumes independence)
+
+Football uses the independent Poisson + capped-H2H model, so its edge is a true **model-vs-price estimate**. Basketball and ice hockey currently use de-margined SportyBet market probabilities, so their displayed edge is a **market-adjusted pricing metric**, not an independent predictive edge.
+
+Optional Telegram environment setting:
+
+```text
+TELEGRAM_MIN_EDGE=0
+```
+
+This filters Football candidates whose Poisson+H2H probability edge is below the chosen number of percentage points. Example: `TELEGRAM_MIN_EDGE=3` requires at least a +3 point football model-vs-price edge. Basketball and hockey are not hard-filtered by this setting until independent statistical models are added for those sports.

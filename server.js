@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 app.set('trust proxy', 1); // Render forwards the real client IP.
@@ -24,6 +25,88 @@ async function getRedis() {
 
 const sportyMemoryCache = new Map();
 const bookingMemoryRate = new Map();
+const telegramSendMemory = new Map();
+
+
+
+function sanitizeTelegramSlip(items) {
+  if (!Array.isArray(items)) return [];
+  return items.slice(0, 30).map(x => ({
+    sport: String(x?.sport || '').slice(0, 30),
+    home: String(x?.home || '').slice(0, 120),
+    away: String(x?.away || '').slice(0, 120),
+    tournament: String(x?.tournament || '').slice(0, 120),
+    marketDesc: String(x?.marketDesc || '').slice(0, 120),
+    outcomeDesc: String(x?.outcomeDesc || '').slice(0, 120),
+    odds: Number(x?.odds) || null,
+    probability: Number(x?.probability) || null,
+    impliedProbability: Number(x?.impliedProbability) || null,
+    edge: Number(x?.edge) || 0,
+    expectedValuePct: Number(x?.expectedValuePct) || 0,
+    marketReliability: Number(x?.marketReliability) || null,
+    qualityScore: Number(x?.qualityScore) || null,
+    edgeType: String(x?.edgeType || '').slice(0, 40),
+    specifier: x?.specifier ? String(x.specifier).slice(0, 120) : null,
+  }));
+}
+
+async function createTelegramSendToken(payload) {
+  const token = crypto.randomBytes(24).toString('hex');
+  const key = `telegram:websend:${token}`;
+  const client = await getRedis();
+  const ttl = 600;
+  if (client) {
+    await client.set(key, JSON.stringify(payload), { EX: ttl });
+  } else {
+    telegramSendMemory.set(key, { payload, expiresAt: Date.now() + ttl * 1000 });
+  }
+  return token;
+}
+
+async function consumeTelegramSendToken(token) {
+  if (!token) return null;
+  const key = `telegram:websend:${String(token)}`;
+  const client = await getRedis();
+  if (client) {
+    const raw = await client.get(key);
+    if (!raw) return null;
+    await client.del(key);
+    return JSON.parse(raw);
+  }
+  const hit = telegramSendMemory.get(key);
+  if (!hit) return null;
+  telegramSendMemory.delete(key);
+  if (hit.expiresAt < Date.now()) return null;
+  return hit.payload;
+}
+
+function telegramManualSlipText(payload) {
+  const slip = Array.isArray(payload?.slip) ? payload.slip : [];
+  const combined = slip.reduce((p, x) => p * (Number(x.odds) || 1), 1);
+  const probs = slip.map(x => Number(x.probability)).filter(Number.isFinite);
+  const avg = probs.length ? probs.reduce((a,b)=>a+b,0)/probs.length : null;
+  const slipProb = probs.length === slip.length && slip.length ? probs.reduce((p,x)=>p*(x/100),1)*100 : null;
+  const avgEdge = slip.length ? slip.reduce((a,x)=>a+(Number(x.edge)||0),0)/slip.length : null;
+  const avgQuality = slip.map(x=>Number(x.qualityScore)).filter(Number.isFinite);
+  const avgQ = avgQuality.length ? avgQuality.reduce((a,b)=>a+b,0)/avgQuality.length : null;
+  const lines = [
+    '📲 MATCHDAY ODDS DESK — MANUAL SHARE',
+    `SportyBet code: ${payload?.shareCode || 'N/A'}`,
+    `Combined odds: ${combined.toFixed(2)}`,
+    `Selections: ${slip.length}`,
+    ...(avg !== null ? [`Average leg probability: ${avg.toFixed(1)}%`] : []),
+    ...(slipProb !== null ? [`Estimated full-slip probability: ${slipProb.toFixed(3)}%`] : []),
+    ...(avgEdge !== null ? [`Average probability edge: ${avgEdge.toFixed(1)} pts`] : []),
+    ...(avgQ !== null ? [`Average quality score: ${avgQ.toFixed(1)}/100`] : []),
+    '',
+  ];
+  slip.forEach((x, i) => {
+    lines.push(`${i + 1}. [${x.sport || 'Sport'}] ${x.home} vs ${x.away}`);
+    lines.push(`   ${x.outcomeDesc || x.marketDesc || 'Selection'} @ ${Number(x.odds || 0).toFixed(2)}${Number.isFinite(Number(x.probability)) ? ` | prob ${Number(x.probability).toFixed(1)}%` : ''}${Number.isFinite(Number(x.impliedProbability)) ? ` | implied ${Number(x.impliedProbability).toFixed(1)}%` : ''}${Number.isFinite(Number(x.edge)) ? ` | edge ${Number(x.edge).toFixed(1)}` : ''}${Number.isFinite(Number(x.qualityScore)) ? ` | Q ${Number(x.qualityScore).toFixed(1)}` : ''}`);
+  });
+  if (payload?.shareURL) lines.push('', `SportyBet link: ${payload.shareURL}`);
+  return lines.join('\n');
+}
 
 async function loadSportyBetMarket(kind, sport = 'football') {
   const ttlSeconds = Math.max(60, parseInt(process.env.SPORTYBET_CACHE_SECONDS || '43200', 10));
@@ -167,7 +250,7 @@ function normalizeSportScope(value) {
   return ['all', 'football', 'basketball', 'hockey'].includes(v) ? v : 'all';
 }
 
-async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, leagues = null } = {}) {
+async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, minEdge = 0, leagues = null } = {}) {
   const scope = normalizeSportScope(sportScope);
   const wantsFootball = scope === 'all' || scope === 'football';
   const wantsBasketball = scope === 'all' || scope === 'basketball';
@@ -188,6 +271,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, lea
     basketballWinner,
     hockeyWinner,
     minProbability,
+    minEdge,
     leagues,
     sportScope: scope,
   });
@@ -199,10 +283,11 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const targetOdds = Math.min(2000, Math.max(1.05, Number(body.targetOdds) || 5));
     const minProbability = Math.min(95, Math.max(0, Number(body.minProbability) || 55));
     const maxSelections = Math.min(30, Math.max(1, parseInt(body.maxSelections || '8', 10)));
+    const minEdge = Math.min(50, Math.max(-25, Number(body.minEdge) || 0));
     const leagues = Array.isArray(body.leagues) ? body.leagues.map(String) : null;
     const sportScope = normalizeSportScope(body.sportScope);
 
-    const candidates = await loadAutoCandidates({ sportScope, minProbability, leagues });
+    const candidates = await loadAutoCandidates({ sportScope, minProbability, minEdge, leagues });
     const result = selectAutoBet(candidates, { targetOdds, maxSelections });
     if (!result.selections.length) {
       return res.status(404).json({
@@ -218,9 +303,10 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       ...result,
       sportScope,
       minProbability,
+      minEdge,
       maxSelections,
       generatedAt: new Date().toISOString(),
-      note: 'Football probability = Poisson + H2H. Basketball/hockey probability = no-vig SportyBet market probability.',
+      note: 'Value engine: implied probability = 1/odds; football edge compares Poisson+H2H to bookmaker price. Basketball/hockey remain no-vig market estimates, not independent model predictions.',
     });
   } catch (err) {
     console.error('SportyBet auto-pick error:', err.message);
@@ -249,15 +335,19 @@ function telegramSlipText(target, result, booking, sportScope) {
     `🎯 MATCHDAY AUTO CODE — ${target} ODDS`,
     `${status} | ${sportScope.toUpperCase()}`,
     `Actual odds: ${Number(result.combinedOdds || 1).toFixed(2)}`,
-    `Average probability: ${Number(result.averageProbability || 0).toFixed(1)}%`,
+    `Average leg probability: ${Number(result.averageProbability || 0).toFixed(1)}%`,
     `Minimum leg probability: ${Number(result.minimumProbability || 0).toFixed(1)}%`,
+    `Estimated full-slip probability: ${Number(result.estimatedSlipProbability || 0).toFixed(3)}%`,
+    `Average probability edge: ${Number(result.averageEdge || 0).toFixed(1)} pts`,
+    `Average quality score: ${Number(result.averageQualityScore || 0).toFixed(1)}/100`,
+    `Estimated slip EV: ${Number(result.estimatedSlipEVPct || 0).toFixed(1)}%`,
     `Selections: ${result.selections.length}`,
     `SportyBet code: ${booking?.shareCode || 'NO CODE RETURNED'}`,
     '',
   ];
   result.selections.forEach((x, i) => {
     lines.push(`${i + 1}. [${x.sport}] ${x.home} vs ${x.away}`);
-    lines.push(`   ${x.outcomeDesc || x.marketDesc} @ ${Number(x.odds).toFixed(2)} | ${Number(x.probability).toFixed(1)}%`);
+    lines.push(`   ${x.outcomeDesc || x.marketDesc} @ ${Number(x.odds).toFixed(2)} | model/market ${Number(x.probability).toFixed(1)}% | implied ${Number(x.impliedProbability || 0).toFixed(1)}% | edge ${Number(x.edge || 0).toFixed(1)} | Q ${Number(x.qualityScore || 0).toFixed(1)}`);
   });
   if (booking?.shareURL) lines.push('', `SportyBet link: ${booking.shareURL}`);
   if (Array.isArray(booking?.unavailableOutcomes) && booking.unavailableOutcomes.length) {
@@ -271,11 +361,12 @@ async function runTelegramDailyPicks() {
   const sportScope = normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all');
   const minProbability = Math.min(95, Math.max(0, Number(process.env.TELEGRAM_MIN_PROBABILITY || 55)));
   const maxSelections = Math.min(30, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '30', 10)));
+  const minEdge = Math.min(50, Math.max(-25, Number(process.env.TELEGRAM_MIN_EDGE || 0)));
   const leagues = process.env.TELEGRAM_FOOTBALL_LEAGUES
     ? process.env.TELEGRAM_FOOTBALL_LEAGUES.split(',').map(x => x.trim()).filter(Boolean)
     : null;
 
-  const candidates = await loadAutoCandidates({ sportScope, minProbability, leagues });
+  const candidates = await loadAutoCandidates({ sportScope, minProbability, minEdge, leagues });
   if (!candidates.length) throw new Error('No eligible candidates are available for the Telegram picks job');
 
   await sendTelegramMessage([
@@ -283,6 +374,7 @@ async function runTelegramDailyPicks() {
     `Scope: ${sportScope.toUpperCase()}`,
     `Targets: ${targets.join(', ')}`,
     `Minimum probability: ${minProbability}%`,
+    `Minimum football edge: ${minEdge} pts`,
     `Eligible candidates scanned: ${candidates.length}`,
     `Generated: ${new Date().toISOString()}`,
     '',
@@ -316,6 +408,10 @@ async function runTelegramDailyPicks() {
         targetOdds: target,
         combinedOdds: result.combinedOdds,
         averageProbability: result.averageProbability,
+        estimatedSlipProbability: result.estimatedSlipProbability,
+        averageEdge: result.averageEdge,
+        averageQualityScore: result.averageQualityScore,
+        estimatedSlipEVPct: result.estimatedSlipEVPct,
         selections: result.selections.length,
         shareCode: booking?.shareCode || null,
         unavailable: Array.isArray(booking?.unavailableOutcomes) ? booking.unavailableOutcomes.length : 0,
@@ -327,7 +423,7 @@ async function runTelegramDailyPicks() {
     await new Promise(resolve => setTimeout(resolve, 750));
   }
 
-  return { sportScope, minProbability, maxSelections, candidateCount: candidates.length, results: output };
+  return { sportScope, minProbability, minEdge, maxSelections, candidateCount: candidates.length, results: output };
 }
 
 app.get('/api/telegram/status', (req, res) => {
@@ -336,6 +432,7 @@ app.get('/api/telegram/status', (req, res) => {
     targets: parseTargetList(process.env.TELEGRAM_TARGET_ODDS),
     sportScope: normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all'),
     minProbability: Math.min(95, Math.max(0, Number(process.env.TELEGRAM_MIN_PROBABILITY || 55))),
+    minEdge: Math.min(50, Math.max(-25, Number(process.env.TELEGRAM_MIN_EDGE || 0))),
     maxSelections: Math.min(30, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '30', 10))),
     scheduler: 'GitHub Actions',
   });
@@ -374,6 +471,26 @@ app.post('/api/telegram/test', express.json(), async (req, res) => {
   }
 });
 
+
+
+// One-click website share. The browser receives a short-lived one-time token only;
+// Telegram credentials and the job secret never leave Render.
+app.post('/api/telegram/send-slip', express.json(), async (req, res) => {
+  try {
+    const payload = await consumeTelegramSendToken(req.body && req.body.token);
+    if (!payload) return res.status(400).json({ error: 'Send token is invalid, expired, or already used. Generate the SportyBet code again.' });
+    if (!payload.shareCode) return res.status(400).json({ error: 'No SportyBet code is attached to this send token' });
+    await sendTelegramMessage(telegramManualSlipText(payload));
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Telegram manual slip error:', err.message);
+    res.status(err.code === 'TELEGRAM_CONFIG_MISSING' ? 503 : 502).json({
+      error: err.code === 'TELEGRAM_CONFIG_MISSING' ? 'Telegram integration is not configured yet' : 'Failed to send slip to Telegram',
+      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
+  }
+});
+
 app.post('/api/sportybet/book', express.json(), async (req, res) => {
   try {
     if (!(await allowBookingRequest(req))) {
@@ -384,7 +501,14 @@ app.post('/api/sportybet/book', express.json(), async (req, res) => {
       return res.status(400).json({ error: 'selections must be an array containing 1-30 selections' });
     }
     const result = await bookBet(selections);
-    res.json(result);
+    const slip = sanitizeTelegramSlip(req.body && req.body.telegramContext);
+    const telegramSendToken = await createTelegramSendToken({
+      shareCode: result?.shareCode || null,
+      shareURL: result?.shareURL || null,
+      slip,
+      createdAt: new Date().toISOString(),
+    });
+    res.json({ ...result, telegramSendToken });
   } catch (err) {
     console.error('SportyBet booking error:', err.message);
     const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
