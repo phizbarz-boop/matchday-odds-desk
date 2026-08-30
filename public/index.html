@@ -4,340 +4,114 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Matchday Odds Desk</title>
-<meta name="description" content="Daily football match probabilities from a Poisson goal-expectancy model, filterable by league, bet type and confidence." />
+<meta name="description" content="Football predictions with H2H adjustment plus SportyBet football, basketball and ice hockey odds with multi-game booking codes." />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
-  :root {
-    --bg: #F3F5F3; --surface: #FFFFFF; --surface-raised: #FBFCFB;
-    --text: #14201D; --text-muted: #5C6D68; --text-faint: #8B9B96;
-    --border: #DCE4E0; --border-strong: #C4D0CB;
-    --accent: #B27A22; --accent-ink: #FFF8EC; --accent-soft: #F1E1C4;
-    --pos: #2E8B57; --pos-soft: #DCEFE3;
-    --warn: #B27A22; --warn-soft: #F1E1C4;
-    --neg: #B4553F; --neg-soft: #F5DFD9;
-    --shadow: 0 1px 2px rgba(20,32,29,0.04), 0 6px 20px -8px rgba(20,32,29,0.10);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg: #101917; --surface: #172422; --surface-raised: #1D2C29;
-      --text: #E7EEEB; --text-muted: #93A6A0; --text-faint: #66807A;
-      --border: #263733; --border-strong: #34473F;
-      --accent: #E0A94E; --accent-ink: #1B1200; --accent-soft: #3A2E17;
-      --pos: #4FBB84; --pos-soft: #1A3226;
-      --warn: #E0A94E; --warn-soft: #3A2E17;
-      --neg: #E08D77; --neg-soft: #3A2019;
-      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -8px rgba(0,0,0,0.5);
-    }
-  }
-  :root[data-theme="dark"] {
-    --bg: #101917; --surface: #172422; --surface-raised: #1D2C29;
-    --text: #E7EEEB; --text-muted: #93A6A0; --text-faint: #66807A;
-    --border: #263733; --border-strong: #34473F;
-    --accent: #E0A94E; --accent-ink: #1B1200; --accent-soft: #3A2E17;
-    --pos: #4FBB84; --pos-soft: #1A3226;
-    --warn: #E0A94E; --warn-soft: #3A2E17;
-    --neg: #E08D77; --neg-soft: #3A2019;
-    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -8px rgba(0,0,0,0.5);
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
-  .wrap { max-width: 900px; margin: 0 auto; padding: 28px 20px 64px; }
-  a { color: inherit; }
-
-  header.top { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
-  .brand-mark { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: 0.12em; color: var(--accent); border: 1px solid var(--accent); padding: 2px 6px; border-radius: 3px; text-transform: uppercase; }
-  h1 { font-family: "Big Shoulders Display", sans-serif; font-weight: 700; font-size: clamp(30px, 5vw, 40px); line-height: 0.95; margin: 6px 0 0; text-wrap: balance; }
-  .subline { color: var(--text-muted); font-size: 14px; margin-top: 6px; }
-  .date-badge { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--text-muted); text-align: right; }
-  .date-badge b { color: var(--text); font-weight: 600; display: block; font-size: 14px; }
-
-  /* ---- Settings panel ---- */
-  .settings { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin-bottom: 20px; box-shadow: var(--shadow); display: grid; gap: 14px; }
-  .settings-row { display: flex; flex-direction: column; gap: 8px; }
-  .settings-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600; }
-  .chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .chip { font-family: "IBM Plex Mono", monospace; font-size: 12px; padding: 6px 11px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface-raised); color: var(--text-muted); cursor: pointer; transition: all .12s ease; user-select: none; }
-  .chip:hover { border-color: var(--accent); color: var(--text); }
-  .chip.active { background: var(--text); color: var(--bg); border-color: var(--text); }
-  .settings-inline { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end; }
-  .field-block { display: flex; flex-direction: column; gap: 8px; min-width: 160px; }
-  select {
-    font-family: "IBM Plex Mono", monospace; font-size: 13px; padding: 7px 10px; border-radius: 8px;
-    border: 1px solid var(--border-strong); background: var(--surface-raised); color: var(--text);
-  }
-  input[type="range"] { width: 160px; accent-color: var(--accent); }
-  .range-val { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--accent); font-weight: 600; }
-
-  /* ---- Summary strip ---- */
-  .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 22px; }
-  .summary .cell { background: var(--surface); padding: 12px 14px; }
-  .summary .cell .num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 600; }
-  .summary .cell .lbl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
-
-  /* ---- Match cards ---- */
-  .list { display: flex; flex-direction: column; gap: 12px; }
-  .empty { padding: 40px 20px; text-align: center; color: var(--text-muted); font-size: 14px; border: 1px dashed var(--border-strong); border-radius: 12px; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); }
-  .card-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
-  .meta-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .league-tag { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
-  .kickoff { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--text-faint); }
-  .tier { font-family: "IBM Plex Mono", monospace; font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em; }
-  .tier.high { background: var(--pos-soft); color: var(--pos); }
-  .tier.mid { background: var(--warn-soft); color: var(--warn); }
-  .tier.low { background: var(--neg-soft); color: var(--neg); }
-  .matchup { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
-  .teams { font-family: "Big Shoulders Display", sans-serif; font-weight: 600; font-size: 22px; line-height: 1.05; }
-  .teams .vs { color: var(--text-faint); font-weight: 500; padding: 0 6px; font-size: 16px; }
-  .pick-out { font-family: "IBM Plex Mono", monospace; font-size: 13px; text-align: right; white-space: nowrap; }
-  .pick-out .p { font-weight: 600; color: var(--text); }
-  .pick-out .pct { color: var(--accent); font-weight: 600; }
-  .pick-out .odds { color: var(--text-faint); }
-  .bar { display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
-  .seg { display: flex; align-items: center; justify-content: center; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent-ink); min-width: 0; }
-  .seg.h { background: var(--pos); } .seg.d { background: var(--text-faint); color: var(--surface); } .seg.a { background: var(--neg); }
-  .bar-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
-  .sub-stats { display: flex; gap: 18px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); flex-wrap: wrap; }
-  .stat { font-size: 12.5px; color: var(--text-muted); }
-  .stat b { font-family: "IBM Plex Mono", monospace; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-
-  .notes { margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--border); display: grid; gap: 14px; }
-  .note { font-size: 13px; color: var(--text-muted); line-height: 1.55; display: flex; gap: 10px; }
-  .note .mk { font-family: "IBM Plex Mono", monospace; color: var(--accent); font-weight: 600; flex-shrink: 0; }
-  .note b { color: var(--text); font-weight: 600; }
-
-  @media (max-width: 480px) { .teams { font-size: 18px; } .summary { grid-template-columns: repeat(2, 1fr); } }
+  :root{--bg:#F3F5F3;--surface:#fff;--raised:#FBFCFB;--text:#14201D;--muted:#5C6D68;--faint:#8B9B96;--border:#DCE4E0;--border2:#C4D0CB;--accent:#B27A22;--accentInk:#FFF8EC;--accentSoft:#F1E1C4;--pos:#2E8B57;--posSoft:#DCEFE3;--neg:#B4553F;--negSoft:#F5DFD9;--shadow:0 1px 2px rgba(20,32,29,.04),0 6px 20px -8px rgba(20,32,29,.10)}
+  @media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#101917;--surface:#172422;--raised:#1D2C29;--text:#E7EEEB;--muted:#93A6A0;--faint:#66807A;--border:#263733;--border2:#34473F;--accent:#E0A94E;--accentInk:#1B1200;--accentSoft:#3A2E17;--pos:#4FBB84;--posSoft:#1A3226;--neg:#E08D77;--negSoft:#3A2019;--shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px -8px rgba(0,0,0,.5)}}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:"IBM Plex Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}.wrap{max-width:1040px;margin:auto;padding:28px 20px 70px}a{color:inherit}
+  header.top{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap}.brand{font:11px "IBM Plex Mono";letter-spacing:.12em;color:var(--accent);border:1px solid var(--accent);padding:3px 7px;border-radius:4px;text-transform:uppercase}h1{font:700 clamp(32px,5vw,44px)/.95 "Big Shoulders Display";margin:7px 0 0}.sub{color:var(--muted);font-size:14px;margin-top:7px}.date{font:12px "IBM Plex Mono";color:var(--muted);text-align:right}.date b{display:block;color:var(--text);font-size:14px}
+  .sport-nav{display:flex;gap:8px;margin:0 0 18px;overflow:auto;padding-bottom:2px}.sport-tab,.chip{font:600 12px "IBM Plex Mono";border:1px solid var(--border2);background:var(--raised);color:var(--muted);border-radius:999px;padding:8px 13px;cursor:pointer;white-space:nowrap}.sport-tab.active,.chip.active{background:var(--text);border-color:var(--text);color:var(--bg)}.sport-tab:hover,.chip:hover{border-color:var(--accent);color:var(--text)}
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow)}.settings{padding:16px 18px;margin-bottom:16px;display:grid;gap:14px}.settings-row{display:flex;flex-direction:column;gap:8px}.settings-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}.chip-row{display:flex;gap:8px;flex-wrap:wrap}.settings-inline{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-end}.field{display:flex;flex-direction:column;gap:8px;min-width:160px}select{font:13px "IBM Plex Mono";padding:7px 10px;border-radius:8px;border:1px solid var(--border2);background:var(--raised);color:var(--text)}input[type=range]{width:170px;accent-color:var(--accent)}.range-val{font:600 13px "IBM Plex Mono";color:var(--accent)}.status{font:11px "IBM Plex Mono";color:var(--muted)}.status.ok{color:var(--pos)}.status.err{color:var(--neg)}
+  .slip{padding:16px 18px;margin-bottom:18px}.slip-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px}.slip-title{font:700 22px "Big Shoulders Display"}.slip-count{font:12px "IBM Plex Mono";color:var(--accent)}.slip-empty{font-size:13px;color:var(--muted);padding:8px 0}.slip-list{display:grid;gap:8px}.slip-row{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:9px 0;border-top:1px dashed var(--border)}.slip-meta{min-width:0}.slip-match{font-weight:600;font-size:13px}.slip-pick{font:11px "IBM Plex Mono";color:var(--muted);margin-top:2px}.slip-odds{font:700 13px "IBM Plex Mono";color:var(--pos)}.remove{border:0;background:transparent;color:var(--neg);cursor:pointer;font-size:17px}.slip-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid var(--border);padding-top:12px;margin-top:10px;flex-wrap:wrap}.combined{font:12px "IBM Plex Mono";color:var(--muted)}.combined b{color:var(--text);font-size:15px}.primary,.secondary{border:1px solid var(--accent);border-radius:8px;padding:8px 11px;font:600 12px "IBM Plex Mono";cursor:pointer;text-decoration:none}.primary{background:var(--accent);color:var(--accentInk)}.secondary{background:transparent;color:var(--accent)}.primary:disabled{opacity:.5;cursor:not-allowed}.codebox{margin-top:12px;padding:12px;border-radius:9px;background:var(--accentSoft);font:12px "IBM Plex Mono"}.codebox strong{font-size:20px;color:var(--accent);letter-spacing:.08em}.code-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+  .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:20px}.summary .cell{background:var(--surface);padding:12px 14px}.num{font:600 22px "IBM Plex Mono"}.lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
+  .list{display:flex;flex-direction:column;gap:12px}.empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:14px;border:1px dashed var(--border2);border-radius:12px}.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow)}.card-top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}.meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.league{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}.kickoff{font:12px "IBM Plex Mono";color:var(--faint)}.tier{font:600 11px "IBM Plex Mono";padding:3px 9px;border-radius:999px;text-transform:uppercase}.tier.high{background:var(--posSoft);color:var(--pos)}.tier.mid{background:var(--accentSoft);color:var(--accent)}.tier.low{background:var(--negSoft);color:var(--neg)}.matchup{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}.teams{font:600 23px/1.05 "Big Shoulders Display"}.vs{color:var(--faint);padding:0 6px;font-size:16px}.pick-out{font:13px "IBM Plex Mono";text-align:right}.pct{color:var(--accent);font-weight:700}.odds{color:var(--faint)}.price-row{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:7px;flex-wrap:wrap}.sportsbook{font:12px "IBM Plex Mono";color:var(--muted)}.sportsbook b{color:var(--pos);font-size:14px}.select-btn{border:1px solid var(--accent);background:transparent;color:var(--accent);border-radius:7px;padding:5px 9px;font:600 11px "IBM Plex Mono";cursor:pointer}.select-btn.selected{background:var(--accent);color:var(--accentInk)}
+  .bar{display:flex;height:26px;border-radius:6px;overflow:hidden;border:1px solid var(--border)}.seg{display:flex;align-items:center;justify-content:center;font:600 11px "IBM Plex Mono";color:var(--accentInk);min-width:0}.seg.h{background:var(--pos)}.seg.d{background:var(--faint);color:var(--surface)}.seg.a{background:var(--neg)}.bar-labels{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em;margin-top:4px}.stats{display:flex;gap:16px;margin-top:13px;padding-top:11px;border-top:1px dashed var(--border);flex-wrap:wrap}.stat{font-size:12px;color:var(--muted)}.stat b{font:600 12px "IBM Plex Mono";color:var(--text)}.h2h{margin-top:11px;padding:10px 11px;background:var(--raised);border-radius:8px;font-size:12px;color:var(--muted)}.h2h b{color:var(--text)}details.h2h summary{cursor:pointer}.h2h-games{display:grid;gap:3px;margin-top:7px;font:11px "IBM Plex Mono"}
+  .market-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin-top:13px}.outcome{border:1px solid var(--border);background:var(--raised);border-radius:9px;padding:10px;text-align:left}.outcome-top{display:flex;justify-content:space-between;gap:8px}.outcome-name{font-size:12px;font-weight:600}.outcome-odds{font:700 13px "IBM Plex Mono";color:var(--pos)}.market-prob{font:11px "IBM Plex Mono";color:var(--muted);margin:5px 0 8px}.market-line{font:11px "IBM Plex Mono";color:var(--faint);margin-top:2px}
+  .notes{margin-top:30px;padding-top:20px;border-top:1px solid var(--border);display:grid;gap:12px}.note{font-size:13px;color:var(--muted);line-height:1.55;display:flex;gap:10px}.mk{font:600 12px "IBM Plex Mono";color:var(--accent)}.note b{color:var(--text)}
+  @media(max-width:600px){.summary{grid-template-columns:repeat(2,1fr)}.slip-row{grid-template-columns:1fr auto}.slip-row .remove{grid-column:2}.teams{font-size:20px}.pick-out{text-align:left}.matchup{display:block}.pick-out{margin-top:8px}.price-row{justify-content:flex-start}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header class="top">
-    <div>
-      <div class="brand-mark">Poisson Model v1</div>
-      <h1>Matchday Odds Desk</h1>
-      <div class="subline">Win / draw / loss, GG/NG &amp; goal-total probabilities, filtered your way.</div>
-    </div>
-    <div class="date-badge" id="last-updated"><b>Loading…</b></div>
+    <div><div class="brand">Poisson + H2H + SportyBet</div><h1>Matchday Odds Desk</h1><div class="sub">Model football. Browse basketball &amp; hockey. Build one multi-game SportyBet code.</div></div>
+    <div class="date" id="last-updated"><b>Loading…</b></div>
   </header>
 
-  <div class="settings">
-    <div class="settings-row">
-      <div class="settings-label">Leagues</div>
-      <div class="chip-row" id="league-chips"></div>
-    </div>
+  <nav class="sport-nav" id="sport-nav"></nav>
+
+  <section class="panel settings">
+    <div class="settings-row" id="league-wrap"><div class="settings-label">Leagues</div><div class="chip-row" id="league-chips"></div></div>
     <div class="settings-inline">
-      <div class="field-block">
-        <div class="settings-label">Bet type</div>
-        <div class="chip-row" id="bettype-chips"></div>
-      </div>
-      <div class="field-block">
-        <div class="settings-label">Min. confidence <span class="range-val" id="min-prob-val">40%</span></div>
-        <input type="range" id="min-prob" min="0" max="90" step="5" value="40" />
-      </div>
-      <div class="field-block">
-        <div class="settings-label">Games to show</div>
-        <select id="limit-select">
-          <option value="5">Top 5</option>
-          <option value="10" selected>Top 10</option>
-          <option value="20">Top 20</option>
-          <option value="0">All</option>
-        </select>
-      </div>
+      <div class="field"><div class="settings-label" id="market-label">Bet type</div><div class="chip-row" id="market-chips"></div></div>
+      <div class="field"><div class="settings-label">Min. probability <span class="range-val" id="min-prob-val">40%</span></div><input type="range" id="min-prob" min="0" max="90" step="5" value="40"></div>
+      <div class="field"><div class="settings-label">Games to show</div><select id="limit-select"><option value="5">Top 5</option><option value="10" selected>Top 10</option><option value="20">Top 20</option><option value="0">All</option></select></div>
     </div>
-  </div>
+    <div class="status" id="sporty-status">Loading…</div>
+  </section>
+
+  <section class="panel slip" id="betslip">
+    <div class="slip-head"><div class="slip-title">My SportyBet Slip</div><div class="slip-count" id="slip-count">0 selections</div></div>
+    <div id="slip-content"></div>
+  </section>
 
   <div class="summary">
     <div class="cell"><div class="num" id="s-count">–</div><div class="lbl">Showing</div></div>
-    <div class="cell"><div class="num" id="s-leagues">–</div><div class="lbl">Leagues</div></div>
-    <div class="cell"><div class="num" id="s-top">–</div><div class="lbl">Top confidence</div></div>
-    <div class="cell"><div class="num" id="s-avg">–</div><div class="lbl">Avg. confidence</div></div>
+    <div class="cell"><div class="num" id="s-leagues">–</div><div class="lbl" id="s-group-label">Leagues</div></div>
+    <div class="cell"><div class="num" id="s-top">–</div><div class="lbl">Top probability</div></div>
+    <div class="cell"><div class="num" id="s-slip">0</div><div class="lbl">Slip selections</div></div>
   </div>
 
-  <div class="list" id="list"><div class="empty">Loading today's fixtures…</div></div>
+  <main class="list" id="list"><div class="empty">Loading fixtures…</div></main>
 
   <div class="notes">
-    <div class="note"><span class="mk">01</span><span>Probabilities come from a Poisson goal-expectancy model: each team's attack/defense strength is set by this season's results so far, shrunk toward the league average while the sample is small. This is a statistical estimate, not a certainty — "confidence" reflects how lopsided the model sees a match, not a guaranteed result.</span></div>
-    <div class="note"><span class="mk">02</span><span>"Implied odds" are the model's fair decimal odds (1 &divide; probability) — not real bookmaker odds. There's no live odds feed or SportyBet integration wired up; search each fixture by team name in the SportyBet app to place it.</span></div>
-    <div class="note"><span class="mk">03</span><span>Fixtures and form refresh automatically once a day. Bet only what you can afford to lose.</span></div>
+    <div class="note"><span class="mk">01</span><span>Football probabilities use the existing Poisson attack/defence model plus a <b>capped H2H modifier</b>. Recent direct meetings carry more weight, with H2H influence capped so old meetings cannot dominate current form.</span></div>
+    <div class="note"><span class="mk">02</span><span>Basketball and ice-hockey percentages are <b>de-margined market-implied probabilities</b> calculated from current SportyBet odds. They are not presented as an independent statistical prediction because this project does not yet have historical basketball/hockey result feeds.</span></div>
+    <div class="note"><span class="mk">03</span><span>Add selections from any supported sport to one slip, then press <b>Generate SportyBet Code</b>. The returned code recreates the selected pre-match outcomes on SportyBet while they remain available.</span></div>
   </div>
 </div>
-
 <script>
-  const LEAGUES = ["Premier League","La Liga","Serie A","Bundesliga","Ligue 1","Champions League","Championship","Eredivisie","Primeira Liga"];
-  const BET_TYPES = [
-    { id: "1x2", label: "1X2" },
-    { id: "gg",  label: "GG / NG" },
-    { id: "ou",  label: "Over/Under 2.5" },
-  ];
+const SPORTS=[{id:'football',label:'⚽ Football'},{id:'basketball',label:'🏀 Basketball'},{id:'hockey',label:'🏒 Ice Hockey'}];
+const LEAGUES=["Premier League","La Liga","Serie A","Bundesliga","Ligue 1","Champions League","Championship","Eredivisie","Primeira Liga"];
+const MARKETS={football:[{id:'1x2',label:'1X2'},{id:'gg',label:'GG / NG'},{id:'ou',label:'O/U 2.5'}],basketball:[{id:'winner',label:'Winner'},{id:'handicap',label:'Handicap'},{id:'totals',label:'Totals'}],hockey:[{id:'winner',label:'Winner'},{id:'handicap',label:'Puck Line'},{id:'totals',label:'Totals'}]};
+let FOOTBALL=[];
+const DATA={football:{},basketball:{},hockey:{}};
+let slip=[];
+let state={sport:'football',leagues:new Set(LEAGUES),market:{football:'1x2',basketball:'winner',hockey:'winner'},minProb:40,limit:10};
 
-  let ALL_MATCHES = [];
-  let state = {
-    leagues: new Set(LEAGUES), // all selected by default
-    betType: "1x2",
-    minProb: 40,
-    limit: 10,
-  };
+const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+const fmtKickoff=v=>{if(!v)return 'Time unavailable';const d=new Date(v);return Number.isNaN(d.getTime())?'Time unavailable':d.toLocaleString('en-GB',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Africa/Lagos'})+' WAT'};
+const impliedOdds=p=>p>0?(100/p).toFixed(2):'–';
+const tier=p=>p>=60?{c:'high',l:'High conf.'}:p>=45?{c:'mid',l:'Medium conf.'}:{c:'low',l:'Low conf.'};
+const selKey=s=>[s.eventId,s.marketId,s.outcomeId,s.specifier||''].join('|');
 
-  function loadState() {
-    try {
-      const saved = JSON.parse(localStorage.getItem('mod-settings') || 'null');
-      if (saved) {
-        state.leagues = new Set(saved.leagues || LEAGUES);
-        state.betType = saved.betType || "1x2";
-        state.minProb = saved.minProb ?? 40;
-        state.limit = saved.limit ?? 10;
-      }
-    } catch (e) { /* ignore corrupt/blocked storage */ }
-  }
-  function saveState() {
-    try {
-      localStorage.setItem('mod-settings', JSON.stringify({
-        leagues: Array.from(state.leagues), betType: state.betType, minProb: state.minProb, limit: state.limit,
-      }));
-    } catch (e) { /* ignore blocked storage */ }
-  }
+function loadLocal(){try{const x=JSON.parse(localStorage.getItem('mod-settings-v2')||'null');if(x){state.sport=x.sport||'football';state.leagues=new Set(x.leagues||LEAGUES);state.market={...state.market,...(x.market||{})};state.minProb=x.minProb??40;state.limit=x.limit??10}const b=JSON.parse(localStorage.getItem('mod-betslip-v2')||'[]');if(Array.isArray(b))slip=b.slice(0,30)}catch{}}
+function saveLocal(){try{localStorage.setItem('mod-settings-v2',JSON.stringify({...state,leagues:[...state.leagues]}));localStorage.setItem('mod-betslip-v2',JSON.stringify(slip))}catch{}}
 
-  function pickProbFor(row, betType) {
-    // Returns { label, prob, tierProb } for whichever bet type is selected.
-    if (betType === "gg") {
-      return row.btts >= (100 - row.btts) ? { label: "GG (BTTS Yes)", prob: row.btts } : { label: "NG (BTTS No)", prob: 100 - row.btts };
-    }
-    if (betType === "ou") {
-      return row.o25 >= (100 - row.o25) ? { label: "Over 2.5", prob: row.o25 } : { label: "Under 2.5", prob: 100 - row.o25 };
-    }
-    return { label: row.pick, prob: row.pickProb };
-  }
+const TEAM_ALIAS={'manunited':'manchesterunited','manutd':'manchesterunited','mancity':'manchestercity','spurs':'tottenhamhotspur','tottenham':'tottenhamhotspur','wolves':'wolverhamptonwanderers','wolverhampton':'wolverhamptonwanderers','nottmforest':'nottinghamforest','newcastle':'newcastleunited','parissg':'parissaintgermain','psg':'parissaintgermain','internazionale':'intermilan','atleticodemadrid':'atleticomadrid','leverkusen':'bayerleverkusen','dortmund':'borussiadortmund','bayernmunchen':'bayernmunich'};
+function normTeam(name){let n=String(name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/&/g,'and').replace(/\b(fc|cf|afc|sc|ssc|club|football|futbol|calcio)\b/g,' ').replace(/[^a-z0-9]+/g,'');return TEAM_ALIAS[n]||n}
+function teamMatches(a,b){const x=normTeam(a),y=normTeam(b);return !!x&&!!y&&(x===y||(Math.min(x.length,y.length)>=6&&(x.includes(y)||y.includes(x))))}
+function footballPick(r,kind){if(kind==='gg')return r.btts>=50?{label:'GG (BTTS Yes)',prob:r.btts}:{label:'NG (BTTS No)',prob:100-r.btts};if(kind==='ou')return r.o25>=50?{label:'Over 2.5',prob:r.o25}:{label:'Under 2.5',prob:100-r.o25};return{label:r.pick,prob:r.pickProb}}
+function findFootballSporty(r,kind){const rows=DATA.football[kind]?.rows||[];const fx=rows.filter(x=>teamMatches(r.home,x.home)&&teamMatches(r.away,x.away));if(kind==='1x2'){const id=r.pick==='Home Win'?'1':r.pick==='Draw'?'2':'3';return fx.find(x=>String(x.outcomeId)===id)||null}if(kind==='ou'){const over=r.o25>=50;return fx.find(x=>String(x.outcomeId)===(over?'12':'13'))||fx.find(x=>over?/over/i.test(x.outcomeDesc):/under/i.test(x.outcomeDesc))||null}const yes=r.btts>=50;return fx.find(x=>{const d=String(x.outcomeDesc||'').toLowerCase();return yes?(d==='gg'||d==='yes'||/both.*yes|both teams.*score/.test(d)):(d==='ng'||d==='no'||/both.*no|not.*both/.test(d))})||null}
 
-  function tierOf(p) {
-    if (p >= 60) return { c: 'high', l: 'High conf.' };
-    if (p >= 45) return { c: 'mid', l: 'Medium conf.' };
-    return { c: 'low', l: 'Low conf.' };
-  }
+function addToSlip(selection,meta){const item={eventId:String(selection.eventId),marketId:String(selection.marketId),outcomeId:String(selection.outcomeId),specifier:selection.specifier||null,odds:Number(selection.odds)||null,sport:meta.sport,home:meta.home,away:meta.away,tournament:meta.tournament||'',marketDesc:selection.marketDesc||meta.marketDesc||'',outcomeDesc:selection.outcomeDesc||meta.outcomeDesc||''};slip=slip.filter(x=>x.eventId!==item.eventId);slip.push(item);saveLocal();renderSlip();render()}
+function removeSlip(k){slip=slip.filter(x=>selKey(x)!==k);saveLocal();renderSlip();render()}
+function isSelected(s){return slip.some(x=>selKey(x)===selKey(s))}
+function combinedOdds(){return slip.reduce((p,x)=>p*(Number(x.odds)||1),1)}
 
-  function impliedOdds(p) {
-    if (p <= 0) return '–';
-    return (100 / p).toFixed(2);
-  }
+function renderSlip(){const box=document.getElementById('slip-content');document.getElementById('slip-count').textContent=`${slip.length} selection${slip.length===1?'':'s'}`;document.getElementById('s-slip').textContent=slip.length;if(!slip.length){box.innerHTML='<div class="slip-empty">Select the outcomes you want to play. You can mix football, basketball and ice hockey.</div>';return}box.innerHTML=`<div class="slip-list">${slip.map(x=>`<div class="slip-row"><div class="slip-meta"><div class="slip-match">${esc(x.home)} vs ${esc(x.away)}</div><div class="slip-pick">${esc(x.sport)} · ${esc(x.marketDesc)} · ${esc(x.outcomeDesc)}${x.specifier?' · '+esc(x.specifier):''}</div></div><div class="slip-odds">${x.odds?x.odds.toFixed(2):'–'}</div><button class="remove" data-remove="${esc(selKey(x))}" title="Remove">×</button></div>`).join('')}</div><div class="slip-foot"><div class="combined">Combined current odds <b>${combinedOdds().toFixed(2)}</b></div><div><button class="secondary" id="clear-slip">Clear</button> <button class="primary" id="generate-code">Generate SportyBet Code</button></div></div><div id="code-result"></div>`;box.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>removeSlip(b.dataset.remove));document.getElementById('clear-slip').onclick=()=>{slip=[];saveLocal();renderSlip();render()};document.getElementById('generate-code').onclick=e=>generateCode(e.currentTarget)}
+async function generateCode(btn){btn.disabled=true;btn.textContent='Generating…';const out=document.getElementById('code-result');try{const res=await fetch('/api/sportybet/book',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selections:slip.map(x=>({eventId:x.eventId,marketId:x.marketId,outcomeId:x.outcomeId,...(x.specifier?{specifier:x.specifier}:{})}))})});const p=await res.json();if(!res.ok)throw new Error(p.error||'Booking failed');if(!p.shareCode)throw new Error('No booking code returned');let safeUrl='';try{const u=new URL(p.shareURL||'');if(/^https?:$/.test(u.protocol)&&/(^|\.)sportybet\.com$/i.test(u.hostname))safeUrl=u.href}catch{}const unavailable=Array.isArray(p.unavailableOutcomes)?p.unavailableOutcomes.length:0;out.innerHTML=`<div class="codebox">SportyBet booking code<br><strong>${esc(p.shareCode)}</strong>${unavailable?`<div>${unavailable} selection(s) were unavailable and may not be included.</div>`:''}<div class="code-actions"><button class="secondary" id="copy-code">Copy code</button>${safeUrl?`<a class="primary" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">Open SportyBet</a>`:''}</div></div>`;document.getElementById('copy-code').onclick=()=>navigator.clipboard?.writeText(String(p.shareCode))}catch(e){out.innerHTML=`<div class="codebox" style="color:var(--neg)">${esc(e.message||'Could not generate code')}</div>`}finally{btn.disabled=false;btn.textContent='Generate SportyBet Code'}}
 
-  function renderChips() {
-    const lw = document.getElementById('league-chips');
-    lw.innerHTML = '';
-    LEAGUES.forEach(lg => {
-      const chip = document.createElement('button');
-      chip.className = 'chip' + (state.leagues.has(lg) ? ' active' : '');
-      chip.textContent = lg;
-      chip.addEventListener('click', () => {
-        if (state.leagues.has(lg)) state.leagues.delete(lg); else state.leagues.add(lg);
-        chip.classList.toggle('active');
-        saveState(); render();
-      });
-      lw.appendChild(chip);
-    });
+function renderNav(){const n=document.getElementById('sport-nav');n.innerHTML=SPORTS.map(s=>`<button class="sport-tab ${state.sport===s.id?'active':''}" data-sport="${s.id}">${s.label}</button>`).join('');n.querySelectorAll('[data-sport]').forEach(b=>b.onclick=()=>{state.sport=b.dataset.sport;saveLocal();renderControls();render();loadCurrent()})}
+function renderControls(){renderNav();const football=state.sport==='football';document.getElementById('league-wrap').style.display=football?'flex':'none';document.getElementById('market-label').textContent=football?'Bet type':'Market';const lc=document.getElementById('league-chips');lc.innerHTML='';if(football)LEAGUES.forEach(l=>{const b=document.createElement('button');b.className='chip'+(state.leagues.has(l)?' active':'');b.textContent=l;b.onclick=()=>{state.leagues.has(l)?state.leagues.delete(l):state.leagues.add(l);saveLocal();renderControls();render()};lc.appendChild(b)});const mc=document.getElementById('market-chips');mc.innerHTML='';MARKETS[state.sport].forEach(m=>{const b=document.createElement('button');b.className='chip'+(state.market[state.sport]===m.id?' active':'');b.textContent=m.label;b.onclick=()=>{state.market[state.sport]=m.id;saveLocal();renderControls();render();loadCurrent()};mc.appendChild(b)});document.getElementById('s-group-label').textContent=football?'Leagues':'Competitions';renderStatus()}
+function renderStatus(){const el=document.getElementById('sporty-status');const key=state.market[state.sport];const s=DATA[state.sport][key];el.className='status';if(!s){el.textContent=state.sport==='football'?'Football model loaded; waiting for SportyBet prices…':'Waiting for SportyBet odds…';return}if(s.loading){el.textContent='SportyBet: loading prices…';return}if(s.error){el.classList.add('err');el.textContent='SportyBet: '+s.error;return}if(s.loaded){el.classList.add('ok');el.textContent=`SportyBet ${state.sport}: ${s.rows.length} outcomes loaded`;return}}
 
-    const bw = document.getElementById('bettype-chips');
-    bw.innerHTML = '';
-    BET_TYPES.forEach(bt => {
-      const chip = document.createElement('button');
-      chip.className = 'chip' + (state.betType === bt.id ? ' active' : '');
-      chip.textContent = bt.label;
-      chip.addEventListener('click', () => {
-        state.betType = bt.id;
-        document.querySelectorAll('#bettype-chips .chip').forEach(c => c.classList.remove('active'));
-        chip.classList.add('active');
-        saveState(); render();
-      });
-      bw.appendChild(chip);
-    });
-  }
+async function loadSporty(sport,market){DATA[sport][market]??={loaded:false,loading:false,rows:[],error:null};const s=DATA[sport][market];if(s.loaded||s.loading)return;s.loading=true;renderStatus();try{const url=sport==='football'?`/api/sportybet/odds?market=${encodeURIComponent(market)}`:`/api/sportybet/sport/${encodeURIComponent(sport)}?market=${encodeURIComponent(market)}`;const res=await fetch(url);const p=await res.json();if(!res.ok)throw new Error(p.error||'odds unavailable');s.rows=Array.isArray(p.rows)?p.rows:[];s.loaded=true;s.fetchedAt=p.fetchedAt||null}catch(e){s.error=e.message||'odds unavailable'}finally{s.loading=false;renderStatus();render()}}
+async function loadFootball(){if(FOOTBALL.length)return;try{const res=await fetch('/api/predictions');const p=await res.json();FOOTBALL=p.matches||[];const badge=document.getElementById('last-updated');if(p.generatedAt){const d=new Date(p.generatedAt);badge.innerHTML=`<b>${d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})}</b>Updated ${d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:'Africa/Lagos'})} WAT`}else badge.innerHTML='<b>No model data yet</b>Run refresh job'}catch{document.getElementById('last-updated').innerHTML='<b>Model unavailable</b>'}}
+async function loadCurrent(){if(state.sport==='football')await loadFootball();await loadSporty(state.sport,state.market[state.sport]);render()}
 
-  function renderList() {
-    const rows = ALL_MATCHES
-      .filter(r => state.leagues.has(r.league))
-      .map(r => ({ ...r, sel: pickProbFor(r, state.betType) }))
-      .filter(r => r.sel.prob >= state.minProb)
-      .sort((x, y) => y.sel.prob - x.sel.prob);
-    const limited = state.limit > 0 ? rows.slice(0, state.limit) : rows;
+function h2hHtml(r){const h=r.h2h;if(!h||!h.meetings)return '<div class="h2h">H2H: no direct meetings found in the loaded history, so the model uses Poisson/form only.</div>';const games=(h.recent||[]).map(g=>`<div>${esc(new Date(g.utcDate).getUTCFullYear())} · ${esc(g.homeTeam)} ${g.homeGoals}-${g.awayGoals} ${esc(g.awayTeam)}</div>`).join('');return `<details class="h2h"><summary><b>H2H ${h.meetings} meeting${h.meetings===1?'':'s'}</b> · ${h.homeWinPct}% / ${h.drawPct}% / ${h.awayWinPct}% · model influence ${h.influencePct}%</summary><div class="h2h-games">${games||'No score samples'}</div></details>`}
+function renderFootball(){const kind=state.market.football;const sporty=DATA.football[kind]||{};let rows=FOOTBALL.filter(r=>state.leagues.has(r.league)).map(r=>({...r,sel:footballPick(r,kind)})).filter(r=>r.sel.prob>=state.minProb).sort((a,b)=>b.sel.prob-a.sel.prob);if(state.limit>0)rows=rows.slice(0,state.limit);const list=document.getElementById('list');list.innerHTML=rows.length?'':'<div class="empty">No football fixtures match these filters.</div>';rows.forEach(r=>{const t=tier(r.sel.prob),sp=sporty.loaded?findFootballSporty(r,kind):null,selected=sp&&isSelected(sp);const card=document.createElement('article');card.className='card';card.innerHTML=`<div class="card-top"><div class="meta"><span class="league">${esc(r.league)}</span><span class="kickoff">${esc(fmtKickoff(r.kickoffUtc))}</span></div><span class="tier ${t.c}">${t.l}</span></div><div class="matchup"><div class="teams">${esc(r.home)}<span class="vs">vs</span>${esc(r.away)}</div><div class="pick-out"><div><b>${esc(r.sel.label)}</b> · <span class="pct">${r.sel.prob}%</span> · <span class="odds">Model fair ${impliedOdds(r.sel.prob)}</span></div>${sp?`<div class="price-row"><span class="sportsbook">SportyBet <b>${Number(sp.odds).toFixed(2)}</b></span><button class="select-btn ${selected?'selected':''}">${selected?'Selected':'Add to slip'}</button></div>`:sporty.loading?'<div class="price-row"><span class="sportsbook">SportyBet loading…</span></div>':'<div class="price-row"><span class="sportsbook">No matching SportyBet selection</span></div>'}</div></div><div class="bar"><div class="seg h" style="flex:${r.h}">${r.h>=10?r.h+'%':''}</div><div class="seg d" style="flex:${r.d}">${r.d>=10?r.d+'%':''}</div><div class="seg a" style="flex:${r.a}">${r.a>=10?r.a+'%':''}</div></div><div class="bar-labels"><span>${esc(r.home)} win</span><span>Draw</span><span>${esc(r.away)} win</span></div><div class="stats"><div class="stat">GG <b>${r.btts}%</b></div><div class="stat">Over 2.5 <b>${r.o25}%</b></div><div class="stat">Likeliest score <b>${esc(r.score)}</b> (${r.scoreP}%)</div>${r.base?`<div class="stat">Poisson base 1X2 <b>${r.base.h}/${r.base.d}/${r.base.a}</b></div>`:''}</div>${h2hHtml(r)}`;if(sp)card.querySelector('.select-btn').onclick=()=>addToSlip(sp,{sport:'Football',home:r.home,away:r.away,tournament:r.league,marketDesc:sp.marketDesc,outcomeDesc:sp.outcomeDesc});list.appendChild(card)});summary(rows,rows.map(r=>r.league),rows.map(r=>r.sel.prob))}
 
-    const list = document.getElementById('list');
-    list.innerHTML = '';
-    if (limited.length === 0) {
-      list.innerHTML = '<div class="empty">No fixtures match these filters right now. Try lowering the confidence threshold or adding a league.</div>';
-    } else {
-      limited.forEach(r => {
-        const t = tierOf(r.sel.prob);
-        const card = document.createElement('div');
-        card.className = 'card';
-        card.innerHTML = `
-          <div class="card-top">
-            <div class="meta-left">
-              <span class="league-tag">${r.league}</span>
-              <span class="kickoff">${new Date(r.kickoffUtc).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Lagos' })} WAT</span>
-            </div>
-            <span class="tier ${t.c}">${t.l}</span>
-          </div>
-          <div class="matchup">
-            <div class="teams">${r.home}<span class="vs">vs</span>${r.away}</div>
-            <div class="pick-out"><span class="p">${r.sel.label}</span> &middot; <span class="pct">${r.sel.prob}%</span> &middot; <span class="odds">~${impliedOdds(r.sel.prob)}</span></div>
-          </div>
-          <div class="bar">
-            <div class="seg h" style="flex:${r.h}">${r.h >= 10 ? r.h + '%' : ''}</div>
-            <div class="seg d" style="flex:${r.d}">${r.d >= 10 ? r.d + '%' : ''}</div>
-            <div class="seg a" style="flex:${r.a}">${r.a >= 10 ? r.a + '%' : ''}</div>
-          </div>
-          <div class="bar-labels"><span>${r.home} win</span><span>Draw</span><span>${r.away} win</span></div>
-          <div class="sub-stats">
-            <div class="stat">GG (BTTS) <b>${r.btts}%</b></div>
-            <div class="stat">Over 2.5 <b>${r.o25}%</b></div>
-            <div class="stat">Likeliest score <b>${r.score}</b> <span style="color:var(--text-faint)">(${r.scoreP}%)</span></div>
-          </div>
-        `;
-        list.appendChild(card);
-      });
-    }
+function groupMarkets(rows){const byEvent=new Map();for(const r of rows){if(!byEvent.has(r.eventId))byEvent.set(r.eventId,{eventId:r.eventId,home:r.home,away:r.away,tournament:r.tournament,kickoffUtc:r.kickoffUtc,groups:new Map()});const ev=byEvent.get(r.eventId);const gk=[r.marketId,r.specifier||''].join('|');if(!ev.groups.has(gk))ev.groups.set(gk,[]);ev.groups.get(gk).push(r)}return [...byEvent.values()].map(ev=>{const groups=[...ev.groups.values()].filter(g=>g.length>=2);if(!groups.length)return null;let best=groups[0],bestScore=Infinity;for(const g of groups){const inv=g.map(x=>1/Number(x.odds)).filter(Number.isFinite),sum=inv.reduce((a,b)=>a+b,0);if(!sum)continue;const probs=inv.map(x=>x/sum);const spread=Math.max(...probs)-Math.min(...probs);if(spread<bestScore){bestScore=spread;best=g}}const inv=best.map(x=>1/Number(x.odds)),sum=inv.reduce((a,b)=>a+b,0);const outcomes=best.map((x,i)=>({...x,marketProb:sum?Math.round(inv[i]/sum*100):0})).sort((a,b)=>b.marketProb-a.marketProb);return{...ev,outcomes,topProb:outcomes[0]?.marketProb||0,line:best[0]?.specifier||'',marketDesc:best[0]?.marketDesc||''}}).filter(Boolean)}
+function renderOther(){const sport=state.sport,kind=state.market[sport],s=DATA[sport][kind]||{};let events=groupMarkets(s.rows||[]).filter(e=>e.topProb>=state.minProb).sort((a,b)=>b.topProb-a.topProb);if(state.limit>0)events=events.slice(0,state.limit);const list=document.getElementById('list');if(!events.length){list.innerHTML=`<div class="empty">${s.loading?'Loading SportyBet events…':'No events match these filters.'}</div>`;summary([],[],[]);return}list.innerHTML='';events.forEach(e=>{const t=tier(e.topProb);const card=document.createElement('article');card.className='card';card.innerHTML=`<div class="card-top"><div class="meta"><span class="league">${esc(e.tournament||sport)}</span><span class="kickoff">${esc(fmtKickoff(e.kickoffUtc))}</span></div><span class="tier ${t.c}">Market lean ${e.topProb}%</span></div><div class="matchup"><div class="teams">${esc(e.home)}<span class="vs">vs</span>${esc(e.away)}</div><div class="pick-out"><b>${esc(e.marketDesc)}</b>${e.line?`<div class="market-line">${esc(e.line)}</div>`:''}</div></div><div class="market-options">${e.outcomes.map(o=>`<div class="outcome"><div class="outcome-top"><span class="outcome-name">${esc(o.outcomeDesc)}</span><span class="outcome-odds">${Number(o.odds).toFixed(2)}</span></div><div class="market-prob">No-vig market probability ${o.marketProb}%</div><button class="select-btn ${isSelected(o)?'selected':''}" data-key="${esc(selKey(o))}">${isSelected(o)?'Selected':'Add to slip'}</button></div>`).join('')}</div>`;card.querySelectorAll('[data-key]').forEach((b,i)=>{const o=e.outcomes[i];b.onclick=()=>addToSlip(o,{sport:sport==='hockey'?'Ice Hockey':'Basketball',home:e.home,away:e.away,tournament:e.tournament,marketDesc:o.marketDesc,outcomeDesc:o.outcomeDesc})});list.appendChild(card)});summary(events,events.map(e=>e.tournament),events.map(e=>e.topProb))}
+function summary(rows,groups,probs){document.getElementById('s-count').textContent=rows.length;document.getElementById('s-leagues').textContent=new Set(groups.filter(Boolean)).size;document.getElementById('s-top').textContent=probs.length?Math.max(...probs)+'%':'–';document.getElementById('s-slip').textContent=slip.length}
+function render(){renderStatus();if(state.sport==='football')renderFootball();else renderOther()}
 
-    document.getElementById('s-count').textContent = limited.length;
-    document.getElementById('s-leagues').textContent = new Set(limited.map(r => r.league)).size;
-    document.getElementById('s-top').textContent = limited.length ? Math.max(...limited.map(r => r.sel.prob)) + '%' : '–';
-    document.getElementById('s-avg').textContent = limited.length ? Math.round(limited.reduce((a, r) => a + r.sel.prob, 0) / limited.length) + '%' : '–';
-  }
-
-  function render() { renderList(); }
-
-  async function loadData() {
-    try {
-      const res = await fetch('/api/predictions');
-      const payload = await res.json();
-      ALL_MATCHES = payload.matches || [];
-      const badge = document.getElementById('last-updated');
-      if (payload.generatedAt) {
-        const d = new Date(payload.generatedAt);
-        badge.innerHTML = `<b>${d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</b>Updated ${d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Lagos' })} WAT`;
-      } else {
-        badge.innerHTML = '<b>No data yet</b>Run the refresh job';
-      }
-      render();
-    } catch (e) {
-      document.getElementById('list').innerHTML = '<div class="empty">Could not load predictions. The backend may still be starting up — try refreshing in a moment.</div>';
-    }
-  }
-
-  document.getElementById('min-prob').addEventListener('input', (e) => {
-    state.minProb = parseInt(e.target.value, 10);
-    document.getElementById('min-prob-val').textContent = state.minProb + '%';
-    saveState(); render();
-  });
-  document.getElementById('limit-select').addEventListener('change', (e) => {
-    state.limit = parseInt(e.target.value, 10);
-    saveState(); render();
-  });
-
-  loadState();
-  document.getElementById('min-prob').value = state.minProb;
-  document.getElementById('min-prob-val').textContent = state.minProb + '%';
-  document.getElementById('limit-select').value = String(state.limit);
-  renderChips();
-  loadData();
+document.getElementById('min-prob').oninput=e=>{state.minProb=parseInt(e.target.value,10);document.getElementById('min-prob-val').textContent=state.minProb+'%';saveLocal();render()};document.getElementById('limit-select').onchange=e=>{state.limit=parseInt(e.target.value,10);saveLocal();render()};
+loadLocal();document.getElementById('min-prob').value=state.minProb;document.getElementById('min-prob-val').textContent=state.minProb+'%';document.getElementById('limit-select').value=String(state.limit);renderControls();renderSlip();loadFootball().then(()=>loadCurrent());
 </script>
 </body>
 </html>

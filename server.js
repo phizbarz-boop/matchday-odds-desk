@@ -3,8 +3,10 @@ const path = require('path');
 const fs = require('fs');
 
 const app = express();
+app.set('trust proxy', 1); // Render forwards the real client IP.
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
+const { getFootballMarket, getSportMarket, bookBet, SPORT_CONFIG } = require('./lib/sportybet');
 
 let redisClient = null;
 async function getRedis() {
@@ -15,6 +17,65 @@ async function getRedis() {
   redisClient.on('error', (e) => console.error('Redis error', e.message));
   await redisClient.connect();
   return redisClient;
+}
+
+
+const sportyMemoryCache = new Map();
+const bookingMemoryRate = new Map();
+
+async function loadSportyBetMarket(kind, sport = 'football') {
+  const ttlSeconds = Math.max(60, parseInt(process.env.SPORTYBET_CACHE_SECONDS || '43200', 10));
+  const cacheKey = `sportybet:${sport}:${kind}:latest`;
+  const client = await getRedis();
+
+  if (client) {
+    const raw = await client.get(cacheKey);
+    if (raw) return JSON.parse(raw);
+  } else {
+    const hit = sportyMemoryCache.get(cacheKey);
+    if (hit && hit.expiresAt > Date.now()) return hit.payload;
+  }
+
+  const hours = Math.max(1, parseInt(process.env.SPORTYBET_HOURS || String((parseInt(process.env.DAYS_AHEAD || '4', 10) + 1) * 24), 10));
+  const payload = sport === 'football'
+    ? await getFootballMarket(kind, { hours })
+    : await getSportMarket(sport, kind, { hours });
+
+  if (client) {
+    await client.set(cacheKey, JSON.stringify(payload), { EX: ttlSeconds });
+  } else {
+    sportyMemoryCache.set(cacheKey, {
+      expiresAt: Date.now() + ttlSeconds * 1000,
+      payload,
+    });
+  }
+  return payload;
+}
+
+async function allowBookingRequest(req) {
+  const maxPerMinute = Math.max(1, parseInt(process.env.SPORTYBET_BOOKINGS_PER_MINUTE || '5', 10));
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const bucket = Math.floor(Date.now() / 60000);
+  const key = `sportybet:bookrate:${ip}:${bucket}`;
+  const client = await getRedis();
+
+  if (client) {
+    const count = await client.incr(key);
+    if (count === 1) await client.expire(key, 70);
+    return count <= maxPerMinute;
+  }
+
+  const old = bookingMemoryRate.get(key) || 0;
+  const next = old + 1;
+  bookingMemoryRate.set(key, next);
+  if (bookingMemoryRate.size > 1000) {
+    for (const k of bookingMemoryRate.keys()) {
+      const parts = k.split(':');
+      const b = Number(parts[parts.length - 1]);
+      if (b < bucket - 1) bookingMemoryRate.delete(k);
+    }
+  }
+  return next <= maxPerMinute;
 }
 
 async function loadPredictions() {
@@ -39,6 +100,83 @@ app.get('/api/predictions', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to load predictions' });
+  }
+});
+
+
+// Live-ish SportyBet price layer. The Parse API key never reaches the browser.
+// Supported values: 1x2, gg, ou. Results are cached (Redis when available).
+app.get('/api/sportybet/odds', async (req, res) => {
+  try {
+    const kind = String(req.query.market || '1x2').toLowerCase();
+    if (!['1x2', 'gg', 'ou'].includes(kind)) {
+      return res.status(400).json({ error: 'market must be one of: 1x2, gg, ou' });
+    }
+    const payload = await loadSportyBetMarket(kind);
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(payload);
+  } catch (err) {
+    console.error('SportyBet odds error:', err.message);
+    const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
+    res.status(status).json({
+      error: err.code === 'PARSE_API_KEY_MISSING'
+        ? 'SportyBet integration is not configured yet'
+        : 'Failed to load SportyBet odds',
+      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
+  }
+});
+
+
+
+// Basketball and ice hockey odds. Parse currently exposes pre-match data for these
+// sports; this route is generic so more supported sports can be added later.
+app.get('/api/sportybet/sport/:sport', async (req, res) => {
+  try {
+    const sport = String(req.params.sport || '').toLowerCase();
+    const cfg = SPORT_CONFIG[sport];
+    if (!cfg) {
+      return res.status(400).json({ error: `sport must be one of: ${Object.keys(SPORT_CONFIG).join(', ')}` });
+    }
+    const kind = String(req.query.market || cfg.defaultMarket).toLowerCase();
+    if (!cfg.markets[kind]) {
+      return res.status(400).json({ error: `market must be one of: ${Object.keys(cfg.markets).join(', ')}` });
+    }
+    const payload = await loadSportyBetMarket(kind, sport);
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(payload);
+  } catch (err) {
+    console.error('SportyBet sport odds error:', err.message);
+    const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
+    res.status(status).json({
+      error: err.code === 'PARSE_API_KEY_MISSING'
+        ? 'SportyBet integration is not configured yet'
+        : 'Failed to load SportyBet sport odds',
+      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
+  }
+});
+
+app.post('/api/sportybet/book', express.json(), async (req, res) => {
+  try {
+    if (!(await allowBookingRequest(req))) {
+      return res.status(429).json({ error: 'Too many booking requests; try again in a minute' });
+    }
+    const selections = req.body && req.body.selections;
+    if (!Array.isArray(selections) || selections.length === 0 || selections.length > 30) {
+      return res.status(400).json({ error: 'selections must be an array containing 1-30 selections' });
+    }
+    const result = await bookBet(selections);
+    res.json(result);
+  } catch (err) {
+    console.error('SportyBet booking error:', err.message);
+    const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
+    res.status(status).json({
+      error: err.code === 'PARSE_API_KEY_MISSING'
+        ? 'SportyBet integration is not configured yet'
+        : 'Failed to create SportyBet booking code',
+      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
   }
 });
 
