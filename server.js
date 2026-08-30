@@ -10,6 +10,7 @@ const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
 const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG } = require('./lib/sportybet');
 const { buildCandidates, selectAutoBet } = require('./lib/autoPicker');
 const { sendTelegramMessage } = require('./lib/telegram');
+const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
 
 let redisClient = null;
 async function getRedis() {
@@ -567,6 +568,16 @@ async function runTelegramDailyPicks() {
         ...(x.specifier ? { specifier: x.specifier } : {}),
       })));
       await sendTelegramMessage(telegramSlipText(target, result, booking, sportScope));
+      // Persist every automatically generated code that was actually sent to Telegram.
+      // Redis is strongly recommended so tracking survives Render restarts/deploys.
+      await trackTelegramSlip(await getRedis(), {
+        shareCode: booking?.shareCode,
+        shareURL: booking?.shareURL,
+        targetOdds: target,
+        combinedOdds: result.combinedOdds,
+        sportScope,
+        selections: result.selections,
+      });
       output.push({
         targetOdds: target,
         combinedOdds: result.combinedOdds,
@@ -588,6 +599,104 @@ async function runTelegramDailyPicks() {
 
   return { sportScope, minProbability, minEdge, maxSelections, candidateCount: candidates.length, results: output };
 }
+
+
+function telegramWinningSlipText(slip) {
+  const successLegs = Array.isArray(slip.selections) ? slip.selections.length : 0;
+  return [
+    '🏆 BET CODE SUCCESSFUL',
+    '',
+    `SportyBet Code: ${slip.shareCode}`,
+    ...(slip.targetOdds ? [`Target Odds: ${slip.targetOdds}`] : []),
+    ...(slip.combinedOdds ? [`Actual Odds: ${Number(slip.combinedOdds).toFixed(2)}`] : []),
+    `✅ ${successLegs} / ${successLegs} selections successful/void-safe`,
+    '❌ 0 confirmed losses',
+    '',
+    `Generated: ${slip.createdAt}`,
+    `Confirmed: ${new Date().toISOString()}`,
+    '',
+    '🎯 FULL SLIP WON',
+    ...(slip.shareURL ? ['', `SportyBet link: ${slip.shareURL}`] : []),
+  ].join('\n');
+}
+
+async function runTelegramSettlementCheck() {
+  const client = await getRedis();
+  if (!client && process.env.NODE_ENV === 'production') {
+    console.warn('Settlement tracker is using memory only. Configure REDIS_URL for reliable persistence across Render restarts.');
+  }
+  const slips = await listTrackedSlips(client);
+  const pending = slips.filter(x => x.status === 'pending' && !x.successAlertSent);
+  const stats = { tracked: slips.length, checked: 0, won: 0, lost: 0, pending: 0, errors: 0, alertsSent: 0 };
+
+  for (const slip of pending) {
+    try {
+      // Avoid spending a booking-status API credit before the first scheduled event.
+      const kickoffTimes = (slip.selections || []).map(x => Date.parse(x.kickoffUtc || '')).filter(Number.isFinite);
+      if (kickoffTimes.length && Date.now() < Math.min(...kickoffTimes)) {
+        stats.pending++;
+        continue;
+      }
+      const booking = await getBooking(slip.shareCode);
+      const evaluation = evaluateBooking(booking);
+      stats.checked++;
+      const patch = {
+        status: evaluation.status,
+        lastCheckedAt: new Date().toISOString(),
+        lastStatusDetail: evaluation,
+      };
+      if (evaluation.status === 'won') {
+        stats.won++;
+        // Mark first, then alert. This favors never sending duplicate success alerts.
+        // If Telegram itself fails, the endpoint reports the error and an admin can
+        // inspect/reset the record rather than spamming the channel on every retry.
+        patch.successAlertSent = true;
+        patch.successAlertSentAt = new Date().toISOString();
+        const updated = await updateTrackedSlip(client, slip.shareCode, patch);
+        await sendTelegramMessage(telegramWinningSlipText(updated || { ...slip, ...patch }));
+        stats.alertsSent++;
+      } else {
+        await updateTrackedSlip(client, slip.shareCode, patch);
+        if (evaluation.status === 'lost') stats.lost++;
+        else stats.pending++;
+      }
+    } catch (err) {
+      stats.errors++;
+      console.error(`Settlement check ${slip.shareCode}:`, err.message);
+      await updateTrackedSlip(client, slip.shareCode, { lastCheckedAt: new Date().toISOString(), lastStatusDetail: { error: err.message } }).catch(()=>{});
+    }
+    await new Promise(resolve => setTimeout(resolve, 350));
+  }
+
+  if (String(process.env.TELEGRAM_SETTLEMENT_SUMMARY || 'true').toLowerCase() !== 'false') {
+    await sendTelegramMessage([
+      '📋 MATCHDAY — DAILY SLIP CHECK',
+      `Tracked codes: ${stats.tracked}`,
+      `Checked today: ${stats.checked}`,
+      `🏆 Newly successful: ${stats.won}`,
+      `❌ Newly confirmed lost: ${stats.lost}`,
+      `⏳ Still pending/not due: ${stats.pending}`,
+      ...(stats.errors ? [`⚠️ Check errors: ${stats.errors}`] : []),
+      `Success alerts sent: ${stats.alertsSent}`,
+    ].join('\n'));
+  }
+  return stats;
+}
+
+app.post('/api/telegram/check-settlements', express.json(), async (req, res) => {
+  try {
+    const secret = process.env.TELEGRAM_JOB_SECRET;
+    if (!secret || req.headers['x-telegram-job-secret'] !== secret) return res.status(401).json({ error: 'unauthorized' });
+    const stats = await runTelegramSettlementCheck();
+    res.json({ ok: true, checkedAt: new Date().toISOString(), ...stats });
+  } catch (err) {
+    console.error('Telegram settlement job error:', err.message);
+    res.status(err.code === 'TELEGRAM_CONFIG_MISSING' ? 503 : 502).json({
+      error: err.code === 'TELEGRAM_CONFIG_MISSING' ? 'Telegram integration is not configured yet' : 'Telegram settlement job failed',
+      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
+  }
+});
 
 app.get('/api/telegram/status', (req, res) => {
   res.json({

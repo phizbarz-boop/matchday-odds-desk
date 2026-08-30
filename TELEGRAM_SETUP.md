@@ -174,3 +174,23 @@ TELEGRAM_MIN_EDGE=0
 ```
 
 This filters Football candidates whose Poisson+H2H probability edge is below the chosen number of percentage points. Example: `TELEGRAM_MIN_EDGE=3` requires at least a +3 point football model-vs-price edge. Basketball and hockey are not hard-filtered by this setting until independent statistical models are added for those sports.
+
+## Daily successful-code settlement alerts
+
+The app now stores every automatic SportyBet code successfully sent to Telegram and checks its booking status once per day.
+
+GitHub workflow: `.github/workflows/telegram-settlement-check.yml`
+
+Default schedule: 22:30 UTC daily (23:30 Lagos/WAT). It calls:
+
+`POST /api/telegram/check-settlements`
+
+using the existing `TELEGRAM_JOB_SECRET` GitHub repository secret.
+
+Recommended Render environment:
+
+- `REDIS_URL` — strongly recommended/required for reliable tracking across Render restarts.
+- `TELEGRAM_SETTLEMENT_SUMMARY=true` — sends the daily compact status summary. Set to `false` to receive only full-slip success alerts.
+- `TELEGRAM_TRACK_DAYS=45` — retention for completed tracked slips.
+
+The checker re-reads each SportyBet booking code and uses the booking's per-outcome winning/settlement status. Explicit wins and void/push outcomes are success-safe; an explicit loss marks the slip lost. Unknown or unfinished outcomes remain pending. A successful code is announced only once.

@@ -1,0 +1,26 @@
+name: Matchday Daily Slip Settlement Check
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Once daily at 22:30 UTC = 23:30 in Lagos (WAT).
+    - cron: "30 22 * * *"
+
+concurrency:
+  group: matchday-telegram-settlement-check
+  cancel-in-progress: false
+
+jobs:
+  check-settlements:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check generated SportyBet codes and alert winners
+        env:
+          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
+        run: |
+          test -n "$TELEGRAM_JOB_SECRET" || (echo "Missing GitHub secret TELEGRAM_JOB_SECRET" && exit 1)
+          curl --fail-with-body --show-error --silent --max-time 600 \
+            -X POST "https://matchday-odds-desk.onrender.com/api/telegram/check-settlements" \
+            -H "Content-Type: application/json" \
+            -H "x-telegram-job-secret: $TELEGRAM_JOB_SECRET" \
+            --data '{}'
