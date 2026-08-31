@@ -161,3 +161,12 @@ PREDICTION_DAYS_AHEAD=21
 ```
 
 The website lets the user choose 7, 14, or 21 days for each analysis. The build defaults the football prediction refresh to 21 days so all three Analyzer choices can be scored when football-data.org exposes the fixture. You may explicitly set `PREDICTION_DAYS_AHEAD=21` in Render to make that behavior visible in your configuration. `SPORTYBET_HOURS` can remain at 120 for the normal Auto Builder.
+
+### Analyzer generic Over/Under resolution
+
+Some Parse `get_booking` responses return an imported football Over/Under leg with the correct fixture and booked odds but use the generic outcome label `Selection` instead of the actual line/outcome. The Analyzer now repairs this before probability scoring:
+
+1. It first matches the leg against the live SportyBet `Over 1.5` market by event/team and price.
+2. When the same booking contains explicit `Over 1.5` legs and no conflicting explicit O/U outcomes, remaining generic O/U legs are classified as `Over 1.5` for model matching.
+3. Re-booking IDs are never invented; a new booking code is created only from selections that ultimately match a real current SportyBet candidate.
+4. If Over 1.5 is resolved but the football prediction database has no matching fixture/competition, the UI says so instead of incorrectly reporting that the imported market itself is unsupported.

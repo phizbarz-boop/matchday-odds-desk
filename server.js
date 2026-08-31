@@ -347,7 +347,66 @@ function analyzerCandidateScore(leg, c) {
   if (analyzerNormText(leg.marketDesc) && analyzerNormText(c.marketDesc).includes(analyzerNormText(leg.marketDesc))) score += 8;
   const lo = analyzerNormText(leg.outcomeDesc), co = analyzerNormText(c.outcomeDesc);
   if (lo && co && (lo === co || lo.includes(co) || co.includes(lo))) score += 14;
+  const legOdds = Number(leg.odds), candOdds = Number(c.odds);
+  if (Number.isFinite(legOdds) && Number.isFinite(candOdds)) {
+    const diff = Math.abs(legOdds - candOdds);
+    if (diff <= 0.005) score += 24;
+    else if (diff <= 0.02) score += 18;
+    else if (diff <= 0.05) score += 10;
+  }
   return score;
+}
+
+function isGenericAnalyzerSelection(v) {
+  const n = analyzerNormText(v);
+  return !n || n === 'selection' || n === 'pick' || n === 'outcome';
+}
+
+function isAnalyzerOverUnderMarket(v) {
+  const n = analyzerNormText(v);
+  return n.includes('over under') || n === 'ou' || n.includes('total goals');
+}
+
+// Some get_booking payloads identify the event/market correctly but return only
+// the generic word "Selection" for the chosen O/U outcome. Resolve those rows
+// against SportyBet's actual Over 1.5 market before the probability-model match.
+function resolveGenericOver15Leg(leg, over15Rows) {
+  if (!isAnalyzerOverUnderMarket(leg.marketDesc) || !isGenericAnalyzerSelection(leg.outcomeDesc)) {
+    return { ...leg, analyzerResolved: false };
+  }
+
+  const rows = Array.isArray(over15Rows) ? over15Rows : [];
+  let pool = [];
+  if (leg.eventId) pool = rows.filter(r => String(r.eventId || '') === String(leg.eventId));
+  if (!pool.length) {
+    pool = rows.filter(r => analyzerTeamMatch(leg.home, r.home) && analyzerTeamMatch(leg.away, r.away));
+  }
+  pool = pool.filter(r => {
+    const out = analyzerNormText(r.outcomeDesc);
+    const spec = analyzerNormText(r.specifier);
+    return out.includes('over') && (out.includes('1 5') || spec.includes('total 1 5'));
+  });
+  if (!pool.length) return { ...leg, analyzerResolved: false };
+
+  const targetOdds = Number(leg.odds);
+  pool.sort((a, b) => {
+    if (!Number.isFinite(targetOdds)) return 0;
+    return Math.abs(Number(a.odds) - targetOdds) - Math.abs(Number(b.odds) - targetOdds);
+  });
+  const hit = pool[0];
+  return {
+    ...leg,
+    eventId: String(hit.eventId || leg.eventId || ''),
+    marketId: String(hit.marketId || leg.marketId || ''),
+    outcomeId: String(hit.outcomeId || leg.outcomeId || ''),
+    specifier: hit.specifier || 'total=1.5',
+    marketDesc: hit.marketDesc || leg.marketDesc || 'Over/Under',
+    outcomeDesc: 'Over 1.5',
+    // Keep the booked ticket price on screen; current market identifiers are used for matching/re-booking.
+    odds: Number(leg.odds) || Number(hit.odds) || null,
+    analyzerResolved: true,
+    analyzerResolution: 'Resolved generic SportyBet O/U selection as Over 1.5 from the event market',
+  };
 }
 
 function bookingMetaNumber(booking, keys) {
@@ -368,8 +427,37 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
     if (!bookingCode) return res.status(400).json({ error: 'Enter a SportyBet booking code' });
 
     const booking = await getBooking(bookingCode);
-    const sourceRows = extractBookingOutcomes(booking).map(normalizeBookingLeg).filter(x => x.home || x.away || x.eventId);
-    if (!sourceRows.length) return res.status(404).json({ error: 'The booking code was found, but no selections could be read from it' });
+    const decodedRows = extractBookingOutcomes(booking).map(normalizeBookingLeg).filter(x => x.home || x.away || x.eventId);
+    if (!decodedRows.length) return res.status(404).json({ error: 'The booking code was found, but no selections could be read from it' });
+
+    // Warm/load the actual football Over 1.5 market first. This lets us repair get_booking
+    // rows that say only "Over/Under · Selection" before model scoring. loadAutoCandidates
+    // then reuses the same cache entry, so this normally does not add a second O1.5 API call.
+    const analyzerOver15 = await loadSportyBetMarket('ou15', 'football', { hours: analyzerHours, maxPages: analyzerMaxPages });
+    let sourceRows = decodedRows.map(leg => resolveGenericOver15Leg(leg, analyzerOver15?.rows));
+
+    // Secondary repair for a known get_booking quirk: some legs on the same ticket expose
+    // "Over 1.5" while others expose only "Selection". If every explicit O/U pick on this
+    // booking is Over 1.5 and there are no conflicting O/U outcomes, classify the remaining
+    // generic O/U legs as Over 1.5 for model matching. Re-booking identifiers still come only
+    // from a real matched SportyBet candidate below, never from this inference alone.
+    const explicitOu = decodedRows
+      .filter(x => isAnalyzerOverUnderMarket(x.marketDesc) && !isGenericAnalyzerSelection(x.outcomeDesc))
+      .map(x => analyzerNormText(x.outcomeDesc));
+    const consistentOver15 = explicitOu.length > 0 && explicitOu.every(x => x.includes('over') && x.includes('1 5'));
+    if (consistentOver15) {
+      sourceRows = sourceRows.map(leg => {
+        if (!isAnalyzerOverUnderMarket(leg.marketDesc) || !isGenericAnalyzerSelection(leg.outcomeDesc) || leg.analyzerResolved) return leg;
+        return {
+          ...leg,
+          marketId: leg.marketId || '18',
+          specifier: leg.specifier || 'total=1.5',
+          outcomeDesc: 'Over 1.5',
+          analyzerResolved: true,
+          analyzerResolution: 'Resolved as Over 1.5 from the consistent Over 1.5 pattern in this booking code',
+        };
+      });
+    }
 
     // Build the complete supported candidate universe with filtering disabled. The Analyzer
     // then applies the user's chosen probability threshold to the exact imported selections.
@@ -385,7 +473,12 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
         if (sc > bestScore) { bestScore = sc; best = c; }
       }
       const supported = !!best && bestScore >= 60;
-      if (!supported) return { index, ...leg, supported: false, qualified: false, reason: 'Not scored by current probability model' };
+      if (!supported) {
+        const reason = leg.analyzerResolved
+          ? 'Over 1.5 resolved correctly, but no current football probability-model prediction matched this fixture/competition'
+          : 'Could not resolve this imported selection to a market supported by the current probability model';
+        return { index, ...leg, supported: false, qualified: false, reason };
+      }
       const probability = Number(best.probability) || 0;
       const qualified = probability >= minProbability;
       return {
