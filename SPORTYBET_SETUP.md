@@ -170,3 +170,14 @@ Some Parse `get_booking` responses return an imported football Over/Under leg wi
 2. When the same booking contains explicit `Over 1.5` legs and no conflicting explicit O/U outcomes, remaining generic O/U legs are classified as `Over 1.5` for model matching.
 3. Re-booking IDs are never invented; a new booking code is created only from selections that ultimately match a real current SportyBet candidate.
 4. If Over 1.5 is resolved but the football prediction database has no matching fixture/competition, the UI says so instead of incorrectly reporting that the imported market itself is unsupported.
+
+
+## Cross-slip diversification
+
+Optional Render variable:
+
+```text
+TELEGRAM_REPEAT_MIN_PROBABILITY=80
+```
+
+During one Telegram auto-pick run, the same **game + bet type** is not reused in another target-odds slip when its probability is below this threshold. Picks at or above the threshold may repeat.

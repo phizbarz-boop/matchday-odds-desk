@@ -194,3 +194,14 @@ Recommended Render environment:
 - `TELEGRAM_TRACK_DAYS=45` — retention for completed tracked slips.
 
 The checker re-reads each SportyBet booking code and uses the booking's per-outcome winning/settlement status. Explicit wins and void/push outcomes are success-safe; an explicit loss marks the slip lost. Unknown or unfinished outcomes remain pending. A successful code is announced only once.
+
+
+## Cross-slip diversification
+
+Optional Render variable:
+
+```text
+TELEGRAM_REPEAT_MIN_PROBABILITY=80
+```
+
+During one Telegram auto-pick run, the same **game + bet type** is not reused in another target-odds slip when its probability is below this threshold. Picks at or above the threshold may repeat.

@@ -199,12 +199,12 @@ app.get('/api/predictions', async (req, res) => {
 
 
 // Live-ish SportyBet price layer. The Parse API key never reaches the browser.
-// Supported football values: 1x2, gg, dc, dnb, ou15, ou45, ah. O/U 2.5 is intentionally not used by the Auto Builder.
+// Supported football values: 1x2, gg, dc, dnb, ou15, ou45, ah, oneup. O/U 2.5 is intentionally not used by the Auto Builder.
 app.get('/api/sportybet/odds', async (req, res) => {
   try {
     const kind = String(req.query.market || '1x2').toLowerCase();
-    if (!['1x2', 'gg', 'dc', 'dnb', 'ou15', 'ou45', 'ah'].includes(kind)) {
-      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou15, ou45, ah' });
+    if (!['1x2', 'gg', 'dc', 'dnb', 'ou15', 'ou45', 'ah', 'oneup'].includes(kind)) {
+      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou15, ou45, ah, oneup' });
     }
     const payload = await loadSportyBetMarket(kind);
     res.set('Cache-Control', 'public, max-age=60');
@@ -265,7 +265,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
   const wantsBasketball = scope === 'all' || scope === 'basketball';
   const wantsHockey = scope === 'all' || scope === 'hockey';
 
-  const [predictions, f1x2, fgg, fdc, fdnb, fou15, fou45, fah, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
+  const [predictions, f1x2, fgg, fdc, fdnb, fou15, fou45, fah, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
     wantsFootball ? loadPredictions() : Promise.resolve({ matches: [] }),
     wantsFootball ? loadSportyBetMarket('1x2', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('gg', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
@@ -274,6 +274,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
     wantsFootball ? loadSportyBetMarket('ou15', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('ou45', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('ah', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('oneup', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsBasketball ? loadSportyBetMarket('winner', 'basketball', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsBasketball ? loadSportyBetMarket('totals', 'basketball', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsHockey ? loadSportyBetMarket('winner', 'hockey', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
@@ -282,7 +283,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
 
   return buildCandidates({
     predictions,
-    footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou15: fou15, ou45: fou45, ah: fah },
+    footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou15: fou15, ou45: fou45, ah: fah, oneup: foneup },
     basketballWinner,
     basketballTotals,
     hockeyWinner,
@@ -562,7 +563,7 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       maxSelections,
       betTypes,
       generatedAt: new Date().toISOString(),
-      note: 'Value engine: football uses 1X2, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap +0/+0.25/-0.25. O/U 2.5 is excluded. DNB/AH use settlement-aware fair odds and EV; basketball/hockey remain no-vig market estimates.',
+      note: 'Value engine: football uses 1X2, 1UP, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap +0/+0.25/-0.25. O/U 2.5 is excluded. DNB/AH use settlement-aware fair odds and EV; basketball/hockey remain no-vig market estimates.',
     });
   } catch (err) {
     console.error('SportyBet auto-pick error:', err.message);
@@ -622,6 +623,12 @@ async function runTelegramDailyPicks() {
   const leagues = process.env.TELEGRAM_FOOTBALL_LEAGUES
     ? process.env.TELEGRAM_FOOTBALL_LEAGUES.split(',').map(x => x.trim()).filter(Boolean)
     : null;
+  // Diversify the different target-odds slips sent in the same Telegram run.
+  // A game + bet type below this probability may appear in only one sent slip.
+  // Picks at/above the threshold are strong enough to be reused across target slips.
+  const repeatThreshold = Math.min(100, Math.max(0, Number(process.env.TELEGRAM_REPEAT_MIN_PROBABILITY || 80)));
+  const usedLowConfidenceKeys = new Set();
+  const repeatKey = c => `${String(c.eventId)}|${String(c.betType || c.marketKind || c.marketId)}`;
 
   const candidates = await loadAutoCandidates({ sportScope, minProbability, minEdge, leagues });
   if (!candidates.length) throw new Error('No eligible candidates are available for the Telegram picks job');
@@ -633,6 +640,7 @@ async function runTelegramDailyPicks() {
     `Minimum probability: ${minProbability}%`,
     `Minimum football edge: ${minEdge} pts`,
     `Eligible candidates scanned: ${candidates.length}`,
+    `Cross-slip repeat rule: same game + bet type repeats only at ${repeatThreshold}%+`,
     `Generated: ${new Date().toISOString()}`,
     '',
     'Model probabilities are estimates, not guarantees.',
@@ -640,7 +648,8 @@ async function runTelegramDailyPicks() {
 
   const output = [];
   for (const target of targets) {
-    const result = selectAutoBet(candidates, {
+    const diversifiedCandidates = candidates.filter(c => Number(c.probability || 0) >= repeatThreshold || !usedLowConfidenceKeys.has(repeatKey(c)));
+    const result = selectAutoBet(diversifiedCandidates, {
       targetOdds: target,
       maxSelections,
       trials: Number(process.env.TELEGRAM_PICK_TRIALS || 2200),
@@ -661,6 +670,9 @@ async function runTelegramDailyPicks() {
         ...(x.specifier ? { specifier: x.specifier } : {}),
       })));
       await sendTelegramMessage(telegramSlipText(target, result, booking, sportScope));
+      for (const x of result.selections) {
+        if (Number(x.probability || 0) < repeatThreshold) usedLowConfidenceKeys.add(repeatKey(x));
+      }
       // Persist every automatically generated code that was actually sent to Telegram.
       // Redis is strongly recommended so tracking survives Render restarts/deploys.
       await trackTelegramSlip(await getRedis(), {
@@ -690,7 +702,7 @@ async function runTelegramDailyPicks() {
     await new Promise(resolve => setTimeout(resolve, 750));
   }
 
-  return { sportScope, minProbability, minEdge, maxSelections, candidateCount: candidates.length, results: output };
+  return { sportScope, minProbability, minEdge, maxSelections, repeatThreshold, candidateCount: candidates.length, results: output };
 }
 
 

@@ -113,6 +113,8 @@ async function buildLeague(code) {
       o15: Math.round(probs.over15 * 100),
       u45: Math.round(probs.under45 * 100),
       o25: Math.round(probs.over25 * 100),
+      oneUpHome: Math.round((probs.oneUpHome || 0) * 100),
+      oneUpAway: Math.round((probs.oneUpAway || 0) * 100),
       score: `${probs.topScore.h}-${probs.topScore.a}`,
       scoreP: Math.round(probs.topScore.p * 100),
       pick: pickLabel(probs),
@@ -125,6 +127,8 @@ async function buildLeague(code) {
         o15: Math.round(base.over15 * 100),
         u45: Math.round(base.under45 * 100),
         o25: Math.round(base.over25 * 100),
+        oneUpHome: Math.round((base.oneUpHome || 0) * 100),
+        oneUpAway: Math.round((base.oneUpAway || 0) * 100),
       },
       h2h: {
         meetings: h2h.meetings,
