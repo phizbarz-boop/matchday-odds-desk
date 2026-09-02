@@ -200,6 +200,35 @@ app.get('/api/predictions', async (req, res) => {
   }
 });
 
+
+app.get('/api/corners/diagnostics', async (req, res) => {
+  try{
+    const [pred,c,h]=await Promise.all([
+      loadPredictions(),
+      loadSportyBetMarket('corners'),
+      loadSportyBetMarket('first_half_team_corners')
+    ]);
+    const matches=Array.isArray(pred?.matches)?pred.matches:[];
+    const modeled=matches.filter(x=>Number(x?.corners?.totalLambda||0)>0);
+    res.json({
+      apiFootballConfigured:!!(process.env.API_FOOTBALL_KEY||process.env.API_FOOTBALL_API_KEY),
+      predictionMatches:matches.length,
+      matchesWithCornerModel:modeled.length,
+      sportyCornerRows:Array.isArray(c?.rows)?c.rows.length:0,
+      sportyFirstHalfCornerRows:Array.isArray(h?.rows)?h.rows.length:0,
+      sampleCornerModels:modeled.slice(0,5).map(x=>({
+        eventId:x.eventId||x.sportyEventId||null,
+        home:x.home,away:x.away,
+        totalLambda:x.corners?.totalLambda,
+        firstHalfHomeLambda:x.corners?.firstHalfHomeLambda,
+        firstHalfAwayLambda:x.corners?.firstHalfAwayLambda
+      }))
+    });
+  }catch(err){
+    res.status(500).json({error:'Corner diagnostics failed',detail:String(err.message||err).slice(0,500)});
+  }
+});
+
 app.get('/api/api-football/diagnostics', async (req, res) => {
   const configured=!!(process.env.API_FOOTBALL_KEY || process.env.API_FOOTBALL_API_KEY);
   if(!configured) return res.status(503).json({configured:false,called:false,error:'API_FOOTBALL_KEY is not configured on this Render service'});
@@ -618,6 +647,29 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
   }
 });
 
+
+async function autoCornerDiagnostics(betTypes) {
+  const wantsCorners=Array.isArray(betTypes) && betTypes.some(x=>String(x).includes('corner'));
+  if(!wantsCorners) return null;
+  try{
+    const [pred, c, h] = await Promise.all([
+      loadPredictions(),
+      loadSportyBetMarket('corners'),
+      loadSportyBetMarket('first_half_team_corners')
+    ]);
+    const matches=Array.isArray(pred?.matches)?pred.matches:[];
+    return {
+      predictionMatches:matches.length,
+      matchesWithCornerModel:matches.filter(x=>Number(x?.corners?.totalLambda||0)>0).length,
+      sportyCornerRows:Array.isArray(c?.rows)?c.rows.length:0,
+      sportyFirstHalfCornerRows:Array.isArray(h?.rows)?h.rows.length:0,
+      apiFootballConfigured:!!(process.env.API_FOOTBALL_KEY||process.env.API_FOOTBALL_API_KEY),
+    };
+  }catch(e){
+    return {diagnosticError:String(e.message||e).slice(0,300)};
+  }
+}
+
 app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
   try {
     const body = req.body || {};
@@ -633,6 +685,7 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const candidates = await loadAutoCandidates({ sportScope, minProbability, minEdge, leagues, betTypes });
     const result = selectAutoBet(candidates, { targetOdds, maxSelections });
     if (!result.selections.length) {
+      const cornerDiagnostics=await autoCornerDiagnostics(betTypes);
       return res.status(404).json({
         error: 'No eligible SportyBet selections matched the requested sport and minimum probability',
         targetOdds,
@@ -641,7 +694,10 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
         sportScope,
         requestedBetTypes: betTypes,
         candidateCount: candidates.length,
-        hint: 'If candidateCount is 0 for 1UP/corners after this build, run Daily Predictions Refresh once and confirm PARSE_BOOKING_SCRAPER_ID plus API_FOOTBALL_KEY are configured.',
+        cornerDiagnostics,
+        hint: cornerDiagnostics
+          ? 'Corner diagnostics included. matchesWithCornerModel must be > 0 and SportyBet corner rows must be > 0.'
+          : undefined,
       });
     }
 

@@ -102,3 +102,16 @@ Test the connection after deployment by opening:
 
 That route makes one real API-Football `/fixtures` request but never exposes the key.
 If it reports `configured:false`, the key is not configured on the Render service running the app.
+
+
+## Corner pipeline fix
+Corner models no longer depend on `/predictions` being available for a fixture.
+A fixture with statistics coverage can now produce a corner model even if API-Football returns
+no prediction object for that league/game.
+
+Diagnostic URLs:
+- `/api/api-football/diagnostics` — performs a real API-Football request.
+- `/api/corners/diagnostics` — shows SportyBet corner row counts and how many prediction matches have corner models.
+
+For working corners, `sportyCornerRows` or `sportyFirstHalfCornerRows` should be > 0 and
+`matchesWithCornerModel` should also be > 0.
