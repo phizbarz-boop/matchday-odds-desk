@@ -57,3 +57,12 @@ Recommended Render values:
 
 The server cache still applies (`SPORTYBET_CACHE_SECONDS`), so these detailed calls are not made for every browser click.
 After deploying, run Daily Predictions Refresh once so API-Football corner profiles are attached to the newly discovered SportyBet corner fixtures.
+
+
+## 1H Team Corners UI
+The Auto Builder now shows only two controls:
+- `1H Home Team Corners O/U (1.5–4.5)`
+- `1H Away Team Corners O/U (1.5–4.5)`
+
+Selecting one authorizes both Over and Under child selections for that team. The engine scores the real SportyBet
+1.5/2.5/3.5/4.5 lines and chooses qualifying Over or Under candidates automatically.
