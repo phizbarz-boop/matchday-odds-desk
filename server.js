@@ -1106,7 +1106,10 @@ app.post('/api/sportybet/book', express.json(), async (req, res) => {
       error: err.code === 'PARSE_API_KEY_MISSING'
         ? 'SportyBet integration is not configured yet'
         : 'Failed to create SportyBet booking code',
-      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+      bookingErrorCode: err.code || null,
+      detail: err.code === 'SPORTYBET_BOOKING_FAILED'
+        ? err.message
+        : (process.env.NODE_ENV === 'production' ? undefined : err.message),
     });
   }
 });
