@@ -66,3 +66,25 @@ The Auto Builder now shows only two controls:
 
 Selecting one authorizes both Over and Under child selections for that team. The engine scores the real SportyBet
 1.5/2.5/3.5/4.5 lines and chooses qualifying Over or Under candidates automatically.
+
+
+## Corner model reliability fix
+This build fixes a corner-profile issue where API-Football was queried with `status=FT-AET-PEN`.
+The app now downloads recent fixtures and filters FT/AET/PEN locally.
+
+Corner profiles are also built for all matched API-Football/SportyBet football fixtures by default,
+so a corner market discovered later already has a probability model.
+
+Recommended Render:
+`API_FOOTBALL_BUILD_ALL_CORNER_PROFILES=true`
+`API_FOOTBALL_CORNER_LAST_MATCHES=8`
+`API_FOOTBALL_CORNER_STAT_FALLBACK_CALLS=10`
+
+The website Auto Builder now has a hard 70% minimum probability per leg.
+
+
+## Auto Builder probability setting correction
+The website Auto Builder minimum probability is NOT hard-coded to 70%.
+It remains user-adjustable in the interface (default 55%).
+
+The separate automated Telegram minimum-probability rule remains independent.

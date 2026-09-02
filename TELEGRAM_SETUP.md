@@ -205,3 +205,12 @@ TELEGRAM_REPEAT_MIN_PROBABILITY=80
 ```
 
 During one Telegram auto-pick run, the same **game + bet type** is not reused in another target-odds slip when its probability is below this threshold. Picks at or above the threshold may repeat.
+
+
+## Maximum Auto Builder selections
+The website Auto Builder now supports up to 100 selections instead of stopping at 30.
+Available UI choices include 40, 50, 60, 75 and 100 picks.
+
+The server also accepts `maxSelections` up to 100.
+If desired, Telegram can likewise use values up to 100 with:
+`TELEGRAM_MAX_SELECTIONS=100`

@@ -540,8 +540,9 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
   try {
     const body = req.body || {};
     const targetOdds = Math.min(2000, Math.max(1.05, Number(body.targetOdds) || 5));
+    // Website Auto Builder probability is user-adjustable.
     const minProbability = Math.min(95, Math.max(0, Number(body.minProbability) || 55));
-    const maxSelections = Math.min(30, Math.max(1, parseInt(body.maxSelections || '8', 10)));
+    const maxSelections = Math.min(100, Math.max(1, parseInt(body.maxSelections || '8', 10)));
     const minEdge = Math.min(50, Math.max(-25, Number(body.minEdge) || 0));
     const leagues = Array.isArray(body.leagues) ? body.leagues.map(String) : null;
     const sportScope = normalizeSportScope(body.sportScope);
@@ -625,7 +626,7 @@ async function runTelegramDailyPicks() {
   const targets = parseTargetList(process.env.TELEGRAM_TARGET_ODDS);
   const sportScope = normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all');
   const minProbability = Math.min(95, Math.max(70, Number(process.env.TELEGRAM_MIN_PROBABILITY || 70)));
-  const maxSelections = Math.min(30, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '30', 10)));
+  const maxSelections = Math.min(100, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '30', 10)));
   const minEdge = Math.min(50, Math.max(-25, Number(process.env.TELEGRAM_MIN_EDGE || 0)));
   const leagues = process.env.TELEGRAM_FOOTBALL_LEAGUES
     ? process.env.TELEGRAM_FOOTBALL_LEAGUES.split(',').map(x => x.trim()).filter(Boolean)
@@ -817,7 +818,7 @@ app.get('/api/telegram/status', (req, res) => {
     sportScope: normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all'),
     minProbability: Math.min(95, Math.max(70, Number(process.env.TELEGRAM_MIN_PROBABILITY || 70))),
     minEdge: Math.min(50, Math.max(-25, Number(process.env.TELEGRAM_MIN_EDGE || 0))),
-    maxSelections: Math.min(30, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '30', 10))),
+    maxSelections: Math.min(100, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '30', 10))),
     scheduler: 'GitHub Actions',
   });
 });
