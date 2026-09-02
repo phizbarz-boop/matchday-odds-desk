@@ -11,6 +11,7 @@ const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG } =
 const { buildCandidates, selectAutoBet } = require('./lib/autoPicker');
 const { sendTelegramMessage } = require('./lib/telegram');
 const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
+const { apiFetch, enrichSportyFixtures } = require('./lib/apiFootball');
 
 let redisClient = null;
 async function getRedis() {
@@ -199,6 +200,18 @@ app.get('/api/predictions', async (req, res) => {
   }
 });
 
+app.get('/api/api-football/diagnostics', async (req, res) => {
+  const configured=!!(process.env.API_FOOTBALL_KEY || process.env.API_FOOTBALL_API_KEY);
+  if(!configured) return res.status(503).json({configured:false,called:false,error:'API_FOOTBALL_KEY is not configured on this Render service'});
+  try{
+    const date=new Date().toISOString().slice(0,10);
+    const payload=await apiFetch('/fixtures',{date});
+    res.json({configured:true,called:true,endpoint:'/fixtures',date,results:Number(payload?.results||0),errors:payload?.errors||[],message:'API-Football call succeeded. This request should appear in your API-Football dashboard.'});
+  }catch(err){
+    res.status(502).json({configured:true,called:true,error:'API-Football call failed',detail:String(err.message||err).slice(0,500)});
+  }
+});
+
 
 // Live-ish SportyBet price layer. The Parse API key never reaches the browser.
 // Supported football values: 1x2, gg, dc, dnb, ou15, ou45, ah, oneup. O/U 2.5 is intentionally not used by the Auto Builder.
@@ -261,13 +274,74 @@ function normalizeSportScope(value) {
   return ['all', 'football', 'basketball', 'hockey'].includes(v) ? v : 'all';
 }
 
+
+function cornerBetRequested(betTypes) {
+  return Array.isArray(betTypes) && betTypes.some(x => {
+    const t=String(x || '');
+    return ['corners_over','corners_under','first_half_home_team_corners','first_half_away_team_corners'].includes(t)
+      || t.startsWith('first_half_home_corners_') || t.startsWith('first_half_away_corners_');
+  });
+}
+
+function fixtureKey(r) {
+  const n=v=>String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()
+    .replace(/\b(fc|cf|afc|sc|ssc|club|football|futbol|calcio)\b/g,'').replace(/[^a-z0-9]+/g,'');
+  return `${n(r?.home)}|${n(r?.away)}|${String(r?.kickoffUtc||'').slice(0,10)}`;
+}
+
+async function addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorners, hours) {
+  if (!process.env.API_FOOTBALL_KEY && !process.env.API_FOOTBALL_API_KEY) {
+    console.warn('[API-Football] corner request skipped: API_FOOTBALL_KEY is not configured');
+    return predictions;
+  }
+
+  const matches=Array.isArray(predictions?.matches)?predictions.matches:[];
+  const cornerIds=new Set([
+    ...(fcorners?.rows||[]).map(x=>String(x.eventId||'')),
+    ...(f1hteamcorners?.rows||[]).map(x=>String(x.eventId||''))
+  ].filter(Boolean));
+
+  let sporty=(f1x2?.rows||[]).filter(x=>!cornerIds.size || cornerIds.has(String(x.eventId||'')));
+  const seen=new Set();
+  sporty=sporty.filter(x=>{const id=String(x.eventId||'');if(!id||seen.has(id))return false;seen.add(id);return true;})
+    .slice(0,Math.max(1,Math.min(50,parseInt(process.env.API_FOOTBALL_ON_DEMAND_CORNER_FIXTURES||'20',10))));
+
+  if(!sporty.length){
+    console.warn('[API-Football] corner request skipped: no SportyBet fixtures available to match');
+    return predictions;
+  }
+
+  console.log(`[API-Football] on-demand corner enrichment starting for ${sporty.length} SportyBet fixtures`);
+  const apiRows=await enrichSportyFixtures(sporty,{
+    daysAhead:Math.max(1,Math.ceil(Number(hours||120)/24)),
+    maxFixtures:sporty.length,
+    cornerEventIds:new Set(sporty.map(x=>String(x.eventId||'')))
+  });
+
+  const byKey=new Map(apiRows.filter(x=>x?.corners).map(x=>[fixtureKey(x),x]));
+  let attached=0;
+  for(const old of matches){
+    if(Number(old?.corners?.totalLambda||0)>0) continue;
+    const hit=byKey.get(fixtureKey(old));
+    if(hit?.corners){old.corners=hit.corners;old.apiFootballFixtureId=hit.apiFootballFixtureId;attached++;}
+  }
+  const existing=new Set(matches.map(fixtureKey));
+  let added=0;
+  for(const r of apiRows){
+    const k=fixtureKey(r);
+    if(!existing.has(k)){existing.add(k);matches.push(r);added++;}
+  }
+  console.log(`[API-Football] on-demand corner enrichment complete: matched=${apiRows.length}, attached=${attached}, added=${added}`);
+  return {...predictions,matches};
+}
+
 async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null } = {}) {
   const scope = normalizeSportScope(sportScope);
   const wantsFootball = scope === 'all' || scope === 'football';
   const wantsBasketball = scope === 'all' || scope === 'basketball';
   const wantsHockey = scope === 'all' || scope === 'hockey';
 
-  const [predictions, f1x2, fgg, fdc, fdnb, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
+  let [predictions, f1x2, fgg, fdc, fdnb, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
     wantsFootball ? loadPredictions() : Promise.resolve({ matches: [] }),
     wantsFootball ? loadSportyBetMarket('1x2', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('gg', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
@@ -284,6 +358,14 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
     wantsHockey ? loadSportyBetMarket('winner', 'hockey', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsHockey ? loadSportyBetMarket('totals', 'hockey', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
   ]);
+
+  if (wantsFootball && cornerBetRequested(betTypes)) {
+    try {
+      predictions = await addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorners, marketHours);
+    } catch (err) {
+      console.error('[API-Football] on-demand corner enrichment failed:', err.message);
+    }
+  }
 
   return buildCandidates({
     predictions,

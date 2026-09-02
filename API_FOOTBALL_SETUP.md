@@ -88,3 +88,17 @@ The website Auto Builder minimum probability is NOT hard-coded to 70%.
 It remains user-adjustable in the interface (default 55%).
 
 The separate automated Telegram minimum-probability rule remains independent.
+
+
+## On-demand API-Football corner calls
+Corner Auto Builder requests now trigger API-Football server-side when corner models are missing.
+
+Render:
+`API_FOOTBALL_ON_DEMAND_CORNER_FIXTURES=20`
+`API_FOOTBALL_LOG_CALLS=true`
+
+Test the connection after deployment by opening:
+`/api/api-football/diagnostics`
+
+That route makes one real API-Football `/fixtures` request but never exposes the key.
+If it reports `configured:false`, the key is not configured on the Render service running the app.
