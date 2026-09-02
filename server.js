@@ -1087,10 +1087,17 @@ app.post('/api/sportybet/book', express.json(), async (req, res) => {
       return res.status(429).json({ error: 'Too many booking requests; try again in a minute' });
     }
     const selections = req.body && req.body.selections;
-    if (!Array.isArray(selections) || selections.length === 0 || selections.length > 30) {
-      return res.status(400).json({ error: 'selections must be an array containing 1-30 selections' });
+    if (!Array.isArray(selections) || selections.length === 0 || selections.length > 100) {
+      return res.status(400).json({ error: 'selections must be an array containing 1-100 selections' });
     }
-    const result = await bookBet(selections);
+    const context = Array.isArray(req.body && req.body.telegramContext)
+      ? req.body.telegramContext
+      : [];
+    const preferFullMarket = context.some(x => {
+      const text = `${x?.marketDesc || ''} ${x?.outcomeDesc || ''} ${x?.betType || ''}`.toLowerCase();
+      return text.includes('corner') || text.includes('1up') || text.includes('1 up') || text.includes('1-up');
+    });
+    const result = await bookBet(selections, { preferFullMarket });
     const slip = sanitizeTelegramSlip(req.body && req.body.telegramContext);
     const telegramSendToken = await createTelegramSendToken({
       shareCode: result?.shareCode || null,
