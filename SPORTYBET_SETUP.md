@@ -181,3 +181,7 @@ TELEGRAM_REPEAT_MIN_PROBABILITY=80
 ```
 
 During one Telegram auto-pick run, the same **game + bet type** is not reused in another target-odds slip when its probability is below this threshold. Picks at or above the threshold may repeat.
+
+## API-Football + Corners
+
+For expanded league coverage and corner probabilities, see `API_FOOTBALL_SETUP.md`. The corner builder uses actual SportyBet market IDs returned by Parse and API-Football only for the statistical probability model.

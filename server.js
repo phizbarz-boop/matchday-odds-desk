@@ -203,8 +203,8 @@ app.get('/api/predictions', async (req, res) => {
 app.get('/api/sportybet/odds', async (req, res) => {
   try {
     const kind = String(req.query.market || '1x2').toLowerCase();
-    if (!['1x2', 'gg', 'dc', 'dnb', 'ou15', 'ou45', 'ah', 'oneup'].includes(kind)) {
-      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou15, ou45, ah, oneup' });
+    if (!['1x2', 'gg', 'dc', 'dnb', 'ou15', 'ou45', 'ah', 'oneup', 'corners'].includes(kind)) {
+      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou15, ou45, ah, oneup, corners' });
     }
     const payload = await loadSportyBetMarket(kind);
     res.set('Cache-Control', 'public, max-age=60');
@@ -265,7 +265,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
   const wantsBasketball = scope === 'all' || scope === 'basketball';
   const wantsHockey = scope === 'all' || scope === 'hockey';
 
-  const [predictions, f1x2, fgg, fdc, fdnb, fou15, fou45, fah, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
+  const [predictions, f1x2, fgg, fdc, fdnb, fou15, fou45, fah, fcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
     wantsFootball ? loadPredictions() : Promise.resolve({ matches: [] }),
     wantsFootball ? loadSportyBetMarket('1x2', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('gg', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
@@ -274,6 +274,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
     wantsFootball ? loadSportyBetMarket('ou15', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('ou45', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('ah', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('corners', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('oneup', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsBasketball ? loadSportyBetMarket('winner', 'basketball', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsBasketball ? loadSportyBetMarket('totals', 'basketball', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
@@ -283,7 +284,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
 
   return buildCandidates({
     predictions,
-    footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou15: fou15, ou45: fou45, ah: fah, oneup: foneup },
+    footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou15: fou15, ou45: fou45, ah: fah, corners: fcorners, oneup: foneup },
     basketballWinner,
     basketballTotals,
     hockeyWinner,
@@ -563,7 +564,7 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       maxSelections,
       betTypes,
       generatedAt: new Date().toISOString(),
-      note: 'Value engine: football uses 1X2, 1UP, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap +0/+0.25/-0.25. O/U 2.5 is excluded. DNB/AH use settlement-aware fair odds and EV; basketball/hockey remain no-vig market estimates.',
+      note: 'Value engine: football uses 1X2, 1UP, Corners O/U, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap +0/+0.25/-0.25. O/U 2.5 is excluded. DNB/AH use settlement-aware fair odds and EV; basketball/hockey remain no-vig market estimates.',
     });
   } catch (err) {
     console.error('SportyBet auto-pick error:', err.message);

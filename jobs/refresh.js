@@ -6,6 +6,8 @@ const fs = require('fs');
 const path = require('path');
 const { LEAGUES, getStandings, getUpcomingMatches, getFinishedMatches } = require('../lib/footballData');
 const { teamStrength, predictMatch, summarizeH2H, blendPredictionWithH2H } = require('../lib/model');
+const { getFootballMarket } = require('../lib/sportybet');
+const { enrichSportyFixtures } = require('../lib/apiFootball');
 
 const TOKEN = process.env.FOOTBALL_DATA_TOKEN;
 const LEAGUE_CODES = (process.env.LEAGUES || 'PL,PD,SA,BL1,FL1').split(',').map(s => s.trim());
@@ -163,12 +165,14 @@ async function storeResult(payload) {
 }
 
 async function main() {
-  if (!TOKEN) {
-    console.error('Missing FOOTBALL_DATA_TOKEN env var.');
+  const hasFootballData = !!TOKEN;
+  const hasApiFootball = !!(process.env.API_FOOTBALL_KEY || process.env.API_FOOTBALL_API_KEY);
+  if (!hasFootballData && !hasApiFootball) {
+    console.error('Missing football data source. Configure FOOTBALL_DATA_TOKEN and/or API_FOOTBALL_KEY.');
     process.exit(1);
   }
   let all = [];
-  for (const code of LEAGUE_CODES) {
+  if (hasFootballData) for (const code of LEAGUE_CODES) {
     try {
       const rows = await buildLeague(code);
       all = all.concat(rows);
@@ -177,11 +181,53 @@ async function main() {
       console.error(`Failed to build ${code}:`, err.message);
     }
   }
+  // API-Football expansion: use SportyBet's actual fixture list as the target universe,
+  // then match those fixtures to API-Football. This adds many leagues without ever
+  // creating a bet that does not exist on SportyBet. Corner profiles are only built
+  // for events where SportyBet returned a corners market, which saves API quota.
+  if (hasApiFootball && process.env.PARSE_API_KEY) {
+    try {
+      const hours = Math.min(24 * 21, Math.max(24, DAYS_AHEAD * 24));
+      const maxPages = Math.max(1, Math.min(20, parseInt(process.env.API_FOOTBALL_SPORTY_MAX_PAGES || process.env.ANALYZER_MAX_PAGES || '12', 10)));
+      const oneXtwo = await getFootballMarket('1x2', { hours, maxPages });
+      let cornerRows = [];
+      try { cornerRows = (await getFootballMarket('corners', { hours, maxPages })).rows || []; }
+      catch (err) { console.warn(`SportyBet corners market unavailable during refresh: ${err.message}`); }
+      const cornerEventIds = new Set(cornerRows.map(x => String(x.eventId)));
+      const apiRows = await enrichSportyFixtures(oneXtwo.rows || [], {
+        daysAhead: DAYS_AHEAD,
+        maxFixtures: Math.max(1, Math.min(500, parseInt(process.env.API_FOOTBALL_MAX_FIXTURES || '180', 10))),
+        cornerEventIds,
+      });
+      const key = r => `${String(r.home||'').toLowerCase().replace(/[^a-z0-9]/g,'')}|${String(r.away||'').toLowerCase().replace(/[^a-z0-9]/g,'')}|${String(r.kickoffUtc||'').slice(0,10)}`;
+      const existing = new Set(all.map(key));
+      let added = 0, upgradedCorners = 0;
+      for (const r of apiRows) {
+        const k = key(r);
+        if (existing.has(k)) {
+          // If football-data.org already modeled the match, retain its goal model but
+          // attach API-Football corner statistics when available.
+          if (r.corners) {
+            const old = all.find(x => key(x) === k);
+            if (old && !old.corners) { old.corners = r.corners; old.apiFootballFixtureId = r.apiFootballFixtureId; upgradedCorners++; }
+          }
+          continue;
+        }
+        existing.add(k); all.push(r); added++;
+      }
+      console.log(`API-Football: ${apiRows.length} matched/modelled, ${added} new SportyBet fixtures added, ${upgradedCorners} existing fixtures got corner models.`);
+    } catch (err) {
+      console.error(`API-Football expansion failed: ${err.message}`);
+    }
+  } else if (hasApiFootball && !process.env.PARSE_API_KEY) {
+    console.warn('API_FOOTBALL_KEY is configured but PARSE_API_KEY is missing, so SportyBet-compatible fixture expansion was skipped.');
+  }
+
   all.sort((x, y) => y.pickProb - x.pickProb);
   await storeResult({
     generatedAt: new Date().toISOString(),
     model: {
-      name: 'Poisson + H2H',
+      name: hasApiFootball ? 'Poisson + H2H + API-Football expansion' : 'Poisson + H2H',
       h2hMaxWeight: H2H_MAX_WEIGHT,
       h2hPreviousSeasons: H2H_PREVIOUS_SEASONS,
       h2hMaxMeetings: H2H_MAX_MEETINGS,
