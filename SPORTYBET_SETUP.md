@@ -185,3 +185,12 @@ During one Telegram auto-pick run, the same **game + bet type** is not reused in
 ## API-Football + Corners
 
 For expanded league coverage and corner probabilities, see `API_FOOTBALL_SETUP.md`. The corner builder uses actual SportyBet market IDs returned by Parse and API-Football only for the statistical probability model.
+
+
+## 1UP market fallback
+If the standard SportyBet NG prematch-market endpoint returns no 1UP rows, the app now automatically
+uses the subscribed full-market SportyBet API (`PARSE_BOOKING_SCRAPER_ID`) and filters explicit
+`1UP`, `1X2 - 1UP`, or `lead by one goal` markets from `get_event_odds`.
+
+No SportyBet market IDs are guessed. A 1UP candidate is only bookable when a real SportyBet event,
+market, outcome and odds row is returned.

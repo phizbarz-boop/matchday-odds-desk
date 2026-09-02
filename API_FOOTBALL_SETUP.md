@@ -44,3 +44,16 @@ Optional Render variables:
 `API_FOOTBALL_1H_CORNER_SHARE=0.46`
 
 The app only creates 1H Home/Away Team Corner candidates for real SportyBet rows on 1.5, 2.5, 3.5 or 4.5 lines. It does not invent SportyBet market/outcome IDs. The current 1H probability estimate scales recent full-match team corner rates by the configured first-half share; this is intentionally lower-confidence than the full-match corner model.
+
+
+## Corner-market fix
+The main `get_prematch_football_markets` SportyBet NG Parse endpoint does not currently document corner markets.
+This build automatically falls back to the subscribed full-market SportyBet API (`PARSE_BOOKING_SCRAPER_ID`) and uses:
+`get_upcoming_events` -> `get_event_odds` -> filters real corner markets.
+
+Recommended Render values:
+`SPORTYBET_DETAIL_MARKET_MAX_EVENTS=60`
+`SPORTYBET_DETAIL_MAX_PAGES=2`
+
+The server cache still applies (`SPORTYBET_CACHE_SECONDS`), so these detailed calls are not made for every browser click.
+After deploying, run Daily Predictions Refresh once so API-Football corner profiles are attached to the newly discovered SportyBet corner fixtures.

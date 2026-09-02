@@ -190,10 +190,12 @@ async function main() {
       const hours = Math.min(24 * 21, Math.max(24, DAYS_AHEAD * 24));
       const maxPages = Math.max(1, Math.min(20, parseInt(process.env.API_FOOTBALL_SPORTY_MAX_PAGES || process.env.ANALYZER_MAX_PAGES || '12', 10)));
       const oneXtwo = await getFootballMarket('1x2', { hours, maxPages });
-      let cornerRows = [];
+      let cornerRows = [], firstHalfTeamCornerRows = [];
       try { cornerRows = (await getFootballMarket('corners', { hours, maxPages })).rows || []; }
       catch (err) { console.warn(`SportyBet corners market unavailable during refresh: ${err.message}`); }
-      const cornerEventIds = new Set(cornerRows.map(x => String(x.eventId)));
+      try { firstHalfTeamCornerRows = (await getFootballMarket('first_half_team_corners', { hours, maxPages })).rows || []; }
+      catch (err) { console.warn(`SportyBet 1H team corners market unavailable during refresh: ${err.message}`); }
+      const cornerEventIds = new Set([...cornerRows, ...firstHalfTeamCornerRows].map(x => String(x.eventId)));
       const apiRows = await enrichSportyFixtures(oneXtwo.rows || [], {
         daysAhead: DAYS_AHEAD,
         maxFixtures: Math.max(1, Math.min(500, parseInt(process.env.API_FOOTBALL_MAX_FIXTURES || '180', 10))),
