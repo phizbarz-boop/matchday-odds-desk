@@ -120,7 +120,9 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   const hours = Math.max(1, Math.min(24 * 21, parseInt(options.hours || normalHours, 10)));
   const maxPages = Math.max(1, Math.min(20, parseInt(options.maxPages || process.env.SPORTYBET_MAX_PAGES || '5', 10)));
   // Keep Analyzer's 14/21-day cache completely separate from the normal Auto Builder cache.
-  const cacheKey = `sportybet:${sport}:${kind}:h${hours}:p${maxPages}`;
+  // Versioned cache key: bumping this invalidates stale/empty market caches after parser changes.
+  const cacheVersion = String(process.env.SPORTYBET_CACHE_VERSION || '4');
+  const cacheKey = `sportybet:v${cacheVersion}:${sport}:${kind}:h${hours}:p${maxPages}`;
   const client = await getRedis();
 
   if (client) {
@@ -552,8 +554,11 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
         error: 'No eligible SportyBet selections matched the requested sport and minimum probability',
         targetOdds,
         minProbability,
+        minEdge,
         sportScope,
+        requestedBetTypes: betTypes,
         candidateCount: candidates.length,
+        hint: 'If candidateCount is 0 for 1UP/corners after this build, run Daily Predictions Refresh once and confirm PARSE_BOOKING_SCRAPER_ID plus API_FOOTBALL_KEY are configured.',
       });
     }
 

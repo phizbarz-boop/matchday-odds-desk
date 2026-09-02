@@ -194,3 +194,19 @@ uses the subscribed full-market SportyBet API (`PARSE_BOOKING_SCRAPER_ID`) and f
 
 No SportyBet market IDs are guessed. A 1UP candidate is only bookable when a real SportyBet event,
 market, outcome and odds row is returned.
+
+
+## Special-market cache reset (1UP / Corners)
+This build uses a versioned SportyBet Redis cache key. Default: `SPORTYBET_CACHE_VERSION=4`.
+This prevents old cached empty 1UP/corner responses from surviving a new deployment.
+
+The full-market fallback now scans `get_upcoming_events` market arrays across pages first, then only
+uses a bounded `get_event_odds` fallback if needed. This avoids limiting discovery to an arbitrary
+first 60 fixtures.
+
+Recommended Render:
+`SPORTYBET_CACHE_VERSION=4`
+`SPORTYBET_DETAIL_MAX_PAGES=6`
+`SPORTYBET_DETAIL_EVENT_ODDS_FALLBACK=20`
+
+After deployment run `Daily Predictions Refresh` once.
