@@ -619,7 +619,7 @@ function telegramSlipText(target, result, booking, sportScope) {
 async function runTelegramDailyPicks() {
   const targets = parseTargetList(process.env.TELEGRAM_TARGET_ODDS);
   const sportScope = normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all');
-  const minProbability = Math.min(95, Math.max(0, Number(process.env.TELEGRAM_MIN_PROBABILITY || 55)));
+  const minProbability = Math.min(95, Math.max(70, Number(process.env.TELEGRAM_MIN_PROBABILITY || 70)));
   const maxSelections = Math.min(30, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '30', 10)));
   const minEdge = Math.min(50, Math.max(-25, Number(process.env.TELEGRAM_MIN_EDGE || 0)));
   const leagues = process.env.TELEGRAM_FOOTBALL_LEAGUES
@@ -810,7 +810,7 @@ app.get('/api/telegram/status', (req, res) => {
     configured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID && process.env.TELEGRAM_JOB_SECRET),
     targets: parseTargetList(process.env.TELEGRAM_TARGET_ODDS),
     sportScope: normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all'),
-    minProbability: Math.min(95, Math.max(0, Number(process.env.TELEGRAM_MIN_PROBABILITY || 55))),
+    minProbability: Math.min(95, Math.max(70, Number(process.env.TELEGRAM_MIN_PROBABILITY || 70))),
     minEdge: Math.min(50, Math.max(-25, Number(process.env.TELEGRAM_MIN_EDGE || 0))),
     maxSelections: Math.min(30, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '30', 10))),
     scheduler: 'GitHub Actions',
