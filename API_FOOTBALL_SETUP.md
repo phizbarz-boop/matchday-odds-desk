@@ -34,3 +34,13 @@ The integration also accepts `API_FOOTBALL_API_KEY` as an alias, but `API_FOOTBA
 Run GitHub -> Actions -> Daily Predictions Refresh -> Run workflow once. The workflow calls the protected Render `/api/refresh` endpoint, so the API-Football key only needs to be present in Render.
 
 The refresh can take longer than before because it performs fixture matching, API-Football predictions and recent corner-statistics lookups. Results are written to the existing Redis `predictions:latest` key.
+
+
+## First-half team corners
+Optional Render variables:
+
+`SPORTYBET_1H_TEAM_CORNERS_MARKET_QUERY=1st Half Team Corners`
+
+`API_FOOTBALL_1H_CORNER_SHARE=0.46`
+
+The app only creates 1H Home/Away Team Corner candidates for real SportyBet rows on 1.5, 2.5, 3.5 or 4.5 lines. It does not invent SportyBet market/outcome IDs. The current 1H probability estimate scales recent full-match team corner rates by the configured first-half share; this is intentionally lower-confidence than the full-match corner model.
