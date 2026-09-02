@@ -317,7 +317,7 @@ app.get('/api/sportybet/odds', async (req, res) => {
     res.json(payload);
   } catch (err) {
     console.error('SportyBet odds error:', err.message);
-    const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
+    const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : (err.code === 'SPORTYBET_BOOKING_TIMEOUT' ? 504 : 502);
     res.status(status).json({
       error: err.code === 'PARSE_API_KEY_MISSING'
         ? 'SportyBet integration is not configured yet'
