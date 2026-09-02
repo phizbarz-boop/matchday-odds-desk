@@ -115,3 +115,24 @@ Diagnostic URLs:
 
 For working corners, `sportyCornerRows` or `sportyFirstHalfCornerRows` should be > 0 and
 `matchesWithCornerModel` should also be > 0.
+
+
+## Live corner pipeline diagnostic
+`/api/api-football/diagnostics` only proves the API key works.
+For the full corner path use:
+`/api/corners/test-live`
+
+That endpoint:
+1. takes one real SportyBet corner fixture,
+2. matches it to API-Football,
+3. loads recent team fixtures,
+4. calls `/fixtures/statistics`,
+5. tries to build the corner model.
+
+Recommended:
+`API_FOOTBALL_CORNER_MIN_SAMPLES=2`
+`API_FOOTBALL_LOG_CALLS=true`
+`API_FOOTBALL_ON_DEMAND_CORNER_FIXTURES=20`
+
+This build also matches API-Football directly from the SportyBet corner feed rather than requiring
+the corner event ID to exist in the separate 1X2 feed.

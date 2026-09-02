@@ -201,6 +201,68 @@ app.get('/api/predictions', async (req, res) => {
 });
 
 
+
+app.get('/api/corners/test-live', async (req, res) => {
+  try{
+    if(!(process.env.API_FOOTBALL_KEY||process.env.API_FOOTBALL_API_KEY)){
+      return res.status(503).json({apiFootballConfigured:false,called:false,error:'API_FOOTBALL_KEY is not configured'});
+    }
+
+    const [c,h]=await Promise.all([
+      loadSportyBetMarket('corners'),
+      loadSportyBetMarket('first_half_team_corners')
+    ]);
+
+    const source=[...(c?.rows||[]),...(h?.rows||[])];
+    const seen=new Set();
+    const fixtures=source.filter(x=>{
+      const k=String(x.eventId||'') || `${x.home}|${x.away}|${x.kickoffUtc}`;
+      if(!k||seen.has(k)) return false;
+      seen.add(k);
+      return !!(x.home&&x.away&&x.kickoffUtc);
+    }).slice(0,1);
+
+    if(!fixtures.length){
+      return res.status(422).json({
+        apiFootballConfigured:true,
+        called:false,
+        sportyCornerRows:(c?.rows||[]).length,
+        sportyFirstHalfCornerRows:(h?.rows||[]).length,
+        error:'No usable SportyBet corner fixture contained home, away and kickoffUtc'
+      });
+    }
+
+    const f=fixtures[0];
+    const rows=await enrichSportyFixtures(fixtures,{
+      daysAhead:3,
+      maxFixtures:1,
+      cornerEventIds:new Set([String(f.eventId||'')])
+    });
+    const r=rows[0]||null;
+
+    res.json({
+      apiFootballConfigured:true,
+      called:true,
+      sportyFixture:{eventId:f.eventId,home:f.home,away:f.away,kickoffUtc:f.kickoffUtc},
+      apiFootballMatched:!!r,
+      apiFootballFixtureId:r?.apiFootballFixtureId||null,
+      matchConfidence:r?.apiFootballMatchConfidence||null,
+      cornerModel:r?.corners||null,
+      success:!!r?.corners,
+      message:r?.corners
+        ? 'Live API-Football corner model built successfully.'
+        : 'API-Football was called, but no corner model was produced. Render logs now show the exact failed stage.'
+    });
+  }catch(err){
+    res.status(500).json({
+      apiFootballConfigured:!!(process.env.API_FOOTBALL_KEY||process.env.API_FOOTBALL_API_KEY),
+      called:true,
+      error:'Live corner test failed',
+      detail:String(err.message||err).slice(0,800)
+    });
+  }
+});
+
 app.get('/api/corners/diagnostics', async (req, res) => {
   try{
     const [pred,c,h]=await Promise.all([
@@ -325,18 +387,23 @@ async function addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorne
   }
 
   const matches=Array.isArray(predictions?.matches)?predictions.matches:[];
-  const cornerIds=new Set([
-    ...(fcorners?.rows||[]).map(x=>String(x.eventId||'')),
-    ...(f1hteamcorners?.rows||[]).map(x=>String(x.eventId||''))
-  ].filter(Boolean));
+  // Match API-Football from the ACTUAL SportyBet corner feeds.
+  // Do not intersect with the separate 1X2 feed first: different SportyBet scraper
+  // endpoints can expose different event-id namespaces even for the same fixture.
+  let sporty=[...(fcorners?.rows||[]),...(f1hteamcorners?.rows||[])];
+  if(!sporty.length) sporty=[...(f1x2?.rows||[])];
 
-  let sporty=(f1x2?.rows||[]).filter(x=>!cornerIds.size || cornerIds.has(String(x.eventId||'')));
   const seen=new Set();
-  sporty=sporty.filter(x=>{const id=String(x.eventId||'');if(!id||seen.has(id))return false;seen.add(id);return true;})
-    .slice(0,Math.max(1,Math.min(50,parseInt(process.env.API_FOOTBALL_ON_DEMAND_CORNER_FIXTURES||'20',10))));
+  sporty=sporty.filter(x=>{
+    const eventId=String(x.eventId||'');
+    const key=eventId || `${String(x.home||'')}|${String(x.away||'')}|${String(x.kickoffUtc||'')}`;
+    if(!key || seen.has(key)) return false;
+    seen.add(key);
+    return !!(x.home && x.away && x.kickoffUtc);
+  }).slice(0,Math.max(1,Math.min(50,parseInt(process.env.API_FOOTBALL_ON_DEMAND_CORNER_FIXTURES||'20',10))));
 
   if(!sporty.length){
-    console.warn('[API-Football] corner request skipped: no SportyBet fixtures available to match');
+    console.warn('[API-Football] corner request skipped: no usable SportyBet corner fixtures with home/away/kickoff');
     return predictions;
   }
 
