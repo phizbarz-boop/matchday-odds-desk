@@ -840,13 +840,13 @@ async function runTelegramDailyPicks() {
     : null;
 
   // Fixed quality-first Telegram plan:
-  // 50x / 20x / 10x: P >= 70%, Q >= 60.
-  // Safe set: total odds must land in 1.30-1.35, P >= 80%, Q >= 60.
+  // 50x / 20x / 10x: P >= 70%.
+  // Safe set: total odds must land in 1.30-1.35, P >= 80%.
   const plans = [
-    { label:'50', targetOdds:50, minProbability:70, minQualityScore:60 },
-    { label:'20', targetOdds:20, minProbability:70, minQualityScore:60 },
-    { label:'10', targetOdds:10, minProbability:70, minQualityScore:60 },
-    { label:'1.30–1.35 SAFE', targetOdds:1.325, targetMinOdds:1.30, targetMaxOdds:1.35, minProbability:80, minQualityScore:60 },
+    { label:'50', targetOdds:50, minProbability:70 },
+    { label:'20', targetOdds:20, minProbability:70 },
+    { label:'10', targetOdds:10, minProbability:70 },
+    { label:'1.30–1.35 SAFE', targetOdds:1.325, targetMinOdds:1.30, targetMaxOdds:1.35, minProbability:80 },
   ];
 
   // Load broadly once, then apply each plan's strict rules locally.
@@ -859,8 +859,8 @@ async function runTelegramDailyPicks() {
     '🤖 MATCHDAY ODDS DESK — AUTO PICKS',
     `Scope: ${sportScope.toUpperCase()}`,
     'Targets: 50, 20, 10, 1.30–1.35 SAFE',
-    '50/20/10 rules: probability ≥70% | quality ≥60',
-    'SAFE rules: probability ≥80% | quality ≥60 | total odds 1.30–1.35',
+    '50/20/10 rules: probability ≥70%',
+    'SAFE rules: probability ≥80% | total odds 1.30–1.35',
     `Red-flag selections rejected: ${redFlagRejected}`,
     `Candidates scanned: ${rawCandidates.length}`,
     `Generated: ${new Date().toISOString()}`,
@@ -871,8 +871,7 @@ async function runTelegramDailyPicks() {
   const output = [];
   for (const plan of plans) {
     const planCandidates = saneCandidates.filter(c =>
-      Number(c.probability || 0) >= plan.minProbability &&
-      Number(c.qualityScore || 0) >= plan.minQualityScore
+      Number(c.probability || 0) >= plan.minProbability
     );
 
     const result = selectAutoBet(planCandidates, {
@@ -880,7 +879,7 @@ async function runTelegramDailyPicks() {
       targetMinOdds: plan.targetMinOdds ?? null,
       targetMaxOdds: plan.targetMaxOdds ?? null,
       maxSelections,
-      minQualityScore: plan.minQualityScore,
+      minQualityScore: 0,
       minEdge: -25,
       requirePositiveEdge: false,
       applyRedFlagFilter: true,
