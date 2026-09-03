@@ -840,13 +840,13 @@ async function runTelegramDailyPicks() {
     : null;
 
   // Fixed quality-first Telegram plan:
-  // 50x / 20x / 10x: P >= 80%, edge > 0, Q >= 75.
-  // Safe set: total odds must land in 1.30-1.35, P >= 85%, edge > 0, Q >= 80.
+  // 50x / 20x / 10x: P >= 70%, Q >= 70.
+  // Safe set: total odds must land in 1.30-1.35, P >= 80%, Q >= 75.
   const plans = [
-    { label:'50', targetOdds:50, minProbability:80, minQualityScore:75 },
-    { label:'20', targetOdds:20, minProbability:80, minQualityScore:75 },
-    { label:'10', targetOdds:10, minProbability:80, minQualityScore:75 },
-    { label:'1.30–1.35 SAFE', targetOdds:1.325, targetMinOdds:1.30, targetMaxOdds:1.35, minProbability:85, minQualityScore:80 },
+    { label:'50', targetOdds:50, minProbability:70, minQualityScore:70 },
+    { label:'20', targetOdds:20, minProbability:70, minQualityScore:70 },
+    { label:'10', targetOdds:10, minProbability:70, minQualityScore:70 },
+    { label:'1.30–1.35 SAFE', targetOdds:1.325, targetMinOdds:1.30, targetMaxOdds:1.35, minProbability:80, minQualityScore:75 },
   ];
 
   // Load broadly once, then apply each plan's strict rules locally.
@@ -859,8 +859,8 @@ async function runTelegramDailyPicks() {
     '🤖 MATCHDAY ODDS DESK — AUTO PICKS',
     `Scope: ${sportScope.toUpperCase()}`,
     'Targets: 50, 20, 10, 1.30–1.35 SAFE',
-    '50/20/10 rules: probability ≥80% | edge >0 | quality ≥75',
-    'SAFE rules: probability ≥85% | edge >0 | quality ≥80 | total odds 1.30–1.35',
+    '50/20/10 rules: probability ≥70% | quality ≥70',
+    'SAFE rules: probability ≥80% | quality ≥75 | total odds 1.30–1.35',
     `Red-flag selections rejected: ${redFlagRejected}`,
     `Candidates scanned: ${rawCandidates.length}`,
     `Generated: ${new Date().toISOString()}`,
@@ -872,7 +872,6 @@ async function runTelegramDailyPicks() {
   for (const plan of plans) {
     const planCandidates = saneCandidates.filter(c =>
       Number(c.probability || 0) >= plan.minProbability &&
-      Number(c.edge || 0) > 0 &&
       Number(c.qualityScore || 0) >= plan.minQualityScore
     );
 
@@ -882,8 +881,8 @@ async function runTelegramDailyPicks() {
       targetMaxOdds: plan.targetMaxOdds ?? null,
       maxSelections,
       minQualityScore: plan.minQualityScore,
-      minEdge: 0,
-      requirePositiveEdge: true,
+      minEdge: -25,
+      requirePositiveEdge: false,
       applyRedFlagFilter: true,
       trials: Number(process.env.TELEGRAM_PICK_TRIALS || 2200),
     });
@@ -891,7 +890,7 @@ async function runTelegramDailyPicks() {
     // Quality-first: do not send "closest available" slips.
     if (!result.selections.length || !result.reachedTarget) {
       output.push({ targetOdds: plan.label, error: 'No qualifying combination reached the required target/range' });
-      await sendTelegramMessage(`⚠️ ${plan.label} odds set NOT GENERATED — insufficient qualifying positive-edge selections.`);
+      await sendTelegramMessage(`⚠️ ${plan.label} odds set NOT GENERATED — insufficient qualifying selections.`);
       continue;
     }
 
