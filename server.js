@@ -742,7 +742,10 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const body = req.body || {};
     const targetOdds = Math.min(2000, Math.max(1.05, Number(body.targetOdds) || 5));
     // Website Auto Builder probability is user-adjustable.
-    const minProbability = Math.min(95, Math.max(0, Number(body.minProbability) || 55));
+    const requestedMinProbability = Number(body.minProbability);
+    const minProbability = Number.isFinite(requestedMinProbability)
+      ? Math.min(95, Math.max(0, requestedMinProbability))
+      : 55;
     const maxSelections = Math.min(100, Math.max(1, parseInt(body.maxSelections || '8', 10)));
     const minEdge = Math.min(50, Math.max(-25, Number(body.minEdge) || 0));
     const leagues = Array.isArray(body.leagues) ? body.leagues.map(String) : null;
