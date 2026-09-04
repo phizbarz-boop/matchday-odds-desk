@@ -749,17 +749,27 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const sportScope = normalizeSportScope(body.sportScope);
     const betTypes = Array.isArray(body.betTypes) ? body.betTypes.map(String) : null;
 
-    const rawCandidates = await loadAutoCandidates({ sportScope, minProbability, minEdge, leagues, betTypes });
+    // Build the website pool using probability only. Edge and quality are scoring/display
+    // information, not eligibility gates. This prevents basketball/hockey no-vig candidates
+    // from being wiped out by an edge floor and keeps the user's probability control authoritative.
+    const rawCandidates = await loadAutoCandidates({ sportScope, minProbability, minEdge: -25, leagues, betTypes });
     const candidates = rawCandidates.filter(passesRedFlagFilter);
     const redFlagRejected = rawCandidates.length - candidates.length;
-    const result = selectAutoBet(candidates, { targetOdds, maxSelections, minEdge, applyRedFlagFilter: true });
+    const result = selectAutoBet(candidates, {
+      targetOdds,
+      maxSelections,
+      minQualityScore: 0,
+      minEdge: -25,
+      requirePositiveEdge: false,
+      applyRedFlagFilter: true
+    });
     if (!result.selections.length) {
       const cornerDiagnostics=await autoCornerDiagnostics(betTypes);
       return res.status(404).json({
-        error: 'No eligible SportyBet selections matched the requested sport and minimum probability',
+        error: 'No eligible SportyBet selections remained after probability and red-flag filtering',
         targetOdds,
         minProbability,
-        minEdge,
+        minEdgeApplied: false,
         sportScope,
         requestedBetTypes: betTypes,
         candidateCount: candidates.length,
@@ -775,7 +785,7 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       ...result,
       sportScope,
       minProbability,
-      minEdge,
+      minEdgeApplied: false,
       maxSelections,
       redFlagRejected,
       redFlagFilter: 'ON: rejects edge > +25 pts and suspicious high-probability/high-odds combinations',
