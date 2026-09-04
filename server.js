@@ -8,7 +8,7 @@ app.set('trust proxy', 1); // Render forwards the real client IP.
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
 const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG } = require('./lib/sportybet');
-const { buildCandidates, selectAutoBet, passesRedFlagFilter } = require('./lib/autoPicker');
+const { buildCandidates, selectAutoBet } = require('./lib/autoPicker');
 const { sendTelegramMessage } = require('./lib/telegram');
 const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
 const { apiFetch, enrichSportyFixtures } = require('./lib/apiFootball');
@@ -742,41 +742,25 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const body = req.body || {};
     const targetOdds = Math.min(2000, Math.max(1.05, Number(body.targetOdds) || 5));
     // Website Auto Builder probability is user-adjustable.
-    const requestedMinProbability = Number(body.minProbability);
-    const minProbability = Number.isFinite(requestedMinProbability)
-      ? Math.min(95, Math.max(0, requestedMinProbability))
-      : 55;
+    const minProbability = Math.min(95, Math.max(0, Number(body.minProbability) || 55));
     const maxSelections = Math.min(100, Math.max(1, parseInt(body.maxSelections || '8', 10)));
     const minEdge = Math.min(50, Math.max(-25, Number(body.minEdge) || 0));
     const leagues = Array.isArray(body.leagues) ? body.leagues.map(String) : null;
     const sportScope = normalizeSportScope(body.sportScope);
     const betTypes = Array.isArray(body.betTypes) ? body.betTypes.map(String) : null;
 
-    // Build the website pool using probability only. Edge and quality are scoring/display
-    // information, not eligibility gates. This prevents basketball/hockey no-vig candidates
-    // from being wiped out by an edge floor and keeps the user's probability control authoritative.
-    const rawCandidates = await loadAutoCandidates({ sportScope, minProbability, minEdge: -25, leagues, betTypes });
-    const candidates = rawCandidates.filter(passesRedFlagFilter);
-    const redFlagRejected = rawCandidates.length - candidates.length;
-    const result = selectAutoBet(candidates, {
-      targetOdds,
-      maxSelections,
-      minQualityScore: 0,
-      minEdge: -25,
-      requirePositiveEdge: false,
-      applyRedFlagFilter: true
-    });
+    const candidates = await loadAutoCandidates({ sportScope, minProbability, minEdge, leagues, betTypes });
+    const result = selectAutoBet(candidates, { targetOdds, maxSelections });
     if (!result.selections.length) {
       const cornerDiagnostics=await autoCornerDiagnostics(betTypes);
       return res.status(404).json({
-        error: 'No eligible SportyBet selections remained after probability and red-flag filtering',
+        error: 'No eligible SportyBet selections matched the requested sport and minimum probability',
         targetOdds,
         minProbability,
-        minEdgeApplied: false,
+        minEdge,
         sportScope,
         requestedBetTypes: betTypes,
         candidateCount: candidates.length,
-        redFlagRejected,
         cornerDiagnostics,
         hint: cornerDiagnostics
           ? 'Corner diagnostics included. matchesWithCornerModel must be > 0 and SportyBet corner rows must be > 0.'
@@ -788,10 +772,8 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       ...result,
       sportScope,
       minProbability,
-      minEdgeApplied: false,
+      minEdge,
       maxSelections,
-      redFlagRejected,
-      redFlagFilter: 'ON: rejects edge > +25 pts and suspicious high-probability/high-odds combinations',
       betTypes,
       generatedAt: new Date().toISOString(),
       note: 'Value engine: football uses 1X2, 1UP, Corners O/U, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap +0/+0.25/-0.25. O/U 2.5 is excluded. DNB/AH use settlement-aware fair odds and EV; basketball/hockey remain no-vig market estimates.',
@@ -846,63 +828,50 @@ function telegramSlipText(target, result, booking, sportScope) {
 }
 
 async function runTelegramDailyPicks() {
+  const targets = parseTargetList(process.env.TELEGRAM_TARGET_ODDS);
   const sportScope = normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all');
+  const minProbability = Math.min(95, Math.max(70, Number(process.env.TELEGRAM_MIN_PROBABILITY || 70)));
   const maxSelections = Math.min(100, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '30', 10)));
+  const minEdge = Math.min(50, Math.max(-25, Number(process.env.TELEGRAM_MIN_EDGE || 0)));
   const leagues = process.env.TELEGRAM_FOOTBALL_LEAGUES
     ? process.env.TELEGRAM_FOOTBALL_LEAGUES.split(',').map(x => x.trim()).filter(Boolean)
     : null;
+  // Diversify the different target-odds slips sent in the same Telegram run.
+  // A game + bet type below this probability may appear in only one sent slip.
+  // Picks at/above the threshold are strong enough to be reused across target slips.
+  const repeatThreshold = Math.min(100, Math.max(0, Number(process.env.TELEGRAM_REPEAT_MIN_PROBABILITY || 80)));
+  const usedLowConfidenceKeys = new Set();
+  const repeatKey = c => `${String(c.eventId)}|${String(c.betType || c.marketKind || c.marketId)}`;
 
-  // Fixed quality-first Telegram plan:
-  // 50x / 20x / 10x: P >= 70%.
-  // Safe set: total odds must land in 1.30-1.35, P >= 80%.
-  const plans = [
-    { label:'50', targetOdds:50, minProbability:70 },
-    { label:'20', targetOdds:20, minProbability:70 },
-    { label:'10', targetOdds:10, minProbability:70 },
-    { label:'1.30–1.35 SAFE', targetOdds:1.325, targetMinOdds:1.30, targetMaxOdds:1.35, minProbability:80 },
-  ];
-
-  // Load broadly once, then apply each plan's strict rules locally.
-  const rawCandidates = await loadAutoCandidates({ sportScope, minProbability: 0, minEdge: -25, leagues });
-  const saneCandidates = rawCandidates.filter(passesRedFlagFilter);
-  const redFlagRejected = rawCandidates.length - saneCandidates.length;
-  if (!saneCandidates.length) throw new Error('No eligible candidates remain after the Telegram red-flag filter');
+  const candidates = await loadAutoCandidates({ sportScope, minProbability, minEdge, leagues });
+  if (!candidates.length) throw new Error('No eligible candidates are available for the Telegram picks job');
 
   await sendTelegramMessage([
     '🤖 MATCHDAY ODDS DESK — AUTO PICKS',
     `Scope: ${sportScope.toUpperCase()}`,
-    'Targets: 50, 20, 10, 1.30–1.35 SAFE',
-    '50/20/10 rules: probability ≥70%',
-    'SAFE rules: probability ≥80% | total odds 1.30–1.35',
-    `Red-flag selections rejected: ${redFlagRejected}`,
-    `Candidates scanned: ${rawCandidates.length}`,
+    `Targets: ${targets.join(', ')}`,
+    `Minimum probability: ${minProbability}%`,
+    `Minimum football edge: ${minEdge} pts`,
+    `Eligible candidates scanned: ${candidates.length}`,
+    `Cross-slip repeat rule: same game + bet type repeats only at ${repeatThreshold}%+`,
     `Generated: ${new Date().toISOString()}`,
     '',
-    'No target is forced when the qualifying pool is insufficient.',
+    'Model probabilities are estimates, not guarantees.',
   ].join('\n'));
 
   const output = [];
-  for (const plan of plans) {
-    const planCandidates = saneCandidates.filter(c =>
-      Number(c.probability || 0) >= plan.minProbability
-    );
-
-    const result = selectAutoBet(planCandidates, {
-      targetOdds: plan.targetOdds,
-      targetMinOdds: plan.targetMinOdds ?? null,
-      targetMaxOdds: plan.targetMaxOdds ?? null,
+  for (const target of targets) {
+    const diversifiedCandidates = candidates.filter(c => Number(c.probability || 0) >= repeatThreshold || !usedLowConfidenceKeys.has(repeatKey(c)));
+    const result = selectAutoBet(diversifiedCandidates, {
+      targetOdds: target,
       maxSelections,
-      minQualityScore: 0,
-      minEdge: -25,
-      requirePositiveEdge: false,
-      applyRedFlagFilter: true,
       trials: Number(process.env.TELEGRAM_PICK_TRIALS || 2200),
     });
 
-    // Quality-first: do not send "closest available" slips.
-    if (!result.selections.length || !result.reachedTarget) {
-      output.push({ targetOdds: plan.label, error: 'No qualifying combination reached the required target/range' });
-      await sendTelegramMessage(`⚠️ ${plan.label} odds set NOT GENERATED — insufficient qualifying selections.`);
+    if (!result.selections.length) {
+      const failure = { targetOdds: target, error: 'No eligible combination found' };
+      output.push(failure);
+      await sendTelegramMessage(`⚠️ Could not build the ${target} odds slip with the current filters.`);
       continue;
     }
 
@@ -912,19 +881,23 @@ async function runTelegramDailyPicks() {
         marketId: x.marketId,
         outcomeId: x.outcomeId,
         ...(x.specifier ? { specifier: x.specifier } : {}),
-      })), { preferFullMarket: result.selections.some(x => /corner|1up|1 up|1-up/i.test(`${x.marketDesc||''} ${x.outcomeDesc||''} ${x.betType||''}`)) });
-
-      await sendTelegramMessage(telegramSlipText(plan.label, result, booking, sportScope));
+      })));
+      await sendTelegramMessage(telegramSlipText(target, result, booking, sportScope));
+      for (const x of result.selections) {
+        if (Number(x.probability || 0) < repeatThreshold) usedLowConfidenceKeys.add(repeatKey(x));
+      }
+      // Persist every automatically generated code that was actually sent to Telegram.
+      // Redis is strongly recommended so tracking survives Render restarts/deploys.
       await trackTelegramSlip(await getRedis(), {
         shareCode: booking?.shareCode,
         shareURL: booking?.shareURL,
-        targetOdds: plan.label,
+        targetOdds: target,
         combinedOdds: result.combinedOdds,
         sportScope,
         selections: result.selections,
       });
       output.push({
-        targetOdds: plan.label,
+        targetOdds: target,
         combinedOdds: result.combinedOdds,
         averageProbability: result.averageProbability,
         estimatedSlipProbability: result.estimatedSlipProbability,
@@ -933,16 +906,18 @@ async function runTelegramDailyPicks() {
         estimatedSlipEVPct: result.estimatedSlipEVPct,
         selections: result.selections.length,
         shareCode: booking?.shareCode || null,
+        unavailable: Array.isArray(booking?.unavailableOutcomes) ? booking.unavailableOutcomes.length : 0,
       });
     } catch (err) {
-      output.push({ targetOdds: plan.label, combinedOdds: result.combinedOdds, error: err.message });
-      await sendTelegramMessage(`⚠️ ${plan.label} odds set qualified, but SportyBet code generation failed: ${err.message}`);
+      output.push({ targetOdds: target, combinedOdds: result.combinedOdds, error: err.message });
+      await sendTelegramMessage(`⚠️ ${target} odds slip was built at ${result.combinedOdds}, but SportyBet code generation failed: ${err.message}`);
     }
     await new Promise(resolve => setTimeout(resolve, 750));
   }
 
-  return { sportScope, plans, maxSelections, candidateCount: saneCandidates.length, redFlagRejected, results: output };
+  return { sportScope, minProbability, minEdge, maxSelections, repeatThreshold, candidateCount: candidates.length, results: output };
 }
+
 
 function telegramWinningSlipText(slip) {
   const successLegs = Array.isArray(slip.selections) ? slip.selections.length : 0;
@@ -1044,7 +1019,7 @@ app.post('/api/telegram/check-settlements', express.json(), async (req, res) => 
 app.get('/api/telegram/status', (req, res) => {
   res.json({
     configured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID && process.env.TELEGRAM_JOB_SECRET),
-    targets: [50, 20, 10, '1.30-1.35 SAFE'],
+    targets: parseTargetList(process.env.TELEGRAM_TARGET_ODDS),
     sportScope: normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all'),
     minProbability: Math.min(95, Math.max(70, Number(process.env.TELEGRAM_MIN_PROBABILITY || 70))),
     minEdge: Math.min(50, Math.max(-25, Number(process.env.TELEGRAM_MIN_EDGE || 0))),
