@@ -740,17 +740,26 @@ async function autoCornerDiagnostics(betTypes) {
 app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
   try {
     const body = req.body || {};
-    const targetOdds = Math.min(2000, Math.max(1.05, Number(body.targetOdds) || 5));
+    const targetOdds = Math.min(100000, Math.max(1.05, Number(body.targetOdds) || 5));
     // Website Auto Builder probability is user-adjustable.
     const minProbability = Math.min(95, Math.max(0, Number(body.minProbability) || 55));
     const maxSelections = Math.min(100, Math.max(1, parseInt(body.maxSelections || '8', 10)));
     const minEdge = Math.min(50, Math.max(-25, Number(body.minEdge) || 0));
+    // Optional website-only ceiling for the bookmaker odds of each individual selection.
+    // Null/blank means no per-match odds ceiling.
+    const rawMaxMatchOdds = Number(body.maxMatchOdds);
+    const maxMatchOdds = Number.isFinite(rawMaxMatchOdds) && rawMaxMatchOdds > 1
+      ? Math.min(1000, Math.max(1.01, rawMaxMatchOdds))
+      : null;
     const leagues = Array.isArray(body.leagues) ? body.leagues.map(String) : null;
     const sportScope = normalizeSportScope(body.sportScope);
     const betTypes = Array.isArray(body.betTypes) ? body.betTypes.map(String) : null;
 
     const candidates = await loadAutoCandidates({ sportScope, minProbability, minEdge, leagues, betTypes });
-    const result = selectAutoBet(candidates, { targetOdds, maxSelections });
+    const oddsFilteredCandidates = maxMatchOdds == null
+      ? candidates
+      : candidates.filter(c => Number.isFinite(Number(c.odds)) && Number(c.odds) <= maxMatchOdds);
+    const result = selectAutoBet(oddsFilteredCandidates, { targetOdds, maxSelections });
     if (!result.selections.length) {
       const cornerDiagnostics=await autoCornerDiagnostics(betTypes);
       return res.status(404).json({
@@ -760,7 +769,9 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
         minEdge,
         sportScope,
         requestedBetTypes: betTypes,
-        candidateCount: candidates.length,
+        candidateCount: oddsFilteredCandidates.length,
+        candidatesBeforeMaxOddsFilter: candidates.length,
+        maxMatchOdds,
         cornerDiagnostics,
         hint: cornerDiagnostics
           ? 'Corner diagnostics included. matchesWithCornerModel must be > 0 and SportyBet corner rows must be > 0.'
@@ -774,6 +785,8 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       minProbability,
       minEdge,
       maxSelections,
+      maxMatchOdds,
+      candidatesBeforeMaxOddsFilter: candidates.length,
       betTypes,
       generatedAt: new Date().toISOString(),
       note: 'Value engine: football uses 1X2, 1UP, Corners O/U, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap +0/+0.25/-0.25. O/U 2.5 is excluded. DNB/AH use settlement-aware fair odds and EV; basketball/hockey remain no-vig market estimates.',
