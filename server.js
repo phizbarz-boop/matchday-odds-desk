@@ -305,12 +305,12 @@ app.get('/api/api-football/diagnostics', async (req, res) => {
 
 
 // Live-ish SportyBet price layer. The Parse API key never reaches the browser.
-// Supported football values: 1x2, gg, dc, dnb, ou15, ou45, ah, oneup. O/U 2.5 is intentionally not used by the Auto Builder.
+// Supported football values: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, oneup. O/U 2.5 is intentionally not used by the Auto Builder.
 app.get('/api/sportybet/odds', async (req, res) => {
   try {
     const kind = String(req.query.market || '1x2').toLowerCase();
-    if (!['1x2', 'gg', 'dc', 'dnb', 'ou15', 'ou45', 'ah', 'oneup', 'corners', 'first_half_team_corners'].includes(kind)) {
-      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou15, ou45, ah, oneup, corners, first_half_team_corners' });
+    if (!['1x2', 'gg', 'dc', 'dnb', 'ou05', 'ou15', 'ou45', 'ah', 'oneup', 'corners', 'first_half_team_corners'].includes(kind)) {
+      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, oneup, corners, first_half_team_corners' });
     }
     const payload = await loadSportyBetMarket(kind);
     res.set('Cache-Control', 'public, max-age=60');
@@ -437,12 +437,13 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
   const wantsBasketball = scope === 'all' || scope === 'basketball';
   const wantsHockey = scope === 'all' || scope === 'hockey';
 
-  let [predictions, f1x2, fgg, fdc, fdnb, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
+  let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
     wantsFootball ? loadPredictions() : Promise.resolve({ matches: [] }),
     wantsFootball ? loadSportyBetMarket('1x2', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('gg', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('dc', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('dnb', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('ou05', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('ou15', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('ou45', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('ah', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
@@ -465,7 +466,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
 
   return buildCandidates({
     predictions,
-    footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou15: fou15, ou45: fou45, ah: fah, corners: fcorners, first_half_team_corners: f1hteamcorners, oneup: foneup },
+    footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou05: fou05, ou15: fou15, ou45: fou45, ah: fah, corners: fcorners, first_half_team_corners: f1hteamcorners, oneup: foneup },
     basketballWinner,
     basketballTotals,
     hockeyWinner,
