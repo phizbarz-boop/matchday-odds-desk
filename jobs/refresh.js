@@ -8,6 +8,7 @@ const { LEAGUES, getStandings, getUpcomingMatches, getFinishedMatches } = requir
 const { teamStrength, predictMatch, summarizeH2H, blendPredictionWithH2H } = require('../lib/model');
 const { getFootballMarket } = require('../lib/sportybet');
 const { enrichSportyFixtures } = require('../lib/apiFootball');
+const { loadHistory, matchupFromHistory } = require('../lib/cornerHistory');
 
 const TOKEN = process.env.FOOTBALL_DATA_TOKEN;
 const LEAGUE_CODES = (process.env.LEAGUES || 'PL,PD,SA,BL1,FL1').split(',').map(s => s.trim());
@@ -18,6 +19,17 @@ const H2H_PREVIOUS_SEASONS = Math.max(0, Math.min(3, parseInt(process.env.H2H_PR
 const H2H_MAX_WEIGHT = Math.max(0, Math.min(0.35, parseFloat(process.env.H2H_MAX_WEIGHT || '0.18')));
 const H2H_MAX_MEETINGS = Math.max(1, Math.min(20, parseInt(process.env.H2H_MAX_MEETINGS || '8', 10)));
 const DATA_FILE = path.join(__dirname, '..', 'data', 'predictions.json');
+
+
+async function historicalCornerLookup({apiFixture,homeTeamId,awayTeamId}) {
+  const leagueId=Number(apiFixture?.league?.id);
+  const currentSeason=Number(apiFixture?.league?.season);
+  if(!leagueId||!currentSeason) return null;
+  const forced=Number(process.env.API_FOOTBALL_CORNER_HISTORY_SEASON);
+  const season=Number.isFinite(forced)&&forced>2000?forced:currentSeason-1;
+  const history=await loadHistory(leagueId,season);
+  return history?matchupFromHistory(history,homeTeamId,awayTeamId):null;
+}
 
 function fmtDate(d) {
   return d.toISOString().slice(0, 10);
@@ -193,16 +205,28 @@ async function main() {
       const hours = Math.min(24 * 21, Math.max(24, DAYS_AHEAD * 24));
       const maxPages = Math.max(1, Math.min(20, parseInt(process.env.API_FOOTBALL_SPORTY_MAX_PAGES || process.env.ANALYZER_MAX_PAGES || '12', 10)));
       const oneXtwo = await getFootballMarket('1x2', { hours, maxPages });
-      let cornerRows = [], firstHalfTeamCornerRows = [];
+      let cornerRows = [], fullTimeTeamCornerRows = [], firstHalfTeamCornerRows = [];
       try { cornerRows = (await getFootballMarket('corners', { hours, maxPages })).rows || []; }
       catch (err) { console.warn(`SportyBet corners market unavailable during refresh: ${err.message}`); }
+      try { fullTimeTeamCornerRows = (await getFootballMarket('full_time_team_corners', { hours, maxPages })).rows || []; }
+      catch (err) { console.warn(`SportyBet FT team corners market unavailable during refresh: ${err.message}`); }
       try { firstHalfTeamCornerRows = (await getFootballMarket('first_half_team_corners', { hours, maxPages })).rows || []; }
       catch (err) { console.warn(`SportyBet 1H team corners market unavailable during refresh: ${err.message}`); }
-      const cornerEventIds = new Set([...cornerRows, ...firstHalfTeamCornerRows].map(x => String(x.eventId)));
-      const apiRows = await enrichSportyFixtures(oneXtwo.rows || [], {
+      const cornerEventIds = new Set([...cornerRows, ...fullTimeTeamCornerRows, ...firstHalfTeamCornerRows].map(x => String(x.eventId)));
+      // Enrich the union of 1X2 and actual corner feeds. SportyBet endpoints can expose
+      // different event-id namespaces, so using only the 1X2 feed can silently miss
+      // otherwise valid corner fixtures (especially for Telegram's scheduled builder).
+      const enrichmentTargets=[]; const seenTargetEvents=new Set();
+      for(const row of [...(oneXtwo.rows||[]), ...cornerRows, ...fullTimeTeamCornerRows, ...firstHalfTeamCornerRows]){
+        const k=String(row?.eventId||'') || `${row?.home||''}|${row?.away||''}|${row?.kickoffUtc||''}`;
+        if(!k||seenTargetEvents.has(k)) continue;
+        seenTargetEvents.add(k); enrichmentTargets.push(row);
+      }
+      const apiRows = await enrichSportyFixtures(enrichmentTargets, {
         daysAhead: DAYS_AHEAD,
         maxFixtures: Math.max(1, Math.min(500, parseInt(process.env.API_FOOTBALL_MAX_FIXTURES || '180', 10))),
         cornerEventIds,
+        historyLookup:historicalCornerLookup,
       });
       const key = r => `${String(r.home||'').toLowerCase().replace(/[^a-z0-9]/g,'')}|${String(r.away||'').toLowerCase().replace(/[^a-z0-9]/g,'')}|${String(r.kickoffUtc||'').slice(0,10)}`;
       const existing = new Set(all.map(key));

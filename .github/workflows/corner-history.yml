@@ -1,0 +1,36 @@
+name: Build Corner History
+
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: 'Completed season starting year, e.g. 2025 for 2025/26'
+        required: false
+        default: '2025'
+      league_ids:
+        description: 'API-Football league IDs (comma-separated)'
+        required: false
+        default: '39,140,135,78,61,2,40,88,94'
+      force:
+        description: 'Rebuild even if cached'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start historical corner build on Render
+        env:
+          REFRESH_SECRET: ${{ secrets.REFRESH_SECRET }}
+          SEASON: ${{ inputs.season }}
+          LEAGUES: ${{ inputs.league_ids }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          test -n "$REFRESH_SECRET" || (echo "Missing GitHub secret REFRESH_SECRET" && exit 1)
+          curl --fail-with-body --show-error --silent --max-time 30 \
+            -X POST "https://matchday-odds-desk.onrender.com/api/corners/history/rebuild" \
+            -H "Content-Type: application/json" \
+            -H "X-Refresh-Secret: $REFRESH_SECRET" \
+            --data "{\"season\":${SEASON:-2025},\"leagueIds\":\"${LEAGUES:-39,140,135,78,61,2,40,88,94}\",\"force\":${FORCE:-false}}"

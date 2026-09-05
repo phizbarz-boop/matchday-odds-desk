@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "refresh": "node jobs/refresh.js"
+    "refresh": "node jobs/refresh.js",
+    "corner-history": "node jobs/corner-history.js"
   },
   "dependencies": {
     "express": "^4.19.2",

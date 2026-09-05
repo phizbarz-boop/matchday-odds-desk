@@ -12,6 +12,7 @@ const { buildCandidates, selectAutoBet, passesRedFlagFilter} = require('./lib/au
 const { sendTelegramMessage } = require('./lib/telegram');
 const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
 const { apiFetch, enrichSportyFixtures } = require('./lib/apiFootball');
+const { loadHistory, matchupFromHistory } = require('./lib/cornerHistory');
 
 let redisClient = null;
 async function getRedis() {
@@ -208,12 +209,13 @@ app.get('/api/corners/test-live', async (req, res) => {
       return res.status(503).json({apiFootballConfigured:false,called:false,error:'API_FOOTBALL_KEY is not configured'});
     }
 
-    const [c,h]=await Promise.all([
+    const [c,t,h]=await Promise.all([
       loadSportyBetMarket('corners'),
+      loadSportyBetMarket('full_time_team_corners'),
       loadSportyBetMarket('first_half_team_corners')
     ]);
 
-    const source=[...(c?.rows||[]),...(h?.rows||[])];
+    const source=[...(c?.rows||[]),...(t?.rows||[]),...(h?.rows||[])];
     const seen=new Set();
     const fixtures=source.filter(x=>{
       const k=String(x.eventId||'') || `${x.home}|${x.away}|${x.kickoffUtc}`;
@@ -227,6 +229,7 @@ app.get('/api/corners/test-live', async (req, res) => {
         apiFootballConfigured:true,
         called:false,
         sportyCornerRows:(c?.rows||[]).length,
+        sportyFullTimeTeamCornerRows:(t?.rows||[]).length,
         sportyFirstHalfCornerRows:(h?.rows||[]).length,
         error:'No usable SportyBet corner fixture contained home, away and kickoffUtc'
       });
@@ -236,7 +239,8 @@ app.get('/api/corners/test-live', async (req, res) => {
     const rows=await enrichSportyFixtures(fixtures,{
       daysAhead:3,
       maxFixtures:1,
-      cornerEventIds:new Set([String(f.eventId||'')])
+      cornerEventIds:new Set([String(f.eventId||'')]),
+      historyLookup:historicalCornerLookup
     });
     const r=rows[0]||null;
 
@@ -265,9 +269,10 @@ app.get('/api/corners/test-live', async (req, res) => {
 
 app.get('/api/corners/diagnostics', async (req, res) => {
   try{
-    const [pred,c,h]=await Promise.all([
+    const [pred,c,t,h]=await Promise.all([
       loadPredictions(),
       loadSportyBetMarket('corners'),
+      loadSportyBetMarket('full_time_team_corners'),
       loadSportyBetMarket('first_half_team_corners')
     ]);
     const matches=Array.isArray(pred?.matches)?pred.matches:[];
@@ -277,13 +282,19 @@ app.get('/api/corners/diagnostics', async (req, res) => {
       predictionMatches:matches.length,
       matchesWithCornerModel:modeled.length,
       sportyCornerRows:Array.isArray(c?.rows)?c.rows.length:0,
+      sportyFullTimeTeamCornerRows:Array.isArray(t?.rows)?t.rows.length:0,
       sportyFirstHalfCornerRows:Array.isArray(h?.rows)?h.rows.length:0,
       sampleCornerModels:modeled.slice(0,5).map(x=>({
         eventId:x.eventId||x.sportyEventId||null,
         home:x.home,away:x.away,
         totalLambda:x.corners?.totalLambda,
+        historicalSeason:x.corners?.historicalSeason||null,
+        historicalSamplesHome:x.corners?.historicalSamplesHome||0,
+        historicalSamplesAway:x.corners?.historicalSamplesAway||0,
         firstHalfHomeLambda:x.corners?.firstHalfHomeLambda,
-        firstHalfAwayLambda:x.corners?.firstHalfAwayLambda
+        firstHalfAwayLambda:x.corners?.firstHalfAwayLambda,
+        firstHalfDataSource:x.corners?.firstHalfDataSource||null,
+        modelVersion:x.corners?.modelVersion||null
       }))
     });
   }catch(err){
@@ -309,8 +320,8 @@ app.get('/api/api-football/diagnostics', async (req, res) => {
 app.get('/api/sportybet/odds', async (req, res) => {
   try {
     const kind = String(req.query.market || '1x2').toLowerCase();
-    if (!['1x2', 'gg', 'dc', 'dnb', 'ou05', 'ou15', 'ou45', 'ah', 'oneup', 'corners', 'first_half_team_corners'].includes(kind)) {
-      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, oneup, corners, first_half_team_corners' });
+    if (!['1x2', 'gg', 'dc', 'dnb', 'ou05', 'ou15', 'ou45', 'ah', 'oneup', 'corners', 'full_time_team_corners', 'first_half_team_corners'].includes(kind)) {
+      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, oneup, corners, full_time_team_corners, first_half_team_corners' });
     }
     const payload = await loadSportyBetMarket(kind);
     res.set('Cache-Control', 'public, max-age=60');
@@ -369,7 +380,8 @@ function normalizeSportScope(value) {
 function cornerBetRequested(betTypes) {
   return Array.isArray(betTypes) && betTypes.some(x => {
     const t=String(x || '');
-    return ['corners_over','corners_under','first_half_home_team_corners','first_half_away_team_corners'].includes(t)
+    return ['corners_over','corners_under','full_time_home_team_corners','full_time_away_team_corners','first_half_home_team_corners','first_half_away_team_corners'].includes(t)
+      || t.startsWith('full_time_home_corners_') || t.startsWith('full_time_away_corners_')
       || t.startsWith('first_half_home_corners_') || t.startsWith('first_half_away_corners_');
   });
 }
@@ -380,7 +392,18 @@ function fixtureKey(r) {
   return `${n(r?.home)}|${n(r?.away)}|${String(r?.kickoffUtc||'').slice(0,10)}`;
 }
 
-async function addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorners, hours) {
+async function historicalCornerLookup({apiFixture,homeTeamId,awayTeamId}) {
+  const leagueId=Number(apiFixture?.league?.id);
+  const currentSeason=Number(apiFixture?.league?.season);
+  if(!leagueId||!currentSeason) return null;
+  const forced=Number(process.env.API_FOOTBALL_CORNER_HISTORY_SEASON);
+  const season=Number.isFinite(forced)&&forced>2000?forced:currentSeason-1;
+  const history=await loadHistory(leagueId,season);
+  if(!history) return null;
+  return matchupFromHistory(history,homeTeamId,awayTeamId);
+}
+
+async function addOnDemandCornerModels(predictions, f1x2, fcorners, fteamcorners, f1hteamcorners, hours) {
   if (!process.env.API_FOOTBALL_KEY && !process.env.API_FOOTBALL_API_KEY) {
     console.warn('[API-Football] corner request skipped: API_FOOTBALL_KEY is not configured');
     return predictions;
@@ -390,7 +413,7 @@ async function addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorne
   // Match API-Football from the ACTUAL SportyBet corner feeds.
   // Do not intersect with the separate 1X2 feed first: different SportyBet scraper
   // endpoints can expose different event-id namespaces even for the same fixture.
-  let sporty=[...(fcorners?.rows||[]),...(f1hteamcorners?.rows||[])];
+  let sporty=[...(fcorners?.rows||[]),...(fteamcorners?.rows||[]),...(f1hteamcorners?.rows||[])];
   if(!sporty.length) sporty=[...(f1x2?.rows||[])];
 
   const seen=new Set();
@@ -411,7 +434,8 @@ async function addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorne
   const apiRows=await enrichSportyFixtures(sporty,{
     daysAhead:Math.max(1,Math.ceil(Number(hours||120)/24)),
     maxFixtures:sporty.length,
-    cornerEventIds:new Set(sporty.map(x=>String(x.eventId||'')))
+    cornerEventIds:new Set(sporty.map(x=>String(x.eventId||''))),
+    historyLookup:historicalCornerLookup
   });
 
   const byKey=new Map(apiRows.filter(x=>x?.corners).map(x=>[fixtureKey(x),x]));
@@ -437,7 +461,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
   const wantsBasketball = scope === 'all' || scope === 'basketball';
   const wantsHockey = scope === 'all' || scope === 'hockey';
 
-  let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
+  let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, fteamcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
     wantsFootball ? loadPredictions() : Promise.resolve({ matches: [] }),
     wantsFootball ? loadSportyBetMarket('1x2', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('gg', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
@@ -448,6 +472,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
     wantsFootball ? loadSportyBetMarket('ou45', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('ah', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('corners', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('full_time_team_corners', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('first_half_team_corners', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsFootball ? loadSportyBetMarket('oneup', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
     wantsBasketball ? loadSportyBetMarket('winner', 'basketball', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
@@ -458,7 +483,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
 
   if (wantsFootball && cornerBetRequested(betTypes)) {
     try {
-      predictions = await addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorners, marketHours);
+      predictions = await addOnDemandCornerModels(predictions, f1x2, fcorners, fteamcorners, f1hteamcorners, marketHours);
     } catch (err) {
       console.error('[API-Football] on-demand corner enrichment failed:', err.message);
     }
@@ -466,7 +491,7 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
 
   return buildCandidates({
     predictions,
-    footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou05: fou05, ou15: fou15, ou45: fou45, ah: fah, corners: fcorners, first_half_team_corners: f1hteamcorners, oneup: foneup },
+    footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou05: fou05, ou15: fou15, ou45: fou45, ah: fah, corners: fcorners, full_time_team_corners: fteamcorners, first_half_team_corners: f1hteamcorners, oneup: foneup },
     basketballWinner,
     basketballTotals,
     hockeyWinner,
@@ -720,9 +745,10 @@ async function autoCornerDiagnostics(betTypes) {
   const wantsCorners=Array.isArray(betTypes) && betTypes.some(x=>String(x).includes('corner'));
   if(!wantsCorners) return null;
   try{
-    const [pred, c, h] = await Promise.all([
+    const [pred, c, t, h] = await Promise.all([
       loadPredictions(),
       loadSportyBetMarket('corners'),
+      loadSportyBetMarket('full_time_team_corners'),
       loadSportyBetMarket('first_half_team_corners')
     ]);
     const matches=Array.isArray(pred?.matches)?pred.matches:[];
@@ -730,6 +756,7 @@ async function autoCornerDiagnostics(betTypes) {
       predictionMatches:matches.length,
       matchesWithCornerModel:matches.filter(x=>Number(x?.corners?.totalLambda||0)>0).length,
       sportyCornerRows:Array.isArray(c?.rows)?c.rows.length:0,
+      sportyFullTimeTeamCornerRows:Array.isArray(t?.rows)?t.rows.length:0,
       sportyFirstHalfCornerRows:Array.isArray(h?.rows)?h.rows.length:0,
       apiFootballConfigured:!!(process.env.API_FOOTBALL_KEY||process.env.API_FOOTBALL_API_KEY),
     };
@@ -757,9 +784,15 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const betTypes = Array.isArray(body.betTypes) ? body.betTypes.map(String) : null;
 
     const candidates = await loadAutoCandidates({ sportScope, minProbability, minEdge, leagues, betTypes });
+    // Apply red-flag protection to corner selections on the website too, without changing
+    // the existing behavior of non-corner football/basketball/hockey picks.
+    const cornerProtectedCandidates = candidates.filter(c => {
+      const isCorner=String(c?.marketKind||'').includes('corner') || Number.isFinite(Number(c?.cornerLine));
+      return !isCorner || passesRedFlagFilter(c);
+    });
     const oddsFilteredCandidates = maxMatchOdds == null
-      ? candidates
-      : candidates.filter(c => Number.isFinite(Number(c.odds)) && Number(c.odds) <= maxMatchOdds);
+      ? cornerProtectedCandidates
+      : cornerProtectedCandidates.filter(c => Number.isFinite(Number(c.odds)) && Number(c.odds) <= maxMatchOdds);
     const result = selectAutoBet(oddsFilteredCandidates, { targetOdds, maxSelections });
     if (!result.selections.length) {
       const cornerDiagnostics=await autoCornerDiagnostics(betTypes);
@@ -771,7 +804,8 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
         sportScope,
         requestedBetTypes: betTypes,
         candidateCount: oddsFilteredCandidates.length,
-        candidatesBeforeMaxOddsFilter: candidates.length,
+        candidatesBeforeMaxOddsFilter: cornerProtectedCandidates.length,
+      cornerRedFlagRejected: candidates.length-cornerProtectedCandidates.length,
         maxMatchOdds,
         cornerDiagnostics,
         hint: cornerDiagnostics
@@ -787,10 +821,11 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       minEdge,
       maxSelections,
       maxMatchOdds,
-      candidatesBeforeMaxOddsFilter: candidates.length,
+      candidatesBeforeMaxOddsFilter: cornerProtectedCandidates.length,
+      cornerRedFlagRejected: candidates.length-cornerProtectedCandidates.length,
       betTypes,
       generatedAt: new Date().toISOString(),
-      note: 'Value engine: football uses 1X2, 1UP, Corners O/U, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap +0/+0.25/-0.25. O/U 2.5 is excluded. DNB/AH use settlement-aware fair odds and EV; basketball/hockey remain no-vig market estimates.',
+      note: 'Value engine: football uses 1X2, 1UP, Match Corners O/U, FT Team Corners, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap +0/+0.25/-0.25. O/U 2.5 is excluded. DNB/AH use settlement-aware fair odds and EV; basketball/hockey remain no-vig market estimates.',
     });
   } catch (err) {
     console.error('SportyBet auto-pick error:', err.message);
@@ -1178,10 +1213,36 @@ app.post('/api/sportybet/book', express.json(), async (req, res) => {
   }
 });
 
-// Manual/scheduled trigger to run the refresh job (protected by a shared secret).
-// Pulling every league while respecting football-data.org's rate limit can take
-// a couple of minutes, so this kicks the job off in the background and returns
-// immediately rather than holding the HTTP request open the whole time.
+// One-time/on-demand completed-season corner-history build (protected by the same refresh secret).
+app.post('/api/corners/history/rebuild', express.json(), (req, res) => {
+  if (!process.env.REFRESH_SECRET || req.headers['x-refresh-secret'] !== process.env.REFRESH_SECRET) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  const { spawn } = require('child_process');
+  const requestedSeason=Number(req.body?.season);
+  const requestedLeagues=Array.isArray(req.body?.leagueIds)
+    ? req.body.leagueIds.map(Number).filter(Number.isFinite).join(',')
+    : String(req.body?.leagueIds||'').replace(/[^0-9,]/g,'');
+  const childEnv={...process.env};
+  if(requestedSeason>2000) childEnv.API_FOOTBALL_CORNER_HISTORY_SEASON=String(requestedSeason);
+  if(requestedLeagues) childEnv.API_FOOTBALL_CORNER_HISTORY_LEAGUES=requestedLeagues;
+  if(req.body?.force===true) childEnv.API_FOOTBALL_CORNER_HISTORY_FORCE='true';
+  const child = spawn('node', [path.join(__dirname, 'jobs', 'corner-history.js')], {
+    env: childEnv, detached: true, stdio: ['ignore','pipe','pipe'],
+  });
+  child.stdout.on('data', d=>console.log(d.toString().trim()));
+  child.stderr.on('data', d=>console.error(d.toString().trim()));
+  child.on('exit', code=>console.log(`corner-history job exited with code ${code}`));
+  child.unref();
+  res.status(202).json({
+    ok:true, started:true,
+    season:requestedSeason>2000?requestedSeason:(process.env.API_FOOTBALL_CORNER_HISTORY_SEASON||'previous completed season'),
+    leagueIds:requestedLeagues||process.env.API_FOOTBALL_CORNER_HISTORY_LEAGUES||'39,140,135,78,61,2,40,88,94',
+    message:'Corner history build started. Progress is written to the Render logs and the completed cache is used automatically by the next predictions refresh.'
+  });
+});
+
+// Manual/scheduled trigger to run the normal predictions refresh job (protected by a shared secret).
 app.post('/api/refresh', express.json(), (req, res) => {
   if (!process.env.REFRESH_SECRET || req.headers['x-refresh-secret'] !== process.env.REFRESH_SECRET) {
     return res.status(401).json({ error: 'unauthorized' });
