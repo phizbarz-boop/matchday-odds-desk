@@ -10,7 +10,7 @@ const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
 const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG } = require('./lib/sportybet');
 const { buildCandidates, selectAutoBet, passesRedFlagFilter} = require('./lib/autoPicker');
 const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest, sendTelegramAiMessageTo, telegramAiRequest } = require('./lib/telegram');
-const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, allowedBetIdsForPlan: telegramAiAllowedBetIdsForPlan, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, mainKeyboard: telegramAiMainKeyboard, builderSummary: telegramAiBuilderSummary, builderKeyboard: telegramAiBuilderKeyboard, sportKeyboard: telegramAiSportKeyboard, targetKeyboard: telegramAiTargetKeyboard, probabilityKeyboard: telegramAiProbabilityKeyboard, maxOddKeyboard: telegramAiMaxOddKeyboard, edgeKeyboard: telegramAiEdgeKeyboard, maxGamesKeyboard: telegramAiMaxGamesKeyboard, marketsKeyboard: telegramAiMarketsKeyboard, analyzerSummary: telegramAiAnalyzerSummary, analyzerKeyboard: telegramAiAnalyzerKeyboard, analyzerProbKeyboard: telegramAiAnalyzerProbKeyboard, analyzerHorizonKeyboard: telegramAiAnalyzerHorizonKeyboard, resultKeyboard: telegramAiResultKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
+const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, allowedBetIdsForPlan: telegramAiAllowedBetIdsForPlan, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, addExtraTickets: addTelegramAiExtraTickets, hasTicketCredit: telegramAiHasTicketCredit, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, ticketLimitKeyboard: telegramAiTicketLimitKeyboard, mainKeyboard: telegramAiMainKeyboard, builderSummary: telegramAiBuilderSummary, builderKeyboard: telegramAiBuilderKeyboard, sportKeyboard: telegramAiSportKeyboard, targetKeyboard: telegramAiTargetKeyboard, probabilityKeyboard: telegramAiProbabilityKeyboard, maxOddKeyboard: telegramAiMaxOddKeyboard, edgeKeyboard: telegramAiEdgeKeyboard, maxGamesKeyboard: telegramAiMaxGamesKeyboard, marketsKeyboard: telegramAiMarketsKeyboard, analyzerSummary: telegramAiAnalyzerSummary, analyzerKeyboard: telegramAiAnalyzerKeyboard, analyzerProbKeyboard: telegramAiAnalyzerProbKeyboard, analyzerHorizonKeyboard: telegramAiAnalyzerHorizonKeyboard, resultKeyboard: telegramAiResultKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
 const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
 const { apiFetch, enrichSportyFixtures } = require('./lib/apiFootball');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
@@ -293,9 +293,12 @@ app.get('/api/corners/test-live', async (req, res) => {
       return res.status(503).json({apiFootballConfigured:false,called:false,error:'API_FOOTBALL_KEY is not configured'});
     }
 
-    const c=await loadSportyBetMarket('corners');
+    const [c,h]=await Promise.all([
+      loadSportyBetMarket('corners'),
+      loadSportyBetMarket('first_half_team_corners')
+    ]);
 
-    const source=[...(c?.rows||[])];
+    const source=[...(c?.rows||[]),...(h?.rows||[])];
     const seen=new Set();
     const fixtures=source.filter(x=>{
       const k=String(x.eventId||'') || `${x.home}|${x.away}|${x.kickoffUtc}`;
@@ -309,6 +312,7 @@ app.get('/api/corners/test-live', async (req, res) => {
         apiFootballConfigured:true,
         called:false,
         sportyCornerRows:(c?.rows||[]).length,
+        sportyFirstHalfCornerRows:(h?.rows||[]).length,
         error:'No usable SportyBet corner fixture contained home, away and kickoffUtc'
       });
     }
@@ -346,9 +350,10 @@ app.get('/api/corners/test-live', async (req, res) => {
 
 app.get('/api/corners/diagnostics', async (req, res) => {
   try{
-    const [pred,c]=await Promise.all([
+    const [pred,c,h]=await Promise.all([
       loadPredictions(),
-      loadSportyBetMarket('corners')
+      loadSportyBetMarket('corners'),
+      loadSportyBetMarket('first_half_team_corners')
     ]);
     const matches=Array.isArray(pred?.matches)?pred.matches:[];
     const modeled=matches.filter(x=>Number(x?.corners?.totalLambda||0)>0);
@@ -357,6 +362,7 @@ app.get('/api/corners/diagnostics', async (req, res) => {
       predictionMatches:matches.length,
       matchesWithCornerModel:modeled.length,
       sportyCornerRows:Array.isArray(c?.rows)?c.rows.length:0,
+      sportyFirstHalfCornerRows:Array.isArray(h?.rows)?h.rows.length:0,
       sampleCornerModels:modeled.slice(0,5).map(x=>({
         eventId:x.eventId||x.sportyEventId||null,
         home:x.home,away:x.away,
@@ -384,14 +390,12 @@ app.get('/api/api-football/diagnostics', async (req, res) => {
 
 
 // Live-ish SportyBet price layer. The Parse API key never reaches the browser.
-// Supported football values: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, corners. O/U 2.5 is intentionally not used by the Auto Builder.
-// 1UP and 1H Home/Away Team Corners were removed (owner request) to cut Parse.bot credit usage; they are
-// intentionally not accepted here even though older clients may still request them.
+// Supported football values: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, oneup. O/U 2.5 is intentionally not used by the Auto Builder.
 app.get('/api/sportybet/odds', async (req, res) => {
   try {
     const kind = String(req.query.market || '1x2').toLowerCase();
-    if (!['1x2', 'gg', 'dc', 'dnb', 'ou05', 'ou15', 'ou45', 'ah', 'corners'].includes(kind)) {
-      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, corners' });
+    if (!['1x2', 'gg', 'dc', 'dnb', 'ou05', 'ou15', 'ou45', 'ah', 'oneup', 'corners', 'first_half_team_corners'].includes(kind)) {
+      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, oneup, corners, first_half_team_corners' });
     }
     const payload = await loadSportyBetMarket(kind);
     res.set('Cache-Control', 'public, max-age=60');
@@ -450,7 +454,8 @@ function normalizeSportScope(value) {
 function cornerBetRequested(betTypes) {
   return Array.isArray(betTypes) && betTypes.some(x => {
     const t=String(x || '');
-    return ['corners_over','corners_under'].includes(t);
+    return ['corners_over','corners_under','first_half_home_team_corners','first_half_away_team_corners'].includes(t)
+      || t.startsWith('first_half_home_corners_') || t.startsWith('first_half_away_corners_');
   });
 }
 
@@ -963,15 +968,17 @@ async function autoCornerDiagnostics(betTypes) {
   const wantsCorners=Array.isArray(betTypes) && betTypes.some(x=>String(x).includes('corner'));
   if(!wantsCorners) return null;
   try{
-    const [pred, c] = await Promise.all([
+    const [pred, c, h] = await Promise.all([
       loadPredictions(),
-      loadSportyBetMarket('corners')
+      loadSportyBetMarket('corners'),
+      loadSportyBetMarket('first_half_team_corners')
     ]);
     const matches=Array.isArray(pred?.matches)?pred.matches:[];
     return {
       predictionMatches:matches.length,
       matchesWithCornerModel:matches.filter(x=>Number(x?.corners?.totalLambda||0)>0).length,
       sportyCornerRows:Array.isArray(c?.rows)?c.rows.length:0,
+      sportyFirstHalfCornerRows:Array.isArray(h?.rows)?h.rows.length:0,
       apiFootballConfigured:!!(process.env.API_FOOTBALL_KEY||process.env.API_FOOTBALL_API_KEY),
     };
   }catch(e){
@@ -1097,7 +1104,8 @@ async function runTelegramDailyPicks() {
   // Telegram-only probability plans.
   // Website Auto Builder behavior is intentionally untouched.
   const plans = [
-    { label: '50', targetOdds: 50, minProbability: 70 },
+    { label: '10000', targetOdds: 10000, minProbability: 70 },
+    { label: '1000', targetOdds: 1000, minProbability: 70 },
     { label: '20', targetOdds: 20, minProbability: 70 },
     { label: '10', targetOdds: 10, minProbability: 70 },
     { label: '1.30–1.35 SAFE', targetOdds: 1.325, minProbability: 80, minOdds: 1.30, maxOdds: 1.35 },
@@ -1118,8 +1126,8 @@ async function runTelegramDailyPicks() {
   await sendTelegramMessage([
     '🤖 MATCHDAY ODDS DESK — AUTO PICKS',
     `Scope: ${sportScope.toUpperCase()}`,
-    'Targets: 50, 20, 10, 1.30–1.35 SAFE',
-    '50x / 20x / 10x: minimum probability 70%',
+    'Targets: 10000, 1000, 20, 10, 1.30–1.35 SAFE',
+    '10000x / 1000x / 20x / 10x: minimum probability 70%',
     'SAFE: minimum probability 80% | combined odds 1.30–1.35',
     'Positive-edge requirement: OFF',
     'Red-flag protection: ON',
@@ -1483,6 +1491,7 @@ function telegramAiAccountText(user) {
     `Plan: ${plan.name}${plan.priceNgn ? ` — ₦${plan.priceNgn.toLocaleString()}/month` : ''}`,
     ...(user.plan !== 'free' ? [`Renews/expires: ${expiry}`] : []),
     `Tickets today: ${user.ticketsUsed}/${plan.dailyTickets}`,
+    `Purchased extra tickets: ${Number(user.extraTickets||0)}`,
     `Code analyses today: ${user.analyzesUsed}/${plan.dailyAnalyzes}`,
     `AI chat messages today: ${Number(user.llmMessagesUsed||0)}/${plan.dailyLlmMessages}`,
     `Maximum target odds: ${plan.maxTargetOdds}x`,
@@ -1675,7 +1684,7 @@ Current builder settings: ${JSON.stringify(b)}.
 Valid action values: chat, ticket, builder, plans, account, analyze.
 For ticket actions, only set fields the user clearly requested; the app merges them with current settings.
 Sport values: football, basketball, hockey, all. Do not bypass subscription restrictions.
-Bet IDs: home_win, draw, away_win, corners_over, corners_under, dc_1x, dc_x2, dnb, over05, over15, under45, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, hockey_winner, hockey_over, hockey_under.
+Bet IDs: home_win, draw, away_win, oneup, corners_over, corners_under, first_half_home_team_corners, first_half_away_team_corners, dc_1x, dc_x2, dnb, over05, over15, under45, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, hockey_winner, hockey_over, hockey_under.
 If the user asks to build/rebuild/replace/remove selections but the requested transformation cannot be safely represented by these parameters, explain what can be changed and ask one concise question instead of pretending it was done.
 If discussing betting, do not promise wins or guaranteed profit.`;
   const input=[
@@ -1811,6 +1820,17 @@ async function handleTelegramAiUpdate(update) {
     else if (d === 'result:rebuild') callbackAction='rebuild';
     else if (d === 'result:safer') callbackAction='safer';
     else if (d.startsWith('locked:')) return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(getTelegramAiPlan(user),'this Auto Builder option'),{reply_markup:telegramAiPlanKeyboard()});
+    else if (d.startsWith('extra:')) {
+      const packPlan=d.split(':')[1],current=getTelegramAiPlan(user);
+      if(current.id!==packPlan||!['pro','elite'].includes(packPlan))return sendTelegramAiMessageTo(chatId,'Extra ticket packs require an active matching Pro or Elite subscription.',{reply_markup:telegramAiPlanKeyboard(user)});
+      const pack=packPlan==='elite'?{count:75,price:'₦10,000'}:{count:25,price:'₦2,500'};
+      const admins=[...telegramAiAdminIds()];
+      if(!admins.length)return sendTelegramAiMessageTo(chatId,'⚠️ Payment contact is temporarily unavailable. Please try again later.');
+      const msg=['🎟️ EXTRA AI TICKET REQUEST','',`Plan: ${current.name}`,`Pack: +${pack.count} tickets`,`Amount: ${pack.price}`,`Customer: ${from.first_name||user.firstName||'Customer'}`,`Username: ${from.username?'@'+from.username:'No username'}`,`Telegram ID: ${from.id}`,'','Confirm payment, then press the button below or use:',`/addtickets ${from.id} ${pack.count}`].join('\n');
+      let delivered=0;for(const aid of admins){try{await sendTelegramAiMessageTo(aid,msg,{reply_markup:{inline_keyboard:[[{text:`✅ Add +${pack.count} Tickets`,callback_data:`adminaddtickets:${from.id}:${pack.count}`}]]}});delivered++}catch(e){console.error('Extra-ticket admin notification:',e.message)}}
+      if(!delivered)return sendTelegramAiMessageTo(chatId,'⚠️ I could not reach the payment administrator. Please try again shortly.');
+      return sendTelegramAiMessageTo(chatId,`✅ Request sent. ${pack.price} for +${pack.count} AI tickets. Tickets are added after payment confirmation and expire with your current subscription.`,{reply_markup:telegramAiMainKeyboard()});
+    }
     else if (d.startsWith('plan:')) {
       const chosen=d.split(':')[1];
       if(!['pro','elite'].includes(chosen)) return sendTelegramAiMessageTo(chatId,'Unknown subscription plan.',{reply_markup:telegramAiPlanKeyboard()});
@@ -1856,6 +1876,14 @@ async function handleTelegramAiUpdate(update) {
         'The administrator will contact you in Telegram with the account/payment details. Do not send payment to account details from anyone else claiming to be Matchday AI.'
       ].join('\n'),{reply_markup:{inline_keyboard:[[{text:'⬅️ Plans',callback_data:'action:plans'}],[{text:'🏠 Home',callback_data:'action:home'}]]}});
     }
+    else if (d.startsWith('adminaddtickets:')) {
+      if(!telegramAiIsAdmin(from.id))return sendTelegramAiMessageTo(chatId,'Unauthorized.');
+      const [,target,countRaw]=d.split(':'),count=Math.max(1,parseInt(countRaw,10)||0);
+      const u=await addTelegramAiExtraTickets(redis,target,count);
+      await sendTelegramAiMessageTo(chatId,`✅ Added +${count} AI tickets to ${target}. Balance: ${Number(u.extraTickets||0)}.`);
+      try{await sendTelegramAiMessageTo(target,`🎟️ Payment confirmed. +${count} extra AI tickets added.\nBalance: ${Number(u.extraTickets||0)}.`,{reply_markup:telegramAiMainKeyboard()})}catch{}
+      return;
+    }
     else if (d.startsWith('adminactivate:')) {
       if(!telegramAiIsAdmin(from.id)) return sendTelegramAiMessageTo(chatId,'⛔ Admin only.');
       const parts=d.split(':'),target=parts[1],planId=parts[2],days=Math.max(1,Math.min(365,Number(parts[3]||30)));
@@ -1867,6 +1895,8 @@ async function handleTelegramAiUpdate(update) {
     }
   }
 
+  const addTicketsCmd=text.match(/^\/addtickets\s+(\d+)\s+(\d+)$/i);
+  if(addTicketsCmd&&telegramAiIsAdmin(from.id)){const target=addTicketsCmd[1],count=Math.max(1,parseInt(addTicketsCmd[2],10)||0),u=await addTelegramAiExtraTickets(redis,target,count);await sendTelegramAiMessageTo(chatId,`✅ Added +${count} AI tickets to ${target}. Balance: ${Number(u.extraTickets||0)}.`);try{await sendTelegramAiMessageTo(target,`🎟️ +${count} extra AI tickets have been added. Balance: ${Number(u.extraTickets||0)}.`,{reply_markup:telegramAiMainKeyboard()})}catch{}return}
   const admin=text.match(/^\/activate\s+(\d+)\s+(pro|elite)(?:\s+(\d+))?$/i);
   if(admin&&telegramAiIsAdmin(from.id)){
     const target=admin[1],planId=admin[2].toLowerCase(),days=Math.max(1,Math.min(365,Number(admin[3]||30)));
@@ -1877,7 +1907,7 @@ async function handleTelegramAiUpdate(update) {
 
   if (callbackAction) {
     const plan=getTelegramAiPlan(user);
-    if(user.ticketsUsed>=plan.dailyTickets)return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${plan.dailyTickets} AI tickets. Your allowance resets tomorrow.`,{reply_markup:telegramAiPlanKeyboard()});
+    if(!telegramAiHasTicketCredit(user))return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${plan.dailyTickets} AI tickets and have no extra tickets left. Your daily allowance resets tomorrow, or you can buy an extra pack now.`,{reply_markup:telegramAiTicketLimitKeyboard(user)});
     let req={...(user.preferences.builder||{})};
     if(!Array.isArray(req.betTypes)||!req.betTypes.length)return sendTelegramAiMessageTo(chatId,'⚠️ Select at least one Bet Type before building.',{reply_markup:telegramAiBuilderKeyboard(user)});
     if(callbackAction==='safe'||callbackAction==='safer'){req.safe=true;req.targetOdds=1.325;req.minProbability=Math.max(80,Number(req.minProbability||0));req.maxMatchOdds=req.maxMatchOdds||1.35;}
@@ -1922,7 +1952,7 @@ async function handleTelegramAiUpdate(update) {
     try{const analysis=await analyzeTelegramAiCode(intent.bookingCode,cfg.minProbability,cfg.horizonDays);const use=await consumeTelegramAiUsage(redis,user,'analyze');user=use.user;return sendTelegramAiLongMessage(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiAnalyzerKeyboard()})}catch(e){return sendTelegramAiMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`,{reply_markup:telegramAiAnalyzerKeyboard()})}
   }
   if(intent.intent==='ticket'){
-    const plan=getTelegramAiPlan(user);if(user.ticketsUsed>=plan.dailyTickets)return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${plan.dailyTickets} AI tickets. Your allowance resets tomorrow.`,{reply_markup:telegramAiPlanKeyboard()});
+    const plan=getTelegramAiPlan(user);if(!telegramAiHasTicketCredit(user))return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${plan.dailyTickets} AI tickets and have no extra tickets left. Your daily allowance resets tomorrow, or you can buy an extra pack now.`,{reply_markup:telegramAiTicketLimitKeyboard(user)});
     const req=telegramAiMergeTicketRequest(user,intent);
     const built=await buildTelegramAiTicket(user,req).catch(e=>({error:e.message}));if(built.locked)return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});if(built.error)return sendTelegramAiMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiMainKeyboard()});
     const use=await consumeTelegramAiUsage(redis,user,'ticket');user=use.user;user.lastBuilderRequest=built.request;user.lastBookingCode=built.booking?.shareCode||null;await saveTelegramAiUser(redis,user);return sendTelegramAiLongMessage(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan),{reply_markup:telegramAiResultKeyboard()});
@@ -1946,7 +1976,7 @@ async function handleTelegramAiUpdate(update) {
     }
     if(llm.action==='ticket'){
       const p=getTelegramAiPlan(user);
-      if(user.ticketsUsed>=p.dailyTickets)return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${p.dailyTickets} AI tickets.`,{reply_markup:telegramAiPlanKeyboard()});
+      if(!telegramAiHasTicketCredit(user))return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${p.dailyTickets} AI tickets and have no extra tickets left. Your daily allowance resets tomorrow, or you can buy an extra pack now.`,{reply_markup:telegramAiTicketLimitKeyboard(user)});
       const li=llmTicketIntent(llm),req=telegramAiMergeTicketRequest(user,li);
       const built=await buildTelegramAiTicket(user,req).catch(e=>({error:e.message}));
       if(built.locked)return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});
@@ -1988,7 +2018,7 @@ app.post('/api/telegram/bot/setup', express.json(), async (req, res) => {
 app.get('/api/telegram/status', (req, res) => {
   res.json({
     configured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID && process.env.TELEGRAM_JOB_SECRET),
-    targets: [50, 20, 10, '1.30-1.35 SAFE'],
+    targets: [10000, 1000, 20, 10, '1.30-1.35 SAFE'],
     sportScope: normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all'),
     rules: {
       regular: { minProbability: 70, positiveEdgeRequired: false, redFlagProtection: true },
