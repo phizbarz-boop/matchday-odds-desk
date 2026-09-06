@@ -12,6 +12,7 @@ const { buildCandidates, selectAutoBet, passesRedFlagFilter} = require('./lib/au
 const { sendTelegramMessage } = require('./lib/telegram');
 const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
 const { apiFetch, enrichSportyFixtures } = require('./lib/apiFootball');
+const { addObservedCode, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
 
 let redisClient = null;
 async function getRedis() {
@@ -22,6 +23,15 @@ async function getRedis() {
   redisClient.on('error', (e) => console.error('Redis error', e.message));
   await redisClient.connect();
   return redisClient;
+}
+
+function copyHubEnabled() {
+  return String(process.env.COPY_HUB_ENABLED || '').toLowerCase() === 'true';
+}
+
+function authorizeCopyHub(req) {
+  const secret = process.env.COPY_HUB_SECRET || '';
+  return !!secret && req.headers['x-copy-hub-secret'] === secret;
 }
 
 
@@ -1097,6 +1107,123 @@ async function runTelegramSettlementCheck() {
   }
   return stats;
 }
+
+// Copy Hub is isolated from the Auto Builder and disabled by default.
+// It only reads public source data + existing booking-code data and stores its own leaderboard state.
+app.get('/api/copy/status', async (req, res) => {
+  try {
+    const redis = await getRedis();
+    res.json({
+      enabled: copyHubEnabled(),
+      persistentStorage: !!redis,
+      xConfigured: !!process.env.X_BEARER_TOKEN,
+      rankingWindowDays: Math.max(1, Math.min(365, parseInt(process.env.COPY_HUB_RANKING_DAYS || '30', 10))),
+      note: copyHubEnabled()
+        ? 'Copy Hub is read-only toward public sources and SportyBet booking data.'
+        : 'Copy Hub is installed but disabled. Set COPY_HUB_ENABLED=true when ready.',
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Copy Hub status unavailable' });
+  }
+});
+
+app.get('/api/copy/leaderboard', async (req, res) => {
+  try {
+    if (!copyHubEnabled()) return res.status(404).json({ error: 'Copy Hub is disabled' });
+    const redis = await getRedis();
+    const days = Math.max(1, Math.min(365, Number(req.query.days) || Number(process.env.COPY_HUB_RANKING_DAYS) || 30));
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 30));
+    const source = ['all','x','sportysocial','telegram','manual'].includes(String(req.query.source || '').toLowerCase())
+      ? String(req.query.source).toLowerCase() : 'all';
+    const store = await readCopyHubStore(redis);
+    const leaderboard = buildLeaderboard(store, { days, limit, source });
+    res.json({ days, source, count: leaderboard.length, leaderboard });
+  } catch (err) {
+    console.error('Copy Hub leaderboard error:', err.message);
+    res.status(500).json({ error: 'Could not load Copy Hub leaderboard' });
+  }
+});
+
+app.get('/api/copy/punter/:id', async (req, res) => {
+  try {
+    if (!copyHubEnabled()) return res.status(404).json({ error: 'Copy Hub is disabled' });
+    const redis = await getRedis();
+    const profile = await getPunterProfile(redis, String(req.params.id || ''), Number(req.query.days) || 90);
+    if (!profile) return res.status(404).json({ error: 'Punter not found' });
+    res.json(profile);
+  } catch (err) {
+    res.status(500).json({ error: 'Could not load punter profile' });
+  }
+});
+
+// Protected manual importer. Useful for SportySocial/Telegram seeds before automatic collectors are enabled.
+app.post('/api/copy/import-code', express.json({ limit: '20kb' }), async (req, res) => {
+  try {
+    if (!copyHubEnabled()) return res.status(404).json({ error: 'Copy Hub is disabled' });
+    if (!authorizeCopyHub(req)) return res.status(401).json({ error: 'unauthorized' });
+    const bookingCode = String(req.body?.bookingCode || '').trim().toUpperCase();
+    if (!/^[A-Z0-9_-]{4,24}$/.test(bookingCode)) return res.status(400).json({ error: 'Invalid booking code' });
+    const booking = await getBooking(bookingCode); // validates through the existing SportyBet adapter
+    const redis = await getRedis();
+    const result = await addObservedCode(redis, {
+      punter: {
+        source: req.body?.source,
+        username: req.body?.username,
+        displayName: req.body?.displayName,
+        profileUrl: req.body?.profileUrl,
+        sourceUserId: req.body?.sourceUserId,
+      },
+      bookingCode,
+      booking,
+      sourcePostId: req.body?.sourcePostId,
+      sourceUrl: req.body?.sourceUrl,
+      publishedAt: req.body?.publishedAt,
+      sourceText: req.body?.sourceText,
+    });
+    res.json({ ok: true, created: result.created, entry: result.entry });
+  } catch (err) {
+    console.error('Copy Hub import error:', err.message);
+    res.status(400).json({ error: 'Could not import booking code', detail: process.env.NODE_ENV === 'production' ? undefined : err.message });
+  }
+});
+
+// Official X API only: no cookie scraping, passwords, browser sessions, or account automation.
+app.post('/api/copy/x/scan', express.json({ limit: '8kb' }), async (req, res) => {
+  try {
+    if (!copyHubEnabled()) return res.status(404).json({ error: 'Copy Hub is disabled' });
+    if (!authorizeCopyHub(req)) return res.status(401).json({ error: 'unauthorized' });
+    const redis = await getRedis();
+    const result = await scanXRecent({
+      redis,
+      getBooking,
+      query: req.body?.query,
+      maxResults: req.body?.maxResults || process.env.X_COPY_MAX_RESULTS || 25,
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('Copy Hub X scan error:', err.message);
+    const status = err.code === 'X_NOT_CONFIGURED' ? 503 : (err.status === 429 ? 429 : 502);
+    res.status(status).json({ error: err.code === 'X_NOT_CONFIGURED' ? 'X API is not configured' : 'X scan failed', detail: process.env.NODE_ENV === 'production' ? undefined : err.message });
+  }
+});
+
+app.post('/api/copy/check-settlements', express.json({ limit: '4kb' }), async (req, res) => {
+  try {
+    if (!copyHubEnabled()) return res.status(404).json({ error: 'Copy Hub is disabled' });
+    if (!authorizeCopyHub(req)) return res.status(401).json({ error: 'unauthorized' });
+    const redis = await getRedis();
+    const result = await settleCopyHubPending({
+      redis,
+      getBooking,
+      evaluateBooking,
+      maxChecks: req.body?.maxChecks || process.env.COPY_HUB_MAX_SETTLEMENT_CHECKS || 20,
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('Copy Hub settlement error:', err.message);
+    res.status(502).json({ error: 'Copy Hub settlement check failed', detail: process.env.NODE_ENV === 'production' ? undefined : err.message });
+  }
+});
 
 app.post('/api/telegram/check-settlements', express.json(), async (req, res) => {
   try {
