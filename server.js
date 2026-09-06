@@ -535,8 +535,8 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
   const needFOu45 = wantsFootball && wantsAny(['under45']);
   const needFAh = wantsFootball && wantsAny(['ah_0','ah_plus025','ah_minus025']);
   const needFCorners = wantsFootball && wantsAny(['corners_over','corners_under']);
-  const needF1hCorners = wantsFootball && wantsAny(['first_half_home_team_corners','first_half_away_team_corners']);
-  const needFOneup = wantsFootball && wantsAny(['oneup']);
+  const needF1hCorners = false;
+  const needFOneup = false;
   const needBasketballWinner = wantsBasketball && wantsAny(['basketball_winner']);
   const needBasketballTotals = wantsBasketball && wantsAny(['basketball_over','basketball_under']);
   const needHockeyWinner = wantsHockey && wantsAny(['hockey_winner']);
@@ -788,7 +788,7 @@ function analyzerBetTypesFromBooking(rows, sportScope) {
     if (sportScope === 'football') {
       if (/corner/.test(text)) {
         if (/1st half|first half|1h/.test(text)) {
-          set.add('first_half_home_team_corners'); set.add('first_half_away_team_corners');
+          set.add('corners_over'); set.add('corners_under');
         } else { set.add('corners_over'); set.add('corners_under'); }
       } else if (/over 0 5/.test(text)) set.add('over05');
       else if (/over 1 5/.test(text)) set.add('over15');
@@ -796,7 +796,6 @@ function analyzerBetTypesFromBooking(rows, sportScope) {
       else if (/both teams to score|btts| gg /.test(` ${text} `)) { set.add('gg_yes'); set.add('ng_no'); }
       else if (/double chance|1x|x2/.test(text)) { set.add('dc_1x'); set.add('dc_x2'); }
       else if (/draw no bet|dnb/.test(text)) set.add('dnb');
-      else if (/1up|1 up/.test(text)) set.add('oneup');
       else if (/asian handicap|handicap/.test(text)) { set.add('ah_0'); set.add('ah_plus025'); set.add('ah_minus025'); }
       else if (/1x2|match result|home win|away win|draw/.test(text)) { set.add('home_win'); set.add('draw'); set.add('away_win'); }
       else if (isAnalyzerOverUnderMarket(leg.marketDesc) && isGenericAnalyzerSelection(leg.outcomeDesc)) {
@@ -1044,7 +1043,7 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       redFlagRejected,
       betTypes,
       generatedAt: new Date().toISOString(),
-      note: 'Value engine: football uses 1X2, 1UP, Corners O/U, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap +0/+0.25/-0.25. O/U 2.5 is excluded. DNB/AH use settlement-aware fair odds and EV; basketball/hockey remain no-vig market estimates.',
+      note: 'Value engine: football uses 1X2, Corners O/U, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap +0/+0.25/-0.25. O/U 2.5 is excluded. DNB/AH use settlement-aware fair odds and EV; basketball/hockey remain no-vig market estimates.',
     });
   } catch (err) {
     console.error('SportyBet auto-pick error:', err.message);
@@ -1524,7 +1523,7 @@ function telegramAiTicketText(result, booking, request, plan) {
 function telegramAiBetTypesForSport(planId, sport) {
   const allowed = new Set(telegramAiAllowedBetIdsForPlan(planId));
   const bySport = {
-    football: ['home_win','draw','away_win','oneup','corners_over','corners_under','first_half_home_team_corners','first_half_away_team_corners','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
+    football: ['home_win','draw','away_win','corners_over','corners_under','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
     basketball: ['basketball_winner','basketball_over','basketball_under'],
     hockey: ['hockey_winner','hockey_over','hockey_under'],
   };
