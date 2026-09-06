@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
 const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG } = require('./lib/sportybet');
 const { buildCandidates, selectAutoBet, passesRedFlagFilter} = require('./lib/autoPicker');
-const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest } = require('./lib/telegram');
+const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest, sendTelegramAiMessageTo, telegramAiRequest } = require('./lib/telegram');
 const { PLANS: TELEGRAM_AI_PLANS, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, mainKeyboard: telegramAiMainKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
 const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
 const { apiFetch, enrichSportyFixtures } = require('./lib/apiFootball');
@@ -1387,7 +1387,7 @@ async function handleTelegramAiUpdate(update) {
   let user = await getTelegramAiUser(redis, from.id || chatId, from);
   let text = String(msg.text || '').trim();
   if (callback) {
-    await telegramRequest('answerCallbackQuery', { callback_query_id: callback.id }).catch(()=>{});
+    await telegramAiRequest('answerCallbackQuery', { callback_query_id: callback.id }).catch(()=>{});
     const d=String(callback.data||'');
     if(d==='ticket:safe') text='safe ticket';
     else if(d.startsWith('ticket:')) text=`build ${d.split(':')[1]} odds ticket`;
@@ -1395,11 +1395,11 @@ async function handleTelegramAiUpdate(update) {
     else if(d==='action:account') text='/account';
     else if(d==='action:copy') text='copy rankings';
     else if(d==='action:analyze') {
-      return sendTelegramMessageTo(chatId, '🔎 Send me the SportyBet booking code.\n\nExample: `Analyze RKT1JT`', { parse_mode:'Markdown' });
+      return sendTelegramAiMessageTo(chatId, '🔎 Send me the SportyBet booking code.\n\nExample: `Analyze RKT1JT`', { parse_mode:'Markdown' });
     } else if(d.startsWith('plan:')) {
       const chosen=d.split(':')[1], url=process.env.TELEGRAM_SUPPORT_URL;
       const note=`${chosen==='elite'?'👑 Elite costs ₦20,000/month.':'⭐ Pro costs ₦5,000/month.'}\n\nPayment checkout is not configured yet.${url?' Use the support button below after payment.':' Contact the bot administrator for activation.'}`;
-      return sendTelegramMessageTo(chatId,note,url?{reply_markup:{inline_keyboard:[[{text:'Contact support',url}]]}}:{});
+      return sendTelegramAiMessageTo(chatId,note,url?{reply_markup:{inline_keyboard:[[{text:'Contact support',url}]]}}:{});
     }
   }
 
@@ -1408,50 +1408,50 @@ async function handleTelegramAiUpdate(update) {
   if(admin && telegramAiIsAdmin(from.id)) {
     const target=admin[1], planId=admin[2].toLowerCase(), days=Math.max(1,Math.min(365,Number(admin[3]||30)));
     const activated=await activateTelegramAiPlan(redis,target,planId,days);
-    await sendTelegramMessageTo(chatId,`✅ Activated ${planId.toUpperCase()} for Telegram user ${target} for ${days} days.`);
-    await sendTelegramMessageTo(target,`🎉 Your Matchday AI account is now ${planId.toUpperCase()} for ${days} days.`,{reply_markup:telegramAiMainKeyboard()}).catch(()=>{});
+    await sendTelegramAiMessageTo(chatId,`✅ Activated ${planId.toUpperCase()} for Telegram user ${target} for ${days} days.`);
+    await sendTelegramAiMessageTo(target,`🎉 Your Matchday AI account is now ${planId.toUpperCase()} for ${days} days.`,{reply_markup:telegramAiMainKeyboard()}).catch(()=>{});
     return;
   }
 
   const intent=parseTelegramAiRequest(text);
   if(intent.intent==='menu') {
     const plan=getTelegramAiPlan(user);
-    return sendTelegramMessageTo(chatId,[`🤖 Welcome${user.firstName?`, ${user.firstName}`:''} — I’m Matchday AI.`,`Your plan: ${plan.name}`,'','Tell me what you want in normal language, for example:','“Build a football 20x ticket, max odd 1.25.”','“Give me a safe ticket.”','“Analyze RKT1JT.”','','Or use the buttons below.'].join('\n'),{reply_markup:telegramAiMainKeyboard()});
+    return sendTelegramAiMessageTo(chatId,[`🤖 Welcome${user.firstName?`, ${user.firstName}`:''} — I’m Matchday AI.`,`Your plan: ${plan.name}`,'','Tell me what you want in normal language, for example:','“Build a football 20x ticket, max odd 1.25.”','“Give me a safe ticket.”','“Analyze RKT1JT.”','','Or use the buttons below.'].join('\n'),{reply_markup:telegramAiMainKeyboard()});
   }
-  if(intent.intent==='help') return sendTelegramMessageTo(chatId,'🤖 You can talk to me naturally.\n\nExamples:\n• Build a 10x football ticket\n• Build 50 odds, max odd 1.30\n• Safe ticket\n• Analyze RKT1JT\n• My account\n• Plans',{reply_markup:telegramAiMainKeyboard()});
-  if(intent.intent==='plans') return sendTelegramMessageTo(chatId,telegramAiPlansText(),{reply_markup:telegramAiPlanKeyboard()});
-  if(intent.intent==='account') return sendTelegramMessageTo(chatId,telegramAiAccountText(user),{reply_markup:telegramAiMainKeyboard()});
+  if(intent.intent==='help') return sendTelegramAiMessageTo(chatId,'🤖 You can talk to me naturally.\n\nExamples:\n• Build a 10x football ticket\n• Build 50 odds, max odd 1.30\n• Safe ticket\n• Analyze RKT1JT\n• My account\n• Plans',{reply_markup:telegramAiMainKeyboard()});
+  if(intent.intent==='plans') return sendTelegramAiMessageTo(chatId,telegramAiPlansText(),{reply_markup:telegramAiPlanKeyboard()});
+  if(intent.intent==='account') return sendTelegramAiMessageTo(chatId,telegramAiAccountText(user),{reply_markup:telegramAiMainKeyboard()});
   if(intent.intent==='copy') {
     const plan=getTelegramAiPlan(user);
-    if(!plan.copyHub) return sendTelegramMessageTo(chatId,telegramAiUpgradeText(plan,'Copy Hub punter rankings'),{reply_markup:telegramAiPlanKeyboard()});
-    if(!copyHubEnabled()) return sendTelegramMessageTo(chatId,'🏆 Copy Hub is currently disabled by the administrator.');
+    if(!plan.copyHub) return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(plan,'Copy Hub punter rankings'),{reply_markup:telegramAiPlanKeyboard()});
+    if(!copyHubEnabled()) return sendTelegramAiMessageTo(chatId,'🏆 Copy Hub is currently disabled by the administrator.');
     const board=buildLeaderboard(await readCopyHubStore(redis),{days:30,limit:10,source:'all'});
-    if(!board.length) return sendTelegramMessageTo(chatId,'🏆 No settled Copy Hub ranking data is available yet.');
+    if(!board.length) return sendTelegramAiMessageTo(chatId,'🏆 No settled Copy Hub ranking data is available yet.');
     const lines=['🏆 MATCHDAY COPY RANKINGS — 30 DAYS',''];
     board.slice(0,10).forEach((x,i)=>lines.push(`${i+1}. ${x.displayName||x.username||x.punterId||'Punter'} — ${Number(x.winRate||0).toFixed(1)}% win rate · ${Number(x.settled||0)} settled`));
-    return sendTelegramMessageTo(chatId,lines.join('\n'));
+    return sendTelegramAiMessageTo(chatId,lines.join('\n'));
   }
   if(intent.intent==='analyze') {
     const plan=getTelegramAiPlan(user);
-    if(plan.dailyAnalyzes<=0) return sendTelegramMessageTo(chatId,telegramAiUpgradeText(plan,'SportyBet code analysis'),{reply_markup:telegramAiPlanKeyboard()});
-    if(user.analyzesUsed >= plan.dailyAnalyzes) return sendTelegramMessageTo(chatId,`⛔ You have used today's ${plan.dailyAnalyzes} code analyses. Your daily allowance resets tomorrow.`,{reply_markup:telegramAiPlanKeyboard()});
-    await sendTelegramMessageTo(chatId,`🔎 Analyzing ${intent.bookingCode} against current Matchday markets…`);
+    if(plan.dailyAnalyzes<=0) return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(plan,'SportyBet code analysis'),{reply_markup:telegramAiPlanKeyboard()});
+    if(user.analyzesUsed >= plan.dailyAnalyzes) return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${plan.dailyAnalyzes} code analyses. Your daily allowance resets tomorrow.`,{reply_markup:telegramAiPlanKeyboard()});
+    await sendTelegramAiMessageTo(chatId,`🔎 Analyzing ${intent.bookingCode} against current Matchday markets…`);
     try {
       const analysis=await analyzeTelegramAiCode(intent.bookingCode,70);
       const use=await consumeTelegramAiUsage(redis,user,'analyze'); user=use.user;
-      return sendTelegramMessageTo(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiMainKeyboard()});
-    } catch(e){ return sendTelegramMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`); }
+      return sendTelegramAiMessageTo(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiMainKeyboard()});
+    } catch(e){ return sendTelegramAiMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`); }
   }
   if(intent.intent==='ticket') {
     const plan=getTelegramAiPlan(user);
-    if(user.ticketsUsed >= plan.dailyTickets) return sendTelegramMessageTo(chatId,`⛔ You have used today's ${plan.dailyTickets} AI tickets. Your allowance resets tomorrow.`,{reply_markup:telegramAiPlanKeyboard()});
+    if(user.ticketsUsed >= plan.dailyTickets) return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${plan.dailyTickets} AI tickets. Your allowance resets tomorrow.`,{reply_markup:telegramAiPlanKeyboard()});
     const built=await buildTelegramAiTicket(user,intent).catch(e=>({error:e.message}));
-    if(built.locked) return sendTelegramMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});
-    if(built.error) return sendTelegramMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiMainKeyboard()});
+    if(built.locked) return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});
+    if(built.error) return sendTelegramAiMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiMainKeyboard()});
     const use=await consumeTelegramAiUsage(redis,user,'ticket'); user=use.user;
-    return sendTelegramMessageTo(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan),{reply_markup:telegramAiMainKeyboard()});
+    return sendTelegramAiMessageTo(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan),{reply_markup:telegramAiMainKeyboard()});
   }
-  return sendTelegramMessageTo(chatId,'I can build and analyze Matchday tickets. Try: “Build a football 10x ticket”, “Safe ticket”, “Analyze RKT1JT”, or tap a button below.',{reply_markup:telegramAiMainKeyboard()});
+  return sendTelegramAiMessageTo(chatId,'I can build and analyze Matchday tickets. Try: “Build a football 10x ticket”, “Safe ticket”, “Analyze RKT1JT”, or tap a button below.',{reply_markup:telegramAiMainKeyboard()});
 }
 
 
@@ -1467,14 +1467,15 @@ app.post('/api/telegram/bot/webhook', express.json({ limit: '1mb' }), async (req
 
 app.post('/api/telegram/bot/setup', express.json(), async (req, res) => {
   try {
+    if(!process.env.TELEGRAM_AI_BOT_TOKEN) return res.status(400).json({error:'Set TELEGRAM_AI_BOT_TOKEN first'});
     const secret=process.env.TELEGRAM_JOB_SECRET;
     if(!secret || req.headers['x-telegram-job-secret']!==secret) return res.status(401).json({error:'unauthorized'});
     const base=String(process.env.MATCHDAY_BASE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/,'');
     if(!/^https:\/\//i.test(base)) return res.status(400).json({error:'Set MATCHDAY_BASE_URL to the public HTTPS Render URL first'});
     const webhookSecret=String(process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
     if(!webhookSecret) return res.status(400).json({error:'Set TELEGRAM_WEBHOOK_SECRET first'});
-    const webhook=await telegramRequest('setWebhook',{url:`${base}/api/telegram/bot/webhook`,secret_token:webhookSecret,allowed_updates:['message','callback_query'],drop_pending_updates:false});
-    await telegramRequest('setMyCommands',{commands:[{command:'start',description:'Open Matchday AI'},{command:'plans',description:'View Free, Pro and Elite plans'},{command:'account',description:'View plan and daily usage'},{command:'help',description:'How to use Matchday AI'}]});
+    const webhook=await telegramAiRequest('setWebhook',{url:`${base}/api/telegram/bot/webhook`,secret_token:webhookSecret,allowed_updates:['message','callback_query'],drop_pending_updates:false});
+    await telegramAiRequest('setMyCommands',{commands:[{command:'start',description:'Open Matchday AI'},{command:'plans',description:'View Free, Pro and Elite plans'},{command:'account',description:'View plan and daily usage'},{command:'help',description:'How to use Matchday AI'}]});
     res.json({ok:true,webhook,webhookUrl:`${base}/api/telegram/bot/webhook`});
   } catch(err){ res.status(502).json({error:'Telegram AI setup failed',detail:process.env.NODE_ENV==='production'?undefined:err.message}); }
 });
@@ -1492,6 +1493,7 @@ app.get('/api/telegram/status', (req, res) => {
     scheduler: 'GitHub Actions',
     aiBot: {
       enabled: String(process.env.TELEGRAM_AI_ENABLED || 'true').toLowerCase() !== 'false',
+      tokenConfigured: Boolean(process.env.TELEGRAM_AI_BOT_TOKEN),
       webhookConfigured: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET),
       plans: { free: 0, pro: 5000, elite: 20000 },
     },

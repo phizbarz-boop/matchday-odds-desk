@@ -14,10 +14,11 @@ The limits are enforced server-side per Telegram user. A Redis service is strong
 
 ## Required Render environment variables
 
-Keep the existing `TELEGRAM_BOT_TOKEN` and `TELEGRAM_JOB_SECRET`.
+Keep the existing `TELEGRAM_BOT_TOKEN` and `TELEGRAM_JOB_SECRET`. `TELEGRAM_BOT_TOKEN` remains dedicated to your existing scheduled/channel bot.
 
 Add:
 
+- `TELEGRAM_AI_BOT_TOKEN` = token from BotFather for the NEW customer-facing Matchday AI bot. Do not reuse `TELEGRAM_BOT_TOKEN`.
 - `TELEGRAM_WEBHOOK_SECRET` = a long random value. Telegram sends it back in the webhook secret header.
 - `MATCHDAY_BASE_URL` = your public Render URL, e.g. `https://your-service.onrender.com`
 - `TELEGRAM_ADMIN_IDS` = your Telegram numeric user ID. Multiple admins can be comma-separated.
