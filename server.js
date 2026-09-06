@@ -1117,6 +1117,7 @@ app.get('/api/copy/status', async (req, res) => {
       enabled: copyHubEnabled(),
       persistentStorage: !!redis,
       xConfigured: !!process.env.X_BEARER_TOKEN,
+      globalCodeOwnership: true,
       rankingWindowDays: Math.max(1, Math.min(365, parseInt(process.env.COPY_HUB_RANKING_DAYS || '30', 10))),
       note: copyHubEnabled()
         ? 'Copy Hub is read-only toward public sources and SportyBet booking data.'

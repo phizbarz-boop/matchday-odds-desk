@@ -86,6 +86,9 @@ GET /api/copy/punter/:id?days=90
 - Uses a standardized 1-unit stake model; it does **not** claim access to a punter's real SportyBet earnings.
 - A conservative Bayesian win-rate component reduces one-win leaderboard manipulation.
 - Codes are de-duplicated per punter.
+- Global booking-code ownership is enforced: the earliest verified public publisher is marked `ORIGINAL`; later accounts sharing the same code are marked `REPOST` and receive no win-rate, ROI, or Copy Score credit.
+- Existing stored records are reconciled automatically, so discovering an earlier verified publisher later can reassign ownership without wiping Redis.
+- Settlement checks are performed once per unique booking code and the result is mirrored to all observed copies, reducing duplicate SportyBet/Parse API usage.
 - X source posts are de-duplicated by post ID.
 - If the booking payload provides kickoff times, a code is ranking-eligible only when Matchday itself captured it before the earliest kickoff. The X post timestamp alone is not trusted because posts can be edited.
 - X scan validation attempts are capped with `X_COPY_MAX_VALIDATIONS` to control SportyBet parser/API-credit usage.
