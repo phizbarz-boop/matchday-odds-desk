@@ -37,6 +37,7 @@ function authorizeCopyHub(req) {
 
 
 const sportyMemoryCache = new Map();
+const sportyMarketInFlight = new Map();
 const bookingMemoryRate = new Map();
 const telegramSendMemory = new Map();
 
@@ -160,7 +161,7 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   const kickoffBufferSeconds = Math.max(0, Number(options.kickoffBufferSeconds ?? process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS ?? 60) || 0);
   // Keep Analyzer's 14/21-day cache completely separate from the normal Auto Builder cache.
   // Versioned cache key: bumping this invalidates stale/empty market caches after parser changes.
-  const cacheVersion = String(process.env.SPORTYBET_CACHE_VERSION || '6');
+  const cacheVersion = String(process.env.SPORTYBET_CACHE_VERSION || '7');
   const cacheKey = `sportybet:v${cacheVersion}:${sport}:${kind}:h${hours}:p${maxPages}`;
   const client = await getRedis();
   const nowMs = Date.now();
@@ -181,32 +182,43 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
     if (Array.isArray(filteredCached?.rows) && filteredCached.rows.length > 0) {
       return filteredCached;
     }
+    // A recently fetched empty result is a short negative cache. Serve it quickly
+    // until SPORTYBET_EMPTY_CACHE_SECONDS expires instead of hammering the upstream API.
+    const age = sportyPayloadAgeSeconds(cached, nowMs);
+    const emptyTtl = Math.max(15, Math.min(300, parseInt(process.env.SPORTYBET_EMPTY_CACHE_SECONDS || '60', 10)));
+    if (age <= emptyTtl) return filteredCached;
     if (client) await client.del(cacheKey).catch(()=>{});
     else sportyMemoryCache.delete(cacheKey);
   }
 
-  const payload = sport === 'football'
-    ? await getFootballMarket(kind, { hours, maxPages })
-    : await getSportMarket(sport, kind, { hours, maxPages });
+  // Collapse concurrent requests for the same sport/market/window into one upstream call.
+  // This is important because the Auto Builder and Analyzer can ask for overlapping markets.
+  let refreshPromise = sportyMarketInFlight.get(cacheKey);
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      const payload = sport === 'football'
+        ? await getFootballMarket(kind, { hours, maxPages })
+        : await getSportMarket(sport, kind, { hours, maxPages });
 
-  const filteredPayload = filterUpcomingSportyPayload(payload, { nowMs: Date.now(), kickoffBufferSeconds });
-  // Do not persist zero-outcome responses. A temporary empty Parse/SportyBet response
-  // must not make the website appear empty for SPORTYBET_CACHE_SECONDS (default 12h).
-  if (Array.isArray(filteredPayload?.rows) && filteredPayload.rows.length > 0) {
-    if (client) {
-      await client.set(cacheKey, JSON.stringify(payload), { EX: ttlSeconds });
-    } else {
-      sportyMemoryCache.set(cacheKey, {
-        expiresAt: nowMs + ttlSeconds * 1000,
-        payload,
-      });
-    }
-  } else {
-    if (client) await client.del(cacheKey).catch(()=>{});
-    else sportyMemoryCache.delete(cacheKey);
-    console.warn(`[SportyBet] ${sport}/${kind}: 0 upcoming outcomes; empty response not cached so next request can refresh.`);
+      const filteredPayload = filterUpcomingSportyPayload(payload, { nowMs: Date.now(), kickoffBufferSeconds });
+      if (Array.isArray(filteredPayload?.rows) && filteredPayload.rows.length > 0) {
+        if (client) await client.set(cacheKey, JSON.stringify(payload), { EX: ttlSeconds });
+        else sportyMemoryCache.set(cacheKey, { expiresAt: Date.now() + ttlSeconds * 1000, payload });
+      } else {
+        // Short negative cache: prevents every page click from making another slow Parse call,
+        // while still retrying quickly enough to discover newly-added SportyBet fixtures.
+        const emptyTtl = Math.max(15, Math.min(300, parseInt(process.env.SPORTYBET_EMPTY_CACHE_SECONDS || '60', 10)));
+        const emptyPayload = { ...(payload || {}), rows: [], fetchedAt: new Date().toISOString() };
+        if (client) await client.set(cacheKey, JSON.stringify(emptyPayload), { EX: emptyTtl });
+        else sportyMemoryCache.set(cacheKey, { expiresAt: Date.now() + emptyTtl * 1000, payload: emptyPayload });
+        console.warn(`[SportyBet] ${sport}/${kind}: 0 upcoming outcomes; retry cache ${emptyTtl}s.`);
+      }
+      return filteredPayload;
+    })();
+    sportyMarketInFlight.set(cacheKey, refreshPromise);
+    refreshPromise.finally(() => sportyMarketInFlight.delete(cacheKey)).catch(()=>{});
   }
-  return filteredPayload;
+  return await refreshPromise;
 }
 
 async function allowBookingRequest(req) {
