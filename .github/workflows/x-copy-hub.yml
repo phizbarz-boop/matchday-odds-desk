@@ -1,0 +1,33 @@
+name: X Copy Hub Discovery
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nigeria (WAT) is UTC+1. Runs at 07:20 and 19:20 WAT each day,
+    # twenty minutes after the SportySocial collector.
+    - cron: '20 6,18 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x-copy-hub-discovery
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Discover and rank SportyBet punters from X
+        env:
+          COPY_HUB_SECRET: ${{ secrets.COPY_HUB_SECRET }}
+          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL }}
+        run: |
+          test -n "$COPY_HUB_SECRET" || (echo "Missing GitHub secret COPY_HUB_SECRET" && exit 1)
+          BASE_URL="${MATCHDAY_BASE_URL:-https://matchday-odds-desk.onrender.com}"
+          curl --fail-with-body --show-error --silent --max-time 600 \
+            -X POST "$BASE_URL/api/copy/x/scan" \
+            -H "Content-Type: application/json" \
+            -H "x-copy-hub-secret: $COPY_HUB_SECRET" \
+            --data '{}'
