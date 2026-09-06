@@ -105,3 +105,7 @@ GET /api/copy/punter/:id?days=90
 7. Only after observing stable results, add a scheduled GitHub Action for X scans and settlement checks.
 
 The Auto Builder, fixture refresh, analyzer, booking generation, and Telegram automation do not depend on Copy Hub and continue to work if Copy Hub is disabled or an X request fails.
+
+## SportySocial automatic collection
+
+See `SPORTYSOCIAL_AUTOMATION_SETUP.md`. The automated collector runs in GitHub Actions twice daily and sends only sanitized Code Hub records to Render. SportyBet login credentials are not stored in Render.

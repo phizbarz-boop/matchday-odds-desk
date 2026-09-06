@@ -12,7 +12,7 @@ const { buildCandidates, selectAutoBet, passesRedFlagFilter} = require('./lib/au
 const { sendTelegramMessage } = require('./lib/telegram');
 const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
 const { apiFetch, enrichSportyFixtures } = require('./lib/apiFootball');
-const { addObservedCode, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
+const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
 
 let redisClient = null;
 async function getRedis() {
@@ -1117,7 +1117,10 @@ app.get('/api/copy/status', async (req, res) => {
       enabled: copyHubEnabled(),
       persistentStorage: !!redis,
       xConfigured: !!process.env.X_BEARER_TOKEN,
+      xDiscoveryMode: 'broad-sportybet-plus-boom',
+      xAutomationWorkflowIncluded: true,
       globalCodeOwnership: true,
+      sportySocialBatchImport: true,
       rankingWindowDays: Math.max(1, Math.min(365, parseInt(process.env.COPY_HUB_RANKING_DAYS || '30', 10))),
       note: copyHubEnabled()
         ? 'Copy Hub is read-only toward public sources and SportyBet booking data.'
@@ -1188,6 +1191,24 @@ app.post('/api/copy/import-code', express.json({ limit: '20kb' }), async (req, r
   }
 });
 
+
+// Protected endpoint used by the twice-daily GitHub Playwright collector.
+// It accepts only sanitized SportySocial feed records; credentials/cookies never reach Render.
+app.post('/api/copy/sportysocial/import-batch', express.json({ limit: '5mb' }), async (req, res) => {
+  try {
+    if (!copyHubEnabled()) return res.status(404).json({ error: 'Copy Hub is disabled' });
+    if (!authorizeCopyHub(req)) return res.status(401).json({ error: 'unauthorized' });
+    const redis = await getRedis();
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!items.length) return res.status(400).json({ error: 'No SportySocial items supplied' });
+    const result = await importSportySocialBatch(redis, items);
+    res.json({ ok: true, source: 'sportysocial', ...result });
+  } catch (err) {
+    console.error('Copy Hub SportySocial import error:', err.message);
+    res.status(400).json({ error: 'Could not import SportySocial batch', detail: process.env.NODE_ENV === 'production' ? undefined : err.message });
+  }
+});
+
 // Official X API only: no cookie scraping, passwords, browser sessions, or account automation.
 app.post('/api/copy/x/scan', express.json({ limit: '8kb' }), async (req, res) => {
   try {
@@ -1197,7 +1218,7 @@ app.post('/api/copy/x/scan', express.json({ limit: '8kb' }), async (req, res) =>
     const result = await scanXRecent({
       redis,
       getBooking,
-      query: req.body?.query,
+      query: req.body?.queries || req.body?.query,
       maxResults: req.body?.maxResults || process.env.X_COPY_MAX_RESULTS || 25,
     });
     res.json({ ok: true, ...result });
