@@ -79,3 +79,7 @@ A successful response includes fields such as:
 - `invalid`
 
 Only valid SportyBet codes enter the performance system. Global ORIGINAL/REPOST ownership still applies, so later reposters do not receive ranking credit for another punter's code.
+
+## High-confidence booking-code filter
+
+The X collector filters candidates before calling Parse.bot. Generic English words after phrases such as `code from`, `code ready`, and `code here` are not treated as booking codes. Loose BOOM discovery requires a mixed alpha-numeric token; numeric-only candidates are accepted only from stronger explicit/URL-style code contexts. This reduces wasted validation credits while preserving SportyBet share URLs and normal codes such as `RY16XF`, `4C6QCU`, `SAV9HY`, and `QTGF6F`.
