@@ -58,3 +58,17 @@ If SportyBet changes its login UI, or starts requiring CAPTCHA/OTP for the colle
 The collector tries SportyBet mobile, desktop results, and lite login surfaces because headless GitHub sessions can receive a different login layout from a normal browser. It also checks frames and supports a two-step login flow.
 
 If SportyBet changes its login UI and the job fails, the workflow uploads a short-lived `sportysocial-login-diagnostics` artifact containing a screenshot plus non-sensitive input/button metadata. It intentionally does not record input values, cookies, authorization headers, passwords, or session tokens.
+
+
+## Login compatibility update
+
+The collector now opens SportyBet Lite's dedicated login URL before looking for the login inputs. This fixes GitHub-hosted runners that receive the Lite landing page with a **Log In** link but no form fields on the landing page itself.
+
+`SPORTYSOCIAL_LOGIN_ID` is normalized automatically. Any of these common Nigerian formats are accepted and converted to the 10-digit number SportyBet expects in the mobile-number field:
+
+- `09012345678`
+- `+2349012345678`
+- `2349012345678`
+- `+23409012345678`
+
+The collector does not bypass OTP, CAPTCHA, or security verification. If SportyBet requires one, the scheduled job stops safely and reports it.

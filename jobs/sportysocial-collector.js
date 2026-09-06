@@ -11,7 +11,16 @@ const BASE = 'https://www.sportybet.com';
 const CODE_HUB_URL = `${BASE}/ng/m/code-hub/following?tab=booking_codes`;
 const SUGGESTED_FRAGMENT = '/api/ng/orders/socialpage/my/suggested';
 const MATCHDAY_BASE_URL = String(process.env.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com').replace(/\/$/, '');
-const LOGIN_ID = String(process.env.SPORTYSOCIAL_LOGIN_ID || '').trim();
+const LOGIN_ID_RAW = String(process.env.SPORTYSOCIAL_LOGIN_ID || '').trim();
+
+function normalizeNigeriaLoginId(raw) {
+  let digits = String(raw || '').replace(/\D/g, '');
+  if (digits.startsWith('234')) digits = digits.slice(3);
+  if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1);
+  return digits;
+}
+
+const LOGIN_ID = normalizeNigeriaLoginId(LOGIN_ID_RAW);
 const PASSWORD = String(process.env.SPORTYSOCIAL_PASSWORD || '');
 const COPY_HUB_SECRET = String(process.env.COPY_HUB_SECRET || '');
 const MAX_PAGES = Math.max(1, Math.min(20, Number(process.env.SPORTYSOCIAL_MAX_PAGES || 5)));
@@ -140,6 +149,24 @@ async function findLoginFrame(page) {
   return null;
 }
 
+async function findLoginHref(page) {
+  for (const frame of page.frames()) {
+    const candidates = [
+      frame.getByRole('link', { name: /^log\s*in$/i }),
+      frame.locator('a:has-text("Log In")'),
+      frame.locator('a:has-text("Login")'),
+    ];
+    for (const loc of candidates) {
+      try {
+        if (!await loc.count()) continue;
+        const href = await loc.first().getAttribute('href');
+        if (href) return new URL(href, frame.url() || page.url()).toString();
+      } catch {}
+    }
+  }
+  return null;
+}
+
 async function clickLoginEntry(page) {
   for (const frame of page.frames()) {
     const clicked = await clickFirstVisible(frame, [
@@ -155,6 +182,35 @@ async function clickLoginEntry(page) {
   return false;
 }
 
+async function openLoginForm(page, surfaceUrl) {
+  await page.goto(surfaceUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForTimeout(1200);
+
+  let found = await findLoginFrame(page);
+  if (found) return found;
+
+  let loginHref = await findLoginHref(page);
+  if (!loginHref && /\/ng\/lite\/?(?:$|\?)/i.test(page.url())) {
+    loginHref = `${BASE}/ng/lite/login?fromUrl=%2Fng%2Flite`;
+  }
+  if (loginHref) {
+    await page.goto(loginHref, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForTimeout(1800);
+    found = await findLoginFrame(page);
+    if (found) return found;
+  }
+
+  const clicked = await clickLoginEntry(page).catch(() => false);
+  if (clicked) {
+    await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(1600);
+    found = await findLoginFrame(page);
+    if (found) return found;
+  }
+
+  return null;
+}
+
 async function submitLogin(frame) {
   return clickFirstVisible(frame, [
     frame.getByRole('button', { name: /^log\s*in$/i }),
@@ -167,15 +223,7 @@ async function submitLogin(frame) {
 }
 
 async function tryLoginSurface(page, url) {
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await page.waitForTimeout(1300);
-
-  let found = await findLoginFrame(page);
-  if (!found) {
-    await clickLoginEntry(page).catch(() => false);
-    await page.waitForTimeout(1000);
-    found = await findLoginFrame(page);
-  }
+  let found = await openLoginForm(page, url);
   if (!found) return false;
 
   let { frame, id, pw } = found;
@@ -234,7 +282,11 @@ async function writeLoginDiagnostics(page) {
         autocomplete: n.getAttribute('autocomplete') || '',
       }))).catch(() => []);
       const buttons = await frame.locator('button, a').evaluateAll((nodes) => nodes.slice(0, 40).map((n) => (n.textContent || '').trim()).filter(Boolean)).catch(() => []);
-      frames.push({ url: frame.url(), inputs, buttons });
+      const links = await frame.locator('a').evaluateAll((nodes) => nodes.slice(0, 40).map((n) => ({
+        text: (n.textContent || '').trim().slice(0, 80),
+        href: n.getAttribute('href') || '',
+      })).filter((x) => x.text || x.href)).catch(() => []);
+      frames.push({ url: frame.url(), inputs, buttons, links });
     }
     fs.writeFileSync('artifacts/sportysocial-login-diagnostics.json', JSON.stringify({
       url: page.url(),
@@ -252,9 +304,10 @@ async function ensureLoggedIn(page) {
   // always render the same mobile modal as a normal browser, so try several normal
   // site entry points without bypassing any verification challenge.
   const loginSurfaces = [
+    `${BASE}/ng/lite/login?fromUrl=%2Fng%2Flite`,
+    `${BASE}/ng/lite/`,
     `${BASE}/ng/m/`,
     `${BASE}/ng/liveResult`,
-    `${BASE}/ng/lite/`,
   ];
 
   for (const url of loginSurfaces) {
@@ -269,7 +322,7 @@ async function ensureLoggedIn(page) {
   }
 
   await writeLoginDiagnostics(page);
-  throw new Error('LOGIN_FORM_NOT_FOUND: SportyBet login could not be completed on the mobile, desktop, or lite login surfaces. A safe diagnostic artifact was saved by the workflow.');
+  throw new Error('LOGIN_FAILED: SportyBet login could not be completed after opening the direct Lite login page plus mobile/desktop fallbacks. A safe diagnostic artifact was saved by the workflow.');
 }
 
 async function collectSportySocial(page) {
