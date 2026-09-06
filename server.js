@@ -1247,8 +1247,13 @@ app.get('/api/copy/leaderboard', async (req, res) => {
     const source = ['all','x','sportysocial','telegram','manual'].includes(String(req.query.source || '').toLowerCase())
       ? String(req.query.source).toLowerCase() : 'all';
     const store = await readCopyHubStore(redis);
-    const leaderboard = buildLeaderboard(store, { days, limit, source });
-    res.json({ days, source, count: leaderboard.length, leaderboard });
+    const trackedRows = buildLeaderboard(store, { days, limit: 100, source, settledOnly: false });
+    const leaderboard = buildLeaderboard(store, { days, limit, source, settledOnly: true });
+    const trackedPunterCount = trackedRows.length;
+    const trackedCodeCount = trackedRows.reduce((n,x)=>n+Number(x.codes||0),0);
+    const pendingCodeCount = trackedRows.reduce((n,x)=>n+Number(x.pending||0),0);
+    const settledCodeCount = trackedRows.reduce((n,x)=>n+Number(x.settled||0),0);
+    res.json({ days, source, count: leaderboard.length, trackedPunterCount, trackedCodeCount, pendingCodeCount, settledCodeCount, leaderboard });
   } catch (err) {
     console.error('Copy Hub leaderboard error:', err.message);
     res.status(500).json({ error: 'Could not load Copy Hub leaderboard' });
@@ -1810,8 +1815,18 @@ async function handleTelegramAiUpdate(update) {
   if(intent.intent==='copy'){
     const plan=getTelegramAiPlan(user);if(!plan.copyHub)return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(plan,'Copy Hub punter rankings'),{reply_markup:telegramAiPlanKeyboard()});
     if(!copyHubEnabled())return sendTelegramAiMessageTo(chatId,'🏆 Copy Hub is currently disabled by the administrator.');
-    const board=buildLeaderboard(await readCopyHubStore(redis),{days:30,limit:10,source:'all'});if(!board.length)return sendTelegramAiMessageTo(chatId,'🏆 No settled Copy Hub ranking data is available yet.');
-    const lines=['🏆 MATCHDAY COPY RANKINGS — 30 DAYS',''];board.slice(0,10).forEach((x,i)=>lines.push(`${i+1}. ${x.displayName||x.username||x.punterId||'Punter'} — ${Number(x.winRate||0).toFixed(1)}% win rate · ${Number(x.settled||0)} settled`));return sendTelegramAiMessageTo(chatId,lines.join('\n'),{reply_markup:telegramAiMainKeyboard()});
+    const copyStore=await readCopyHubStore(redis);
+    const trackedBoard=buildLeaderboard(copyStore,{days:30,limit:100,source:'all',settledOnly:false});
+    const board=buildLeaderboard(copyStore,{days:30,limit:10,source:'all',settledOnly:true});
+    if(!board.length){
+      const pending=trackedBoard.reduce((n,x)=>n+Number(x.pending||0),0);
+      const tracked=trackedBoard.reduce((n,x)=>n+Number(x.codes||0),0);
+      return sendTelegramAiMessageTo(chatId,`🏆 No settled Copy Hub rankings yet.\n\n${tracked} tracked code${tracked===1?'':'s'} · ${pending} still pending. Rankings appear after at least one tracked code settles as WON, LOST or PUSH.`,{reply_markup:telegramAiMainKeyboard()});
+    }
+    const lines=['🏆 MATCHDAY COPY RANKINGS — 30 DAYS',''];board.slice(0,10).forEach((x,i)=>{
+      const handle=x?.punter?.username ? `@${x.punter.username}` : (x?.punter?.displayName||x?.punter?.id||'Punter');
+      lines.push(`${i+1}. ${handle} — Score ${Number(x.copyScore||0).toFixed(1)} · ${Number(x.winRate||0).toFixed(1)}% win rate · ${Number(x.settled||0)} settled`);
+    });return sendTelegramAiMessageTo(chatId,lines.join('\n'),{reply_markup:telegramAiMainKeyboard()});
   }
   if(intent.intent==='analyze'){
     const plan=getTelegramAiPlan(user);if(plan.dailyAnalyzes<=0)return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(plan,'SportyBet code analysis'),{reply_markup:telegramAiPlanKeyboard()});
