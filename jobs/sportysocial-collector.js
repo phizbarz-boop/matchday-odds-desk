@@ -83,13 +83,25 @@ function sanitizeItem(raw = {}) {
 }
 
 async function feedJson(page) {
-  return page.evaluate(async (url) => {
-    const response = await fetch(url, { credentials: 'include', headers: { accept: 'application/json' } });
-    const text = await response.text();
-    let json = null;
-    try { json = JSON.parse(text); } catch {}
-    return { status: response.status, json, text: text.slice(0, 500) };
-  }, `${BASE}${SUGGESTED_FRAGMENT}?size=20&_t=${Date.now()}`);
+  // IMPORTANT: Do not call window.fetch() inside SportyBet's page. Their WAP
+  // bundle wraps/patches page requests and can throw its own SyntaxError in
+  // headless browsers. BrowserContext.request shares the same cookie jar as
+  // the page, so authenticated requests still work without executing site JS.
+  const url = `${BASE}${SUGGESTED_FRAGMENT}?size=20&_t=${Date.now()}`;
+  const response = await page.context().request.get(url, {
+    headers: {
+      accept: 'application/json',
+      clientid: 'wap',
+      platform: 'wap',
+      operid: '2',
+      referer: CODE_HUB_URL,
+    },
+    timeout: 30000,
+  });
+  const text = await response.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch {}
+  return { status: response.status(), json, text: text.slice(0, 500) };
 }
 
 function isGoodFeed(result) {
@@ -352,7 +364,10 @@ async function collectSportySocial(page) {
   // Direct authenticated fetch guarantees at least the first page even if browser caching
   // prevents the page's own first request from being observed.
   const first = await feedJson(page);
-  if (!isGoodFeed(first)) throw new Error(`SPORTYSOCIAL_FEED_FAILED: HTTP ${first?.status || 'unknown'}`);
+  if (!isGoodFeed(first)) {
+    const detail = first?.json?.message || first?.json?.error || first?.text || 'unexpected response';
+    throw new Error(`SPORTYSOCIAL_FEED_FAILED: HTTP ${first?.status || 'unknown'} ${String(detail).slice(0, 180)}`);
+  }
   feedResponses += 1;
   for (const raw of first.json.data.items) {
     const item = sanitizeItem(raw);
@@ -364,7 +379,9 @@ async function collectSportySocial(page) {
   for (let i = 1; i < MAX_PAGES; i++) {
     const beforeCount = items.size;
     const beforeResponses = feedResponses;
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    // Avoid page.evaluate here too; use native browser input so SportyBet's
+    // page JS cannot turn a harmless collector action into a Playwright error.
+    await page.mouse.wheel(0, 7000).catch(() => {});
     await page.waitForTimeout(2200);
     if (items.size === beforeCount && feedResponses === beforeResponses) {
       // Nudge once more in case virtualized content needs a second scroll.
@@ -406,9 +423,13 @@ async function main() {
   });
   const page = await context.newPage();
   try {
+    console.log('[SportySocial] Opening Code Hub');
     await page.goto(CODE_HUB_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    console.log('[SportySocial] Checking/authenticating session');
     await ensureLoggedIn(page);
+    console.log('[SportySocial] Authenticated feed confirmed');
     const collected = await collectSportySocial(page);
+    console.log(`[SportySocial] Collected ${collected.items.length} unique punter/code records`);
     if (!collected.items.length) throw new Error('NO_SPORTYSOCIAL_ITEMS: authenticated Code Hub returned no usable punter/code records.');
     const imported = await postToMatchday(collected.items);
     console.log(JSON.stringify({
