@@ -714,7 +714,17 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
 
     // Build the complete supported candidate universe with filtering disabled. The Analyzer
     // then applies the user's chosen probability threshold to the exact imported selections.
-    const candidates = await loadAutoCandidates({ sportScope: 'all', minProbability: 0, minEdge: -25, leagues: null, betTypes: null, marketHours: analyzerHours, marketMaxPages: analyzerMaxPages });
+    // Do not fan out to every sport when the imported booking clearly identifies one sport.
+    // On Render, loading football + basketball + hockey across a 14/21-day analyzer horizon
+    // can create many simultaneous upstream requests and the proxy may close the connection,
+    // which the browser reports only as "NetworkError when attempting to fetch resource".
+    const bookingSports = sourceRows.map(x => analyzerNormText(x.sport)).filter(Boolean);
+    let analyzerSportScope = 'all';
+    if (bookingSports.length && bookingSports.every(x => x.includes('football') || x.includes('soccer'))) analyzerSportScope = 'football';
+    else if (bookingSports.length && bookingSports.every(x => x.includes('basket'))) analyzerSportScope = 'basketball';
+    else if (bookingSports.length && bookingSports.every(x => x.includes('hockey') || x.includes('ice hockey'))) analyzerSportScope = 'hockey';
+
+    const candidates = await loadAutoCandidates({ sportScope: analyzerSportScope, minProbability: 0, minEdge: -25, leagues: null, betTypes: null, marketHours: analyzerHours, marketMaxPages: analyzerMaxPages });
     const analyzed = sourceRows.map((leg, index) => {
       let best = null, bestScore = -1;
       // Exact SportyBet event ID is the strongest signal. Only fall back to team-name
