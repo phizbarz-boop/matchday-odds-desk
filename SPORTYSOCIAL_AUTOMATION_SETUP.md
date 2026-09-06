@@ -53,3 +53,8 @@ SportySocial `userId` is the stable punter identity. `createTime` is treated as 
 ## Important
 
 If SportyBet changes its login UI, or starts requiring CAPTCHA/OTP for the collector login, the workflow will fail safely and will not attempt to bypass verification. Existing Matchday features continue running normally.
+
+## Login fallback / diagnostics
+The collector tries SportyBet mobile, desktop results, and lite login surfaces because headless GitHub sessions can receive a different login layout from a normal browser. It also checks frames and supports a two-step login flow.
+
+If SportyBet changes its login UI and the job fails, the workflow uploads a short-lived `sportysocial-login-diagnostics` artifact containing a screenshot plus non-sensitive input/button metadata. It intentionally does not record input values, cookies, authorization headers, passwords, or session tokens.

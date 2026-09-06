@@ -43,3 +43,12 @@ jobs:
           MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL }}
           SPORTYSOCIAL_MAX_PAGES: ${{ vars.SPORTYSOCIAL_MAX_PAGES }}
         run: node jobs/sportysocial-collector.js
+
+      - name: Upload safe login diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sportysocial-login-diagnostics
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 3

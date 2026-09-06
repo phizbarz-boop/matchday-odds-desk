@@ -87,7 +87,7 @@ function isGoodFeed(result) {
   return result?.status === 200 && result?.json?.bizCode === 10000 && Array.isArray(result?.json?.data?.items);
 }
 
-async function clickFirstVisible(page, locators) {
+async function clickFirstVisible(pageOrFrame, locators) {
   for (const loc of locators) {
     try {
       if (await loc.count() && await loc.first().isVisible({ timeout: 800 })) {
@@ -99,46 +99,110 @@ async function clickFirstVisible(page, locators) {
   return false;
 }
 
-async function ensureLoggedIn(page) {
-  let probe = await feedJson(page).catch(() => null);
-  if (isGoodFeed(probe)) return probe;
+function loginIdentifierLocators(frame) {
+  return [
+    frame.locator('input[type="tel"]'),
+    frame.locator('input[autocomplete="tel"]'),
+    frame.locator('input[autocomplete="username"]'),
+    frame.locator('input[placeholder*="Mobile" i]'),
+    frame.locator('input[placeholder*="Phone" i]'),
+    frame.locator('input[placeholder*="Username" i]'),
+    frame.locator('input[name*="mobile" i]'),
+    frame.locator('input[name*="phone" i]'),
+    frame.locator('input[name*="username" i]'),
+  ];
+}
 
-  await page.goto(`${BASE}/ng/m/`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await page.waitForTimeout(1200);
+function passwordLocators(frame) {
+  return [
+    frame.locator('input[type="password"]'),
+    frame.locator('input[autocomplete="current-password"]'),
+    frame.locator('input[name*="password" i]'),
+    frame.locator('input[placeholder*="Password" i]'),
+  ];
+}
 
-  await clickFirstVisible(page, [
-    page.getByRole('button', { name: /^log\s*in$/i }),
-    page.getByRole('link', { name: /^log\s*in$/i }),
-    page.getByText(/^log\s*in$/i),
-    page.getByText(/^login$/i),
+async function firstVisibleLocator(locators, timeout = 700) {
+  for (const loc of locators) {
+    try {
+      if (await loc.count() && await loc.first().isVisible({ timeout })) return loc.first();
+    } catch {}
+  }
+  return null;
+}
+
+async function findLoginFrame(page) {
+  for (const frame of page.frames()) {
+    const id = await firstVisibleLocator(loginIdentifierLocators(frame), 500);
+    const pw = await firstVisibleLocator(passwordLocators(frame), 500);
+    if (id || pw) return { frame, id, pw };
+  }
+  return null;
+}
+
+async function clickLoginEntry(page) {
+  for (const frame of page.frames()) {
+    const clicked = await clickFirstVisible(frame, [
+      frame.getByRole('button', { name: /^log\s*in$/i }),
+      frame.getByRole('link', { name: /^log\s*in$/i }),
+      frame.getByText(/^log\s*in$/i),
+      frame.getByText(/^login$/i),
+      frame.locator('button:has-text("Log In")'),
+      frame.locator('a:has-text("Log In")'),
+    ]);
+    if (clicked) return true;
+  }
+  return false;
+}
+
+async function submitLogin(frame) {
+  return clickFirstVisible(frame, [
+    frame.getByRole('button', { name: /^log\s*in$/i }),
+    frame.getByRole('button', { name: /^login$/i }),
+    frame.getByRole('button', { name: /^continue$/i }),
+    frame.getByRole('button', { name: /^next$/i }),
+    frame.locator('button[type="submit"]'),
+    frame.locator('input[type="submit"]'),
   ]);
-  await page.waitForTimeout(900);
+}
 
-  const phone = page.locator([
-    'input[type="tel"]',
-    'input[autocomplete="tel"]',
-    'input[placeholder*="Mobile" i]',
-    'input[placeholder*="Phone" i]',
-    'input[name*="mobile" i]',
-    'input[name*="phone" i]'
-  ].join(',')).first();
-  const password = page.locator('input[type="password"], input[name*="password" i]').first();
+async function tryLoginSurface(page, url) {
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForTimeout(1300);
 
-  if (!(await phone.count()) || !(await password.count())) {
-    throw new Error('LOGIN_FORM_NOT_FOUND: SportyBet login form was not detected. The site UI may have changed.');
+  let found = await findLoginFrame(page);
+  if (!found) {
+    await clickLoginEntry(page).catch(() => false);
+    await page.waitForTimeout(1000);
+    found = await findLoginFrame(page);
+  }
+  if (!found) return false;
+
+  let { frame, id, pw } = found;
+  if (!id) id = await firstVisibleLocator(loginIdentifierLocators(frame));
+  if (id) {
+    await id.fill(LOGIN_ID);
   }
 
-  await phone.fill(LOGIN_ID);
-  await password.fill(PASSWORD);
+  // Some SportyBet surfaces reveal the password field only after the mobile/login ID step.
+  if (!pw) {
+    await submitLogin(frame).catch(() => false);
+    await page.waitForTimeout(1000);
+    const next = await findLoginFrame(page);
+    if (next) {
+      frame = next.frame;
+      pw = next.pw || await firstVisibleLocator(passwordLocators(frame));
+    }
+  }
+  if (!pw) return false;
 
-  const clicked = await clickFirstVisible(page, [
-    page.getByRole('button', { name: /^log\s*in$/i }),
-    page.getByRole('button', { name: /^login$/i }),
-    page.locator('button[type="submit"]'),
-  ]);
-  if (!clicked) throw new Error('LOGIN_BUTTON_NOT_FOUND: SportyBet login submit button was not detected.');
-
+  await pw.fill(PASSWORD);
+  const submitted = await submitLogin(frame);
+  if (!submitted) {
+    try { await pw.press('Enter'); } catch {}
+  }
   await page.waitForTimeout(2500);
+
   const bodyText = (await page.locator('body').innerText().catch(() => '')).slice(0, 12000);
   if (/captcha|security verification|verify you are human|robot/i.test(bodyText)) {
     throw new Error('VERIFICATION_REQUIRED: SportyBet requested CAPTCHA/security verification. Collector will not bypass it.');
@@ -147,13 +211,65 @@ async function ensureLoggedIn(page) {
     throw new Error('OTP_REQUIRED: SportyBet requested an OTP. Collector will not bypass it.');
   }
 
-  const deadline = Date.now() + 20000;
+  const deadline = Date.now() + 16000;
   while (Date.now() < deadline) {
-    probe = await feedJson(page).catch(() => null);
-    if (isGoodFeed(probe)) return probe;
-    await page.waitForTimeout(1200);
+    const probe = await feedJson(page).catch(() => null);
+    if (isGoodFeed(probe)) return true;
+    await page.waitForTimeout(1100);
   }
-  throw new Error(`LOGIN_FAILED: authenticated SportySocial feed was unavailable after login (HTTP ${probe?.status || 'unknown'}).`);
+  return false;
+}
+
+async function writeLoginDiagnostics(page) {
+  try {
+    const fs = require('fs');
+    fs.mkdirSync('artifacts', { recursive: true });
+    await page.screenshot({ path: 'artifacts/sportysocial-login-failure.png', fullPage: true });
+    const frames = [];
+    for (const frame of page.frames()) {
+      const inputs = await frame.locator('input').evaluateAll((nodes) => nodes.slice(0, 30).map((n) => ({
+        type: n.getAttribute('type') || '',
+        name: n.getAttribute('name') || '',
+        placeholder: n.getAttribute('placeholder') || '',
+        autocomplete: n.getAttribute('autocomplete') || '',
+      }))).catch(() => []);
+      const buttons = await frame.locator('button, a').evaluateAll((nodes) => nodes.slice(0, 40).map((n) => (n.textContent || '').trim()).filter(Boolean)).catch(() => []);
+      frames.push({ url: frame.url(), inputs, buttons });
+    }
+    fs.writeFileSync('artifacts/sportysocial-login-diagnostics.json', JSON.stringify({
+      url: page.url(),
+      title: await page.title().catch(() => ''),
+      frames,
+    }, null, 2));
+  } catch {}
+}
+
+async function ensureLoggedIn(page) {
+  let probe = await feedJson(page).catch(() => null);
+  if (isGoodFeed(probe)) return probe;
+
+  // SportyBet exposes more than one login surface. GitHub/headless sessions do not
+  // always render the same mobile modal as a normal browser, so try several normal
+  // site entry points without bypassing any verification challenge.
+  const loginSurfaces = [
+    `${BASE}/ng/m/`,
+    `${BASE}/ng/liveResult`,
+    `${BASE}/ng/lite/`,
+  ];
+
+  for (const url of loginSurfaces) {
+    const ok = await tryLoginSurface(page, url).catch((err) => {
+      if (/VERIFICATION_REQUIRED|OTP_REQUIRED/.test(String(err?.message || err))) throw err;
+      return false;
+    });
+    if (ok) {
+      probe = await feedJson(page).catch(() => null);
+      if (isGoodFeed(probe)) return probe;
+    }
+  }
+
+  await writeLoginDiagnostics(page);
+  throw new Error('LOGIN_FORM_NOT_FOUND: SportyBet login could not be completed on the mobile, desktop, or lite login surfaces. A safe diagnostic artifact was saved by the workflow.');
 }
 
 async function collectSportySocial(page) {
