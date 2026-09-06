@@ -521,6 +521,27 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
   const wantsFootball = scope === 'all' || scope === 'football';
   const wantsBasketball = scope === 'all' || scope === 'basketball';
   const wantsHockey = scope === 'all' || scope === 'hockey';
+
+  // Fetch only the market families actually requested. Previously, even a one-market
+  // Analyzer request could fan out to every football/basketball/hockey market.
+  const requestedBetTypes = Array.isArray(betTypes) && betTypes.length ? new Set(betTypes.map(String)) : null;
+  const wantsAny = ids => !requestedBetTypes || ids.some(id => requestedBetTypes.has(id));
+  const needF1x2 = wantsFootball && wantsAny(['home_win','draw','away_win']);
+  const needFGg = wantsFootball && wantsAny(['gg_yes','ng_no']);
+  const needFDc = wantsFootball && wantsAny(['dc_1x','dc_x2']);
+  const needFDnb = wantsFootball && wantsAny(['dnb']);
+  const needFOu05 = wantsFootball && wantsAny(['over05']);
+  const needFOu15 = wantsFootball && wantsAny(['over15']);
+  const needFOu45 = wantsFootball && wantsAny(['under45']);
+  const needFAh = wantsFootball && wantsAny(['ah_0','ah_plus025','ah_minus025']);
+  const needFCorners = wantsFootball && wantsAny(['corners_over','corners_under']);
+  const needF1hCorners = wantsFootball && wantsAny(['first_half_home_team_corners','first_half_away_team_corners']);
+  const needFOneup = wantsFootball && wantsAny(['oneup']);
+  const needBasketballWinner = wantsBasketball && wantsAny(['basketball_winner']);
+  const needBasketballTotals = wantsBasketball && wantsAny(['basketball_over','basketball_under']);
+  const needHockeyWinner = wantsHockey && wantsAny(['hockey_winner']);
+  const needHockeyTotals = wantsHockey && wantsAny(['hockey_over','hockey_under']);
+
   // The general sportsbook cache may live for hours to save API credits, but the Auto Builder
   // needs much fresher availability data so expired events cannot remain eligible.
   const autoMaxCacheAgeSeconds = Math.max(0, parseInt(process.env.AUTO_SPORTYBET_MAX_CACHE_AGE_SECONDS || '900', 10));
@@ -533,21 +554,21 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
 
   let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
     wantsFootball ? loadPredictions() : Promise.resolve({ matches: [] }),
-    wantsFootball ? loadSportyBetMarket('1x2', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('gg', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('dc', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('dnb', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('ou05', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('ou15', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('ou45', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('ah', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('corners', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('first_half_team_corners', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('oneup', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsBasketball ? loadSportyBetMarket('winner', 'basketball', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsBasketball ? loadSportyBetMarket('totals', 'basketball', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsHockey ? loadSportyBetMarket('winner', 'hockey', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    wantsHockey ? loadSportyBetMarket('totals', 'hockey', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needF1x2 ? loadSportyBetMarket('1x2', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needFGg ? loadSportyBetMarket('gg', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needFDc ? loadSportyBetMarket('dc', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needFDnb ? loadSportyBetMarket('dnb', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needFOu05 ? loadSportyBetMarket('ou05', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needFOu15 ? loadSportyBetMarket('ou15', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needFOu45 ? loadSportyBetMarket('ou45', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needFAh ? loadSportyBetMarket('ah', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needFCorners ? loadSportyBetMarket('corners', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needF1hCorners ? loadSportyBetMarket('first_half_team_corners', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needFOneup ? loadSportyBetMarket('oneup', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needBasketballWinner ? loadSportyBetMarket('winner', 'basketball', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needBasketballTotals ? loadSportyBetMarket('totals', 'basketball', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needHockeyWinner ? loadSportyBetMarket('winner', 'hockey', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    needHockeyTotals ? loadSportyBetMarket('totals', 'hockey', autoMarketOptions) : Promise.resolve({ rows: [] }),
   ]);
 
   if (wantsFootball && cornerBetRequested(betTypes)) {
@@ -745,6 +766,51 @@ function bookingMetaNumber(booking, keys) {
   return null;
 }
 
+function analyzerBetTypesFromBooking(rows, sportScope) {
+  const set = new Set();
+  let uncertain = false;
+  for (const leg of rows || []) {
+    const text = analyzerNormText(`${leg.marketDesc || ''} ${leg.outcomeDesc || ''} ${leg.specifier || ''}`);
+    if (sportScope === 'basketball') {
+      if (/over/.test(text)) set.add('basketball_over');
+      else if (/under/.test(text)) set.add('basketball_under');
+      else if (/winner|moneyline|money line|match winner|home|away/.test(text)) set.add('basketball_winner');
+      else uncertain = true;
+      continue;
+    }
+    if (sportScope === 'hockey') {
+      if (/over/.test(text)) set.add('hockey_over');
+      else if (/under/.test(text)) set.add('hockey_under');
+      else if (/winner|moneyline|money line|match winner|home|away/.test(text)) set.add('hockey_winner');
+      else uncertain = true;
+      continue;
+    }
+    if (sportScope === 'football') {
+      if (/corner/.test(text)) {
+        if (/1st half|first half|1h/.test(text)) {
+          set.add('first_half_home_team_corners'); set.add('first_half_away_team_corners');
+        } else { set.add('corners_over'); set.add('corners_under'); }
+      } else if (/over 0 5/.test(text)) set.add('over05');
+      else if (/over 1 5/.test(text)) set.add('over15');
+      else if (/under 4 5/.test(text)) set.add('under45');
+      else if (/both teams to score|btts| gg /.test(` ${text} `)) { set.add('gg_yes'); set.add('ng_no'); }
+      else if (/double chance|1x|x2/.test(text)) { set.add('dc_1x'); set.add('dc_x2'); }
+      else if (/draw no bet|dnb/.test(text)) set.add('dnb');
+      else if (/1up|1 up/.test(text)) set.add('oneup');
+      else if (/asian handicap|handicap/.test(text)) { set.add('ah_0'); set.add('ah_plus025'); set.add('ah_minus025'); }
+      else if (/1x2|match result|home win|away win|draw/.test(text)) { set.add('home_win'); set.add('draw'); set.add('away_win'); }
+      else if (isAnalyzerOverUnderMarket(leg.marketDesc) && isGenericAnalyzerSelection(leg.outcomeDesc)) {
+        set.add('over15'); // known SportyBet get_booking repair path
+      } else uncertain = true;
+    } else {
+      uncertain = true;
+    }
+  }
+  // If any leg is ambiguous, use the full sport set for correctness rather than guessing.
+  if (uncertain || !set.size) return null;
+  return [...set];
+}
+
 app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
   try {
     const bookingCode = String(req.body?.bookingCode || '').trim().toUpperCase();
@@ -754,14 +820,27 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
     const analyzerMaxPages = Math.max(5, Math.min(20, parseInt(process.env.ANALYZER_MAX_PAGES || '12', 10)));
     if (!bookingCode) return res.status(400).json({ error: 'Enter a SportyBet booking code' });
 
+    const startedAt = Date.now();
+    console.log(`[Analyzer] start code=${bookingCode} horizon=${horizonDays}d`);
     const booking = await getBooking(bookingCode);
+    console.log(`[Analyzer] booking loaded in ${Date.now()-startedAt}ms`);
     const decodedRows = extractBookingOutcomes(booking).map(normalizeBookingLeg).filter(x => x.home || x.away || x.eventId);
     if (!decodedRows.length) return res.status(404).json({ error: 'The booking code was found, but no selections could be read from it' });
 
-    // Warm/load the actual football Over 1.5 market first. This lets us repair get_booking
-    // rows that say only "Over/Under · Selection" before model scoring. loadAutoCandidates
-    // then reuses the same cache entry, so this normally does not add a second O1.5 API call.
-    const analyzerOver15 = await loadSportyBetMarket('ou15', 'football', { hours: analyzerHours, maxPages: analyzerMaxPages });
+    // Determine sport BEFORE loading extra markets. The old path always loaded football
+    // Over 1.5 even for Basketball/Hockey codes, adding unnecessary latency/failure risk.
+    const decodedSports = decodedRows.map(x => analyzerNormText(x.sport)).filter(Boolean);
+    let analyzerSportScope = 'all';
+    if (decodedSports.length && decodedSports.every(x => x.includes('football') || x.includes('soccer'))) analyzerSportScope = 'football';
+    else if (decodedSports.length && decodedSports.every(x => x.includes('basket'))) analyzerSportScope = 'basketball';
+    else if (decodedSports.length && decodedSports.every(x => x.includes('hockey') || x.includes('ice hockey'))) analyzerSportScope = 'hockey';
+
+    const needsOver15Repair = analyzerSportScope === 'football' && decodedRows.some(
+      leg => isAnalyzerOverUnderMarket(leg.marketDesc) && isGenericAnalyzerSelection(leg.outcomeDesc)
+    );
+    const analyzerOver15 = needsOver15Repair
+      ? await loadSportyBetMarket('ou15', 'football', { hours: analyzerHours, maxPages: analyzerMaxPages })
+      : { rows: [] };
     let sourceRows = decodedRows.map(leg => resolveGenericOver15Leg(leg, analyzerOver15?.rows));
 
     // Secondary repair for a known get_booking quirk: some legs on the same ticket expose
@@ -793,13 +872,19 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
     // On Render, loading football + basketball + hockey across a 14/21-day analyzer horizon
     // can create many simultaneous upstream requests and the proxy may close the connection,
     // which the browser reports only as "NetworkError when attempting to fetch resource".
-    const bookingSports = sourceRows.map(x => analyzerNormText(x.sport)).filter(Boolean);
-    let analyzerSportScope = 'all';
-    if (bookingSports.length && bookingSports.every(x => x.includes('football') || x.includes('soccer'))) analyzerSportScope = 'football';
-    else if (bookingSports.length && bookingSports.every(x => x.includes('basket'))) analyzerSportScope = 'basketball';
-    else if (bookingSports.length && bookingSports.every(x => x.includes('hockey') || x.includes('ice hockey'))) analyzerSportScope = 'hockey';
-
-    const candidates = await loadAutoCandidates({ sportScope: analyzerSportScope, minProbability: 0, minEdge: -25, leagues: null, betTypes: null, marketHours: analyzerHours, marketMaxPages: analyzerMaxPages });
+    const analyzerBetTypes = analyzerBetTypesFromBooking(sourceRows, analyzerSportScope);
+    console.log(`[Analyzer] scope=${analyzerSportScope} legs=${sourceRows.length} betTypes=${analyzerBetTypes ? analyzerBetTypes.join(',') : 'all-supported'}`);
+    const candidateStartedAt = Date.now();
+    const candidates = await loadAutoCandidates({
+      sportScope: analyzerSportScope,
+      minProbability: 0,
+      minEdge: -25,
+      leagues: null,
+      betTypes: analyzerBetTypes,
+      marketHours: analyzerHours,
+      marketMaxPages: analyzerMaxPages
+    });
+    console.log(`[Analyzer] candidates=${candidates.length} loaded in ${Date.now()-candidateStartedAt}ms total=${Date.now()-startedAt}ms`);
     const analyzed = sourceRows.map((leg, index) => {
       let best = null, bestScore = -1;
       // Exact SportyBet event ID is the strongest signal. Only fall back to team-name
@@ -860,10 +945,20 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
       note: `Analyzer searched up to ${horizonDays} days ahead. Only markets supported by the current Matchday probability engine are scored. Unsupported selections are never assigned a guessed probability.`,
     });
   } catch (err) {
-    console.error('SportyBet analyzer error:', err.message);
-    const status = err.code === 'INVALID_BOOKING_CODE' ? 400 : err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
+    console.error('SportyBet analyzer error:', err.code || '', err.message);
+    const status = err.code === 'INVALID_BOOKING_CODE' ? 400
+      : err.code === 'PARSE_API_KEY_MISSING' ? 503
+      : (err.code === 'PARSE_TIMEOUT' || err.name === 'AbortError') ? 504
+      : 502;
+    const publicReason = err.code === 'PARSE_TIMEOUT'
+      ? 'SportyBet/Parse timed out while loading the booking or its markets'
+      : err.status
+        ? `SportyBet/Parse returned HTTP ${err.status}`
+        : 'The analyzer could not finish loading the required SportyBet markets';
     res.status(status).json({
       error: err.code === 'PARSE_API_KEY_MISSING' ? 'SportyBet integration is not configured yet' : 'Could not analyze this booking code',
+      reason: publicReason,
+      code: err.code || 'ANALYZER_UPSTREAM_FAILURE',
       detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
     });
   }
