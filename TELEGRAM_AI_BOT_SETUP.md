@@ -115,3 +115,7 @@ The customer is told that the administrator will contact them in Telegram with p
 After independently confirming payment, an administrator can tap the activation button or use `/activate USER_ID pro 30` / `/activate USER_ID elite 30`.
 
 Security: the activation callback verifies that the person pressing it is listed in `TELEGRAM_ADMIN_IDS`.
+
+
+## Minimum probability
+Minimum probability is not subscription-capped. Free, Pro and Elite users can choose minimum probability from 0% through 95%; there is no subscription minimum-probability floor. Plain-language ticket requests may also specify a minimum probability directly (for example, `minimum probability 73%`).
