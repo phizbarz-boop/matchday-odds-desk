@@ -9,7 +9,8 @@ const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
 const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG } = require('./lib/sportybet');
 const { buildCandidates, selectAutoBet, passesRedFlagFilter} = require('./lib/autoPicker');
-const { sendTelegramMessage } = require('./lib/telegram');
+const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest } = require('./lib/telegram');
+const { PLANS: TELEGRAM_AI_PLANS, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, mainKeyboard: telegramAiMainKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
 const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
 const { apiFetch, enrichSportyFixtures } = require('./lib/apiFootball');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
@@ -1262,6 +1263,222 @@ app.post('/api/telegram/check-settlements', express.json(), async (req, res) => 
   }
 });
 
+
+
+function telegramAiAdminIds() {
+  return new Set(String(process.env.TELEGRAM_ADMIN_IDS || process.env.TELEGRAM_ADMIN_ID || '')
+    .split(',').map(x => x.trim()).filter(Boolean));
+}
+
+function telegramAiIsAdmin(id) { return telegramAiAdminIds().has(String(id)); }
+
+function telegramAiUpgradeText(plan, feature) {
+  const label = plan.id === 'free' ? 'Pro or Elite' : 'Elite';
+  return `🔒 ${feature} is not included in your ${plan.name} plan.\n\nUpgrade to ${label} to unlock higher limits and more Matchday AI tools.`;
+}
+
+function telegramAiAccountText(user) {
+  const plan = getTelegramAiPlan(user);
+  const expiry = user.planExpiresAt ? new Date(user.planExpiresAt).toISOString().slice(0,10) : 'No expiry';
+  return [
+    '👤 MY MATCHDAY AI ACCOUNT', '',
+    `Plan: ${plan.name}${plan.priceNgn ? ` — ₦${plan.priceNgn.toLocaleString()}/month` : ''}`,
+    ...(user.plan !== 'free' ? [`Renews/expires: ${expiry}`] : []),
+    `Tickets today: ${user.ticketsUsed}/${plan.dailyTickets}`,
+    `Code analyses today: ${user.analyzesUsed}/${plan.dailyAnalyzes}`,
+    `Maximum target odds: ${plan.maxTargetOdds}x`,
+    `Maximum selections: ${plan.maxSelections}`,
+    `Sports: ${plan.sports.map(x => x === 'hockey' ? 'Ice Hockey' : x[0].toUpperCase()+x.slice(1)).join(', ')}`,
+  ].join('\n');
+}
+
+function telegramAiTicketText(result, booking, request, plan) {
+  const lines = [
+    `🤖 MATCHDAY AI — ${request.safe ? 'SAFE' : `${Number(request.targetOdds).toFixed(request.targetOdds < 2 ? 2 : 0)}x`} TICKET`,
+    `${result.reachedTarget ? '✅ TARGET REACHED' : '🟡 CLOSEST AVAILABLE'} | ${String(request.sport || 'all').toUpperCase()}`,
+    `Plan: ${plan.name}`,
+    `Actual odds: ${Number(result.combinedOdds || 1).toFixed(2)}`,
+    `Selections: ${result.selections.length}`,
+    `Average leg probability: ${Number(result.averageProbability || 0).toFixed(1)}%`,
+    `Minimum leg probability: ${Number(result.minimumProbability || 0).toFixed(1)}%`,
+    `Average quality: ${Number(result.averageQualityScore || 0).toFixed(1)}/100`,
+    `SportyBet code: ${booking?.shareCode || 'Code generation unavailable'}`,
+    ''
+  ];
+  result.selections.forEach((x, i) => {
+    lines.push(`${i+1}. [${x.sport}] ${x.home} vs ${x.away}`);
+    lines.push(`   ${x.outcomeDesc || x.marketDesc} @ ${Number(x.odds).toFixed(2)} | ${Number(x.probability||0).toFixed(1)}% | Q ${Number(x.qualityScore||0).toFixed(1)}`);
+  });
+  if (booking?.shareURL) lines.push('', `SportyBet link: ${booking.shareURL}`);
+  lines.push('', 'Probabilities are model estimates, not guarantees.');
+  return lines.join('\n');
+}
+
+async function buildTelegramAiTicket(user, request) {
+  const plan = getTelegramAiPlan(user);
+  let sport = normalizeSportScope(request.sport || (plan.id === 'free' ? 'football' : 'all'));
+  if (!plan.sports.includes(sport)) {
+    return { locked: true, message: telegramAiUpgradeText(plan, `${sport === 'hockey' ? 'Ice Hockey' : sport} tickets`) };
+  }
+  const targetOdds = Number(request.targetOdds || 10);
+  if (targetOdds > plan.maxTargetOdds) {
+    return { locked: true, message: `${telegramAiUpgradeText(plan, `${targetOdds}x ticket building`)}\n\nYour current maximum target is ${plan.maxTargetOdds}x.` };
+  }
+  const minProbability = Math.min(95, Math.max(request.safe ? 80 : 50, Number(request.minProbability || (request.safe ? 80 : 70))));
+  const candidates = await loadAutoCandidates({ sportScope: sport, minProbability: 0, minEdge: -25, leagues: null, betTypes: request.betTypes || null });
+  let pool = candidates.filter(passesRedFlagFilter).filter(x => Number(x.probability || 0) >= minProbability);
+  if (Number.isFinite(Number(request.maxMatchOdds)) && Number(request.maxMatchOdds) > 1) {
+    pool = pool.filter(x => Number(x.odds || 0) <= Number(request.maxMatchOdds));
+  }
+  if (!pool.length) return { error: `No current SportyBet selections passed the ${minProbability}% probability rule and red-flag protection.` };
+  const result = selectAutoBet(pool, {
+    targetOdds: request.safe ? 1.325 : targetOdds,
+    maxSelections: plan.maxSelections,
+    trials: Number(process.env.TELEGRAM_AI_PICK_TRIALS || 1800),
+    minQualityScore: 0,
+    requirePositiveEV: false,
+  });
+  if (!result?.selections?.length) return { error: 'I could not find a qualifying combination from the current SportyBet fixtures.' };
+  if (request.safe && (Number(result.combinedOdds) < 1.30 || Number(result.combinedOdds) > 1.35)) {
+    return { error: 'No SAFE combination currently lands inside 1.30–1.35 while keeping every leg at 80%+.' };
+  }
+  const booking = await bookBet(result.selections.map(x => ({ eventId:x.eventId, marketId:x.marketId, outcomeId:x.outcomeId, ...(x.specifier ? {specifier:x.specifier}: {}) })));
+  return { result, booking, plan, request: { ...request, sport, targetOdds, minProbability } };
+}
+
+async function analyzeTelegramAiCode(bookingCode, minProbability = 70) {
+  const horizonDays = 14, analyzerHours = horizonDays * 24;
+  const booking = await getBooking(bookingCode);
+  const decodedRows = extractBookingOutcomes(booking).map(normalizeBookingLeg).filter(x => x.home || x.away || x.eventId);
+  if (!decodedRows.length) throw new Error('The SportyBet code was found, but no selections could be read from it.');
+  const analyzerOver15 = await loadSportyBetMarket('ou15', 'football', { hours: analyzerHours, maxPages: 12 });
+  const sourceRows = decodedRows.map(leg => resolveGenericOver15Leg(leg, analyzerOver15?.rows));
+  const candidates = await loadAutoCandidates({ sportScope:'all', minProbability:0, minEdge:-25, leagues:null, betTypes:null, marketHours:analyzerHours, marketMaxPages:12 });
+  const analyzed = sourceRows.map((leg, index) => {
+    let best=null, bestScore=-1;
+    const exact = leg.eventId ? candidates.filter(c => String(c.eventId||'') === String(leg.eventId)) : [];
+    for (const c of (exact.length ? exact : candidates)) {
+      const score=analyzerCandidateScore(leg,c); if(score>bestScore){bestScore=score;best=c;}
+    }
+    if (!best || bestScore < 60) return { index, ...leg, supported:false, qualified:false };
+    return { index, ...leg, supported:true, qualified:Number(best.probability||0)>=minProbability, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:best.outcomeDesc, marketDesc:best.marketDesc, odds:Number(best.odds||leg.odds||0) };
+  });
+  return { bookingCode, analyzed, supported: analyzed.filter(x=>x.supported).length, qualified: analyzed.filter(x=>x.qualified).length, total: analyzed.length, minProbability };
+}
+
+function telegramAiAnalysisText(a) {
+  const lines=[`🔎 MATCHDAY AI CODE ANALYSIS — ${a.bookingCode}`, `Scored: ${a.supported}/${a.total}`, `Qualified ≥ ${a.minProbability}%: ${a.qualified}/${a.total}`, ''];
+  a.analyzed.forEach((x,i)=>{
+    const icon=!x.supported?'⚪':x.qualified?'✅':'❌';
+    lines.push(`${icon} ${i+1}. ${x.home||'Unknown'} vs ${x.away||'Unknown'}`);
+    lines.push(`   ${x.outcomeDesc||x.marketDesc||'Selection'}${x.odds?` @ ${Number(x.odds).toFixed(2)}`:''}${x.supported?` | ${Number(x.probability).toFixed(1)}% | Q ${Number(x.qualityScore||0).toFixed(1)}`:' | NOT SCORED'}`);
+  });
+  lines.push('', '✅ = keep by threshold · ❌ = below threshold · ⚪ = unsupported/unresolved');
+  return lines.join('\n');
+}
+
+async function handleTelegramAiUpdate(update) {
+  const callback = update?.callback_query;
+  const msg = callback?.message || update?.message;
+  if (!msg?.chat?.id) return;
+  const chatId = msg.chat.id;
+  const from = callback?.from || msg.from || {};
+  const redis = await getRedis();
+  let user = await getTelegramAiUser(redis, from.id || chatId, from);
+  let text = String(msg.text || '').trim();
+  if (callback) {
+    await telegramRequest('answerCallbackQuery', { callback_query_id: callback.id }).catch(()=>{});
+    const d=String(callback.data||'');
+    if(d==='ticket:safe') text='safe ticket';
+    else if(d.startsWith('ticket:')) text=`build ${d.split(':')[1]} odds ticket`;
+    else if(d==='action:plans') text='/plans';
+    else if(d==='action:account') text='/account';
+    else if(d==='action:copy') text='copy rankings';
+    else if(d==='action:analyze') {
+      return sendTelegramMessageTo(chatId, '🔎 Send me the SportyBet booking code.\n\nExample: `Analyze RKT1JT`', { parse_mode:'Markdown' });
+    } else if(d.startsWith('plan:')) {
+      const chosen=d.split(':')[1], url=process.env.TELEGRAM_SUPPORT_URL;
+      const note=`${chosen==='elite'?'👑 Elite costs ₦20,000/month.':'⭐ Pro costs ₦5,000/month.'}\n\nPayment checkout is not configured yet.${url?' Use the support button below after payment.':' Contact the bot administrator for activation.'}`;
+      return sendTelegramMessageTo(chatId,note,url?{reply_markup:{inline_keyboard:[[{text:'Contact support',url}]]}}:{});
+    }
+  }
+
+  // Owner-only subscription management from Telegram.
+  const admin = text.match(/^\/activate\s+(\d+)\s+(pro|elite)(?:\s+(\d+))?$/i);
+  if(admin && telegramAiIsAdmin(from.id)) {
+    const target=admin[1], planId=admin[2].toLowerCase(), days=Math.max(1,Math.min(365,Number(admin[3]||30)));
+    const activated=await activateTelegramAiPlan(redis,target,planId,days);
+    await sendTelegramMessageTo(chatId,`✅ Activated ${planId.toUpperCase()} for Telegram user ${target} for ${days} days.`);
+    await sendTelegramMessageTo(target,`🎉 Your Matchday AI account is now ${planId.toUpperCase()} for ${days} days.`,{reply_markup:telegramAiMainKeyboard()}).catch(()=>{});
+    return;
+  }
+
+  const intent=parseTelegramAiRequest(text);
+  if(intent.intent==='menu') {
+    const plan=getTelegramAiPlan(user);
+    return sendTelegramMessageTo(chatId,[`🤖 Welcome${user.firstName?`, ${user.firstName}`:''} — I’m Matchday AI.`,`Your plan: ${plan.name}`,'','Tell me what you want in normal language, for example:','“Build a football 20x ticket, max odd 1.25.”','“Give me a safe ticket.”','“Analyze RKT1JT.”','','Or use the buttons below.'].join('\n'),{reply_markup:telegramAiMainKeyboard()});
+  }
+  if(intent.intent==='help') return sendTelegramMessageTo(chatId,'🤖 You can talk to me naturally.\n\nExamples:\n• Build a 10x football ticket\n• Build 50 odds, max odd 1.30\n• Safe ticket\n• Analyze RKT1JT\n• My account\n• Plans',{reply_markup:telegramAiMainKeyboard()});
+  if(intent.intent==='plans') return sendTelegramMessageTo(chatId,telegramAiPlansText(),{reply_markup:telegramAiPlanKeyboard()});
+  if(intent.intent==='account') return sendTelegramMessageTo(chatId,telegramAiAccountText(user),{reply_markup:telegramAiMainKeyboard()});
+  if(intent.intent==='copy') {
+    const plan=getTelegramAiPlan(user);
+    if(!plan.copyHub) return sendTelegramMessageTo(chatId,telegramAiUpgradeText(plan,'Copy Hub punter rankings'),{reply_markup:telegramAiPlanKeyboard()});
+    if(!copyHubEnabled()) return sendTelegramMessageTo(chatId,'🏆 Copy Hub is currently disabled by the administrator.');
+    const board=buildLeaderboard(await readCopyHubStore(redis),{days:30,limit:10,source:'all'});
+    if(!board.length) return sendTelegramMessageTo(chatId,'🏆 No settled Copy Hub ranking data is available yet.');
+    const lines=['🏆 MATCHDAY COPY RANKINGS — 30 DAYS',''];
+    board.slice(0,10).forEach((x,i)=>lines.push(`${i+1}. ${x.displayName||x.username||x.punterId||'Punter'} — ${Number(x.winRate||0).toFixed(1)}% win rate · ${Number(x.settled||0)} settled`));
+    return sendTelegramMessageTo(chatId,lines.join('\n'));
+  }
+  if(intent.intent==='analyze') {
+    const plan=getTelegramAiPlan(user);
+    if(plan.dailyAnalyzes<=0) return sendTelegramMessageTo(chatId,telegramAiUpgradeText(plan,'SportyBet code analysis'),{reply_markup:telegramAiPlanKeyboard()});
+    if(user.analyzesUsed >= plan.dailyAnalyzes) return sendTelegramMessageTo(chatId,`⛔ You have used today's ${plan.dailyAnalyzes} code analyses. Your daily allowance resets tomorrow.`,{reply_markup:telegramAiPlanKeyboard()});
+    await sendTelegramMessageTo(chatId,`🔎 Analyzing ${intent.bookingCode} against current Matchday markets…`);
+    try {
+      const analysis=await analyzeTelegramAiCode(intent.bookingCode,70);
+      const use=await consumeTelegramAiUsage(redis,user,'analyze'); user=use.user;
+      return sendTelegramMessageTo(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiMainKeyboard()});
+    } catch(e){ return sendTelegramMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`); }
+  }
+  if(intent.intent==='ticket') {
+    const plan=getTelegramAiPlan(user);
+    if(user.ticketsUsed >= plan.dailyTickets) return sendTelegramMessageTo(chatId,`⛔ You have used today's ${plan.dailyTickets} AI tickets. Your allowance resets tomorrow.`,{reply_markup:telegramAiPlanKeyboard()});
+    const built=await buildTelegramAiTicket(user,intent).catch(e=>({error:e.message}));
+    if(built.locked) return sendTelegramMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});
+    if(built.error) return sendTelegramMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiMainKeyboard()});
+    const use=await consumeTelegramAiUsage(redis,user,'ticket'); user=use.user;
+    return sendTelegramMessageTo(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan),{reply_markup:telegramAiMainKeyboard()});
+  }
+  return sendTelegramMessageTo(chatId,'I can build and analyze Matchday tickets. Try: “Build a football 10x ticket”, “Safe ticket”, “Analyze RKT1JT”, or tap a button below.',{reply_markup:telegramAiMainKeyboard()});
+}
+
+
+app.post('/api/telegram/bot/webhook', express.json({ limit: '1mb' }), async (req, res) => {
+  if(String(process.env.TELEGRAM_AI_ENABLED || 'true').toLowerCase()==='false') return res.status(404).json({error:'Telegram AI bot disabled'});
+  const expected=String(process.env.TELEGRAM_WEBHOOK_SECRET || '');
+  const supplied=String(req.headers['x-telegram-bot-api-secret-token'] || '');
+  if(!expected) return res.status(503).json({error:'TELEGRAM_WEBHOOK_SECRET is not configured'});
+  if(supplied !== expected) return res.status(401).json({error:'unauthorized'});
+  res.json({ok:true});
+  handleTelegramAiUpdate(req.body).catch(err=>console.error('Telegram AI webhook error:',err.message));
+});
+
+app.post('/api/telegram/bot/setup', express.json(), async (req, res) => {
+  try {
+    const secret=process.env.TELEGRAM_JOB_SECRET;
+    if(!secret || req.headers['x-telegram-job-secret']!==secret) return res.status(401).json({error:'unauthorized'});
+    const base=String(process.env.MATCHDAY_BASE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/,'');
+    if(!/^https:\/\//i.test(base)) return res.status(400).json({error:'Set MATCHDAY_BASE_URL to the public HTTPS Render URL first'});
+    const webhookSecret=String(process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
+    if(!webhookSecret) return res.status(400).json({error:'Set TELEGRAM_WEBHOOK_SECRET first'});
+    const webhook=await telegramRequest('setWebhook',{url:`${base}/api/telegram/bot/webhook`,secret_token:webhookSecret,allowed_updates:['message','callback_query'],drop_pending_updates:false});
+    await telegramRequest('setMyCommands',{commands:[{command:'start',description:'Open Matchday AI'},{command:'plans',description:'View Free, Pro and Elite plans'},{command:'account',description:'View plan and daily usage'},{command:'help',description:'How to use Matchday AI'}]});
+    res.json({ok:true,webhook,webhookUrl:`${base}/api/telegram/bot/webhook`});
+  } catch(err){ res.status(502).json({error:'Telegram AI setup failed',detail:process.env.NODE_ENV==='production'?undefined:err.message}); }
+});
+
 app.get('/api/telegram/status', (req, res) => {
   res.json({
     configured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID && process.env.TELEGRAM_JOB_SECRET),
@@ -1273,6 +1490,11 @@ app.get('/api/telegram/status', (req, res) => {
     },
     maxSelections: Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '30', 10))),
     scheduler: 'GitHub Actions',
+    aiBot: {
+      enabled: String(process.env.TELEGRAM_AI_ENABLED || 'true').toLowerCase() !== 'false',
+      webhookConfigured: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET),
+      plans: { free: 0, pro: 5000, elite: 20000 },
+    },
   });
 });
 
