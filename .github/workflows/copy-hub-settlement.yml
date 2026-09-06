@@ -1,0 +1,33 @@
+name: Copy Hub Automatic Settlement
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 3 hours. The backend skips codes that are not due, so this schedule does
+    # not repeatedly spend Parse.bot credits on future/live slips.
+    - cron: '45 */3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copy-hub-automatic-settlement
+  cancel-in-progress: false
+
+jobs:
+  settle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Settle due Copy Hub booking codes
+        env:
+          COPY_HUB_SECRET: ${{ secrets.COPY_HUB_SECRET }}
+          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL }}
+        run: |
+          test -n "$COPY_HUB_SECRET" || (echo "Missing GitHub secret COPY_HUB_SECRET" && exit 1)
+          BASE_URL="${MATCHDAY_BASE_URL:-https://matchday-odds-desk.onrender.com}"
+          curl --fail-with-body --show-error --silent --retry 2 --retry-delay 5 --max-time 650 \
+            -X POST "$BASE_URL/api/copy/check-settlements" \
+            -H "Content-Type: application/json" \
+            -H "x-copy-hub-secret: $COPY_HUB_SECRET" \
+            --data '{}'
