@@ -574,6 +574,56 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
 }
 
 
+async function prepareAutoCandidatePool({
+  sportScope='all',
+  minProbability=0,
+  minEdge=0,
+  leagues=null,
+  betTypes=null,
+  maxMatchOdds=null,
+  marketHours=null,
+  marketMaxPages=null,
+} = {}) {
+  // Single source of truth for Website + Telegram AI candidate eligibility.
+  // Keeping the complete filtering path here prevents one surface from finding
+  // selections while another reports zero for the same settings.
+  const sport = normalizeSportScope(sportScope);
+  const probabilityFloor = Math.min(95, Math.max(0, Number(minProbability) || 0));
+  const edgeFloor = Math.min(50, Math.max(-25, Number(minEdge) || 0));
+
+  const rawCandidates = await loadAutoCandidates({
+    sportScope: sport,
+    minProbability: probabilityFloor,
+    minEdge: edgeFloor,
+    leagues,
+    betTypes,
+    marketHours,
+    marketMaxPages,
+  });
+
+  const redFlagSafe = rawCandidates.filter(passesRedFlagFilter);
+  const maxOdd = Number(maxMatchOdds);
+  const oddsSafe = Number.isFinite(maxOdd) && maxOdd > 1
+    ? redFlagSafe.filter(c => Number.isFinite(Number(c.odds)) && Number(c.odds) <= maxOdd)
+    : redFlagSafe;
+
+  return {
+    sport,
+    candidates: oddsSafe,
+    diagnostics: {
+      rawCandidates: rawCandidates.length,
+      redFlagRejected: rawCandidates.length - redFlagSafe.length,
+      afterRedFlag: redFlagSafe.length,
+      afterMaxOdds: oddsSafe.length,
+      minProbability: probabilityFloor,
+      minEdge: edgeFloor,
+      maxMatchOdds: Number.isFinite(maxOdd) && maxOdd > 1 ? maxOdd : null,
+      betTypes: Array.isArray(betTypes) ? betTypes.map(String) : null,
+    },
+  };
+}
+
+
 function analyzerNormText(v) {
   return String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
@@ -860,10 +910,11 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const sportScope = normalizeSportScope(body.sportScope);
     const betTypes = Array.isArray(body.betTypes) ? body.betTypes.map(String) : null;
 
-    const candidates = await loadAutoCandidates({ sportScope, minProbability, minEdge, leagues, betTypes });
-    const oddsFilteredCandidates = maxMatchOdds == null
-      ? candidates
-      : candidates.filter(c => Number.isFinite(Number(c.odds)) && Number(c.odds) <= maxMatchOdds);
+    const prepared = await prepareAutoCandidatePool({ sportScope, minProbability, minEdge, leagues, betTypes, maxMatchOdds });
+    const oddsFilteredCandidates = prepared.candidates;
+    const redFlagSafeCandidatesCount = prepared.diagnostics.afterRedFlag;
+    const rawCandidatesCount = prepared.diagnostics.rawCandidates;
+    const redFlagRejected = prepared.diagnostics.redFlagRejected;
     const result = selectAutoBet(oddsFilteredCandidates, { targetOdds, maxSelections });
     if (!result.selections.length) {
       const cornerDiagnostics=await autoCornerDiagnostics(betTypes);
@@ -875,7 +926,9 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
         sportScope,
         requestedBetTypes: betTypes,
         candidateCount: oddsFilteredCandidates.length,
-        candidatesBeforeMaxOddsFilter: candidates.length,
+        candidatesBeforeMaxOddsFilter: redFlagSafeCandidatesCount,
+        candidatesBeforeRedFlagFilter: rawCandidatesCount,
+        redFlagRejected,
         maxMatchOdds,
         cornerDiagnostics,
         hint: cornerDiagnostics
@@ -891,7 +944,9 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       minEdge,
       maxSelections,
       maxMatchOdds,
-      candidatesBeforeMaxOddsFilter: candidates.length,
+      candidatesBeforeMaxOddsFilter: redFlagSafeCandidatesCount,
+      candidatesBeforeRedFlagFilter: rawCandidatesCount,
+      redFlagRejected,
       betTypes,
       generatedAt: new Date().toISOString(),
       note: 'Value engine: football uses 1X2, 1UP, Corners O/U, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap +0/+0.25/-0.25. O/U 2.5 is excluded. DNB/AH use settlement-aware fair odds and EV; basketball/hockey remain no-vig market estimates.',
@@ -1366,6 +1421,37 @@ function telegramAiTicketText(result, booking, request, plan) {
   return lines.join('\n');
 }
 
+function telegramAiBetTypesForSport(planId, sport) {
+  const allowed = new Set(telegramAiAllowedBetIdsForPlan(planId));
+  const bySport = {
+    football: ['home_win','draw','away_win','oneup','corners_over','corners_under','first_half_home_team_corners','first_half_away_team_corners','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
+    basketball: ['basketball_winner','basketball_over','basketball_under'],
+    hockey: ['hockey_winner','hockey_over','hockey_under'],
+  };
+  if (sport === 'all') return [...allowed];
+  return (bySport[sport] || []).filter(id => allowed.has(id));
+}
+
+function telegramAiMergeTicketRequest(user, incoming) {
+  const saved = user?.preferences?.builder || {};
+  const inc = incoming || {};
+  const merged = { ...saved, ...inc };
+  const plan = getTelegramAiPlan(user);
+  const requestedSport = inc.sport ? normalizeSportScope(inc.sport) : normalizeSportScope(merged.sport || 'football');
+  const explicitBetTypes = Array.isArray(inc.betTypes) && inc.betTypes.length > 0;
+
+  if (explicitBetTypes) {
+    merged.betTypes = inc.betTypes;
+  } else if (inc.sport) {
+    // A fresh natural-language sport request must not inherit incompatible markets
+    // from the previous ticket (e.g. football corners -> hockey).
+    merged.betTypes = telegramAiBetTypesForSport(plan.id, requestedSport);
+  } else if (!Array.isArray(merged.betTypes) || !merged.betTypes.length) {
+    merged.betTypes = telegramAiBetTypesForSport(plan.id, requestedSport);
+  }
+  return merged;
+}
+
 async function buildTelegramAiTicket(user, request) {
   const plan = getTelegramAiPlan(user);
   const saved = user?.preferences?.builder || {};
@@ -1382,17 +1468,35 @@ async function buildTelegramAiTicket(user, request) {
   const minEdge = Math.min(25, Math.max(-10, Number(merged.minEdge ?? 0)));
   const maxSelections = Math.min(plan.maxSelections, Math.max(1, Number(merged.maxSelections || plan.maxSelections)));
   const allowedBetTypes = new Set(telegramAiAllowedBetIdsForPlan(plan.id));
-  const requestedBetTypes = Array.isArray(merged.betTypes) && merged.betTypes.length ? merged.betTypes.map(String) : [...allowedBetTypes];
-  const betTypes = requestedBetTypes.filter(id => allowedBetTypes.has(id));
+  const sportBetTypes = new Set(telegramAiBetTypesForSport(plan.id, sport));
+  let requestedBetTypes = Array.isArray(merged.betTypes) && merged.betTypes.length ? merged.betTypes.map(String) : [...sportBetTypes];
+  let betTypes = requestedBetTypes.filter(id => allowedBetTypes.has(id) && (sport === 'all' || sportBetTypes.has(id)));
+  // Basketball/Hockey only have three supported families. Old saved preferences could
+  // contain a partial/corrupted list even though the Builder displayed “(3)”.
+  // When all selected IDs are sport-compatible, normalize them to the canonical IDs.
+  if (sport === 'basketball' && betTypes.length && betTypes.every(id => id.startsWith('basketball_'))) {
+    betTypes = telegramAiBetTypesForSport(plan.id, 'basketball');
+  }
+  if (sport === 'hockey' && betTypes.length && betTypes.every(id => id.startsWith('hockey_'))) {
+    betTypes = telegramAiBetTypesForSport(plan.id, 'hockey');
+  }
   if (!betTypes.length) {
-    return { locked: true, message: telegramAiUpgradeText(plan, 'the selected bet types') };
+    return { error: `None of the selected bet types are compatible with ${sport === 'hockey' ? 'Ice Hockey' : sport}. Choose a compatible market or ask for the sport without specifying a bet type.` };
   }
-  const candidates = await loadAutoCandidates({ sportScope: sport, minProbability: 0, minEdge, leagues: null, betTypes });
-  let pool = candidates.filter(passesRedFlagFilter).filter(x => Number(x.probability || 0) >= minProbability);
-  if (Number.isFinite(Number(merged.maxMatchOdds)) && Number(merged.maxMatchOdds) > 1) {
-    pool = pool.filter(x => Number(x.odds || 0) <= Number(merged.maxMatchOdds));
+  const prepared = await prepareAutoCandidatePool({
+    sportScope: sport,
+    minProbability,
+    minEdge,
+    leagues: null,
+    betTypes,
+    maxMatchOdds: merged.maxMatchOdds,
+  });
+  const pool = prepared.candidates;
+  if (!pool.length) {
+    const d = prepared.diagnostics;
+    console.warn(`[Telegram AI pool] sport=${sport} raw=${d.rawCandidates} afterRedFlag=${d.afterRedFlag} afterMaxOdds=${d.afterMaxOdds} minProb=${minProbability} minEdge=${minEdge} betTypes=${betTypes.join(',')}`);
+    return { error: `No current SportyBet selections passed your ${minProbability}% probability rule, ${minEdge} edge setting and red-flag protection. (Candidates: ${d.rawCandidates} raw, ${d.afterRedFlag} after red flags, ${d.afterMaxOdds} after max-odd filter.)` };
   }
-  if (!pool.length) return { error: `No current SportyBet selections passed your ${minProbability}% probability rule, ${minEdge} edge setting and red-flag protection.` };
   const result = selectAutoBet(pool, {
     targetOdds: merged.safe ? 1.325 : targetOdds,
     maxSelections,
@@ -1586,7 +1690,15 @@ async function handleTelegramAiUpdate(update) {
     else if (d === 'analyzer:prob') return sendTelegramAiMessageTo(chatId, '📈 Choose the probability threshold used to KEEP selections:', { reply_markup: telegramAiAnalyzerProbKeyboard() });
     else if (d === 'analyzer:horizon') return sendTelegramAiMessageTo(chatId, '📅 How far ahead should Matchday search for fixtures in the imported code?', { reply_markup: telegramAiAnalyzerHorizonKeyboard() });
     else if (d === 'analyzer:enter') return sendTelegramAiMessageTo(chatId, `⌨️ Send the SportyBet booking code now.\n\nCurrent analyzer: ≥ ${user.preferences.analyzer.minProbability}% · ${user.preferences.analyzer.horizonDays} days\nExample: RKT1JT`);
-    else if (d.startsWith('set:sport:')) { user.preferences.builder.sport=d.split(':')[2]; await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)}); }
+    else if (d.startsWith('set:sport:')) {
+      const nextSport=d.split(':')[2];
+      user.preferences.builder.sport=nextSport;
+      const compatible=telegramAiBetTypesForSport(getTelegramAiPlan(user).id,nextSport);
+      const current=(user.preferences.builder.betTypes||[]).filter(id=>compatible.includes(id));
+      if(!current.length) user.preferences.builder.betTypes=compatible;
+      await saveTelegramAiUser(redis,user);
+      return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)});
+    }
     else if (d.startsWith('set:target:')) { user.preferences.builder.targetOdds=Number(d.split(':')[2]); user.preferences.builder.safe=false; await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)}); }
     else if (d.startsWith('set:prob:')) { user.preferences.builder.minProbability=Number(d.split(':')[2]); await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)}); }
     else if (d.startsWith('set:maxodd:')) { const v=d.split(':')[2]; user.preferences.builder.maxMatchOdds=v==='none'?null:Number(v); await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)}); }
@@ -1709,7 +1821,7 @@ async function handleTelegramAiUpdate(update) {
   }
   if(intent.intent==='ticket'){
     const plan=getTelegramAiPlan(user);if(user.ticketsUsed>=plan.dailyTickets)return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${plan.dailyTickets} AI tickets. Your allowance resets tomorrow.`,{reply_markup:telegramAiPlanKeyboard()});
-    const req={...(user.preferences.builder||{}),...intent,betTypes:intent.betTypes||user.preferences.builder.betTypes};
+    const req=telegramAiMergeTicketRequest(user,intent);
     const built=await buildTelegramAiTicket(user,req).catch(e=>({error:e.message}));if(built.locked)return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});if(built.error)return sendTelegramAiMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiMainKeyboard()});
     const use=await consumeTelegramAiUsage(redis,user,'ticket');user=use.user;user.lastBuilderRequest=built.request;user.lastBookingCode=built.booking?.shareCode||null;await saveTelegramAiUser(redis,user);return sendTelegramAiLongMessage(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan),{reply_markup:telegramAiResultKeyboard()});
   }
@@ -1733,7 +1845,7 @@ async function handleTelegramAiUpdate(update) {
     if(llm.action==='ticket'){
       const p=getTelegramAiPlan(user);
       if(user.ticketsUsed>=p.dailyTickets)return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${p.dailyTickets} AI tickets.`,{reply_markup:telegramAiPlanKeyboard()});
-      const li=llmTicketIntent(llm),req={...(user.preferences.builder||{}),...li,betTypes:li.betTypes||user.preferences.builder.betTypes};
+      const li=llmTicketIntent(llm),req=telegramAiMergeTicketRequest(user,li);
       const built=await buildTelegramAiTicket(user,req).catch(e=>({error:e.message}));
       if(built.locked)return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});
       if(built.error)return sendTelegramAiMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiMainKeyboard()});
