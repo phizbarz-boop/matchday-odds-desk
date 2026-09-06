@@ -119,3 +119,34 @@ Security: the activation callback verifies that the person pressing it is listed
 
 ## Minimum probability
 Minimum probability is not subscription-capped. Free, Pro and Elite users can choose minimum probability from 0% through 95%; there is no subscription minimum-probability floor. Plain-language ticket requests may also specify a minimum probability directly (for example, `minimum probability 73%`).
+
+
+## Conversational LLM
+
+The customer bot now supports a real conversational LLM through the OpenAI Responses API. The LLM is used as the conversation/intent layer only. Matchday's existing engine remains authoritative for fixtures, SportyBet odds, probabilities, red flags, booking codes, plan limits and usage limits.
+
+Add these Render environment variables:
+
+- `OPENAI_API_KEY` — required to enable conversational LLM mode.
+- `OPENAI_MODEL` — optional. Default: `gpt-5.6-luna`.
+
+Examples:
+- "I want something safe today around 10 odds, football only."
+- "Nothing above 1.30 per game and don't use draws."
+- "What can I do on my current plan?"
+- "Analyze RKT1JT."
+
+The bot retains a short per-user conversation history in the existing user record so follow-up messages can use recent context. If the OpenAI request fails or no API key is configured, existing structured commands and Telegram buttons continue to work.
+
+Security/design: the LLM cannot activate plans or bypass plan market/sport limits. It is instructed not to invent matches, odds, probabilities, results or booking codes.
+
+
+## Daily conversational AI limits
+
+To protect API credit from misuse, conversational LLM calls are limited per Telegram user and reset daily:
+
+- Free: 10 AI chat messages/day
+- Pro: 30 AI chat messages/day
+- Elite: 75 AI chat messages/day
+
+Ticket and analyzer limits remain separate. The account screen shows AI chat usage. Telegram buttons and existing supported direct commands do not consume the LLM quota when they can be handled locally.

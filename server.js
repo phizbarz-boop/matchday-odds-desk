@@ -160,7 +160,7 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   const kickoffBufferSeconds = Math.max(0, Number(options.kickoffBufferSeconds ?? process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS ?? 60) || 0);
   // Keep Analyzer's 14/21-day cache completely separate from the normal Auto Builder cache.
   // Versioned cache key: bumping this invalidates stale/empty market caches after parser changes.
-  const cacheVersion = String(process.env.SPORTYBET_CACHE_VERSION || '5');
+  const cacheVersion = String(process.env.SPORTYBET_CACHE_VERSION || '6');
   const cacheKey = `sportybet:v${cacheVersion}:${sport}:${kind}:h${hours}:p${maxPages}`;
   const client = await getRedis();
   const nowMs = Date.now();
@@ -175,22 +175,38 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   }
 
   if (cached && (maxCacheAgeSeconds == null || sportyPayloadAgeSeconds(cached, nowMs) <= maxCacheAgeSeconds)) {
-    return filterUpcomingSportyPayload(cached, { nowMs, kickoffBufferSeconds });
+    const filteredCached = filterUpcomingSportyPayload(cached, { nowMs, kickoffBufferSeconds });
+    // Never let an empty cache (or a cache whose fixtures have all kicked off)
+    // block discovery of newly-added SportyBet fixtures. Refresh immediately.
+    if (Array.isArray(filteredCached?.rows) && filteredCached.rows.length > 0) {
+      return filteredCached;
+    }
+    if (client) await client.del(cacheKey).catch(()=>{});
+    else sportyMemoryCache.delete(cacheKey);
   }
 
   const payload = sport === 'football'
     ? await getFootballMarket(kind, { hours, maxPages })
     : await getSportMarket(sport, kind, { hours, maxPages });
 
-  if (client) {
-    await client.set(cacheKey, JSON.stringify(payload), { EX: ttlSeconds });
+  const filteredPayload = filterUpcomingSportyPayload(payload, { nowMs: Date.now(), kickoffBufferSeconds });
+  // Do not persist zero-outcome responses. A temporary empty Parse/SportyBet response
+  // must not make the website appear empty for SPORTYBET_CACHE_SECONDS (default 12h).
+  if (Array.isArray(filteredPayload?.rows) && filteredPayload.rows.length > 0) {
+    if (client) {
+      await client.set(cacheKey, JSON.stringify(payload), { EX: ttlSeconds });
+    } else {
+      sportyMemoryCache.set(cacheKey, {
+        expiresAt: nowMs + ttlSeconds * 1000,
+        payload,
+      });
+    }
   } else {
-    sportyMemoryCache.set(cacheKey, {
-      expiresAt: nowMs + ttlSeconds * 1000,
-      payload,
-    });
+    if (client) await client.del(cacheKey).catch(()=>{});
+    else sportyMemoryCache.delete(cacheKey);
+    console.warn(`[SportyBet] ${sport}/${kind}: 0 upcoming outcomes; empty response not cached so next request can refresh.`);
   }
-  return filterUpcomingSportyPayload(payload, { nowMs: Date.now(), kickoffBufferSeconds });
+  return filteredPayload;
 }
 
 async function allowBookingRequest(req) {
@@ -1286,6 +1302,7 @@ function telegramAiAccountText(user) {
     ...(user.plan !== 'free' ? [`Renews/expires: ${expiry}`] : []),
     `Tickets today: ${user.ticketsUsed}/${plan.dailyTickets}`,
     `Code analyses today: ${user.analyzesUsed}/${plan.dailyAnalyzes}`,
+    `AI chat messages today: ${Number(user.llmMessagesUsed||0)}/${plan.dailyLlmMessages}`,
     `Maximum target odds: ${plan.maxTargetOdds}x`,
     `Maximum selections: ${plan.maxSelections}`,
     `Sports: ${plan.sports.map(x => x === 'hockey' ? 'Ice Hockey' : x[0].toUpperCase()+x.slice(1)).join(', ')}`,
@@ -1404,6 +1421,94 @@ async function sendTelegramAiLongMessage(chatId, text, options = {}) {
     const opts = i === chunks.length - 1 ? options : {};
     await sendTelegramAiMessageTo(chatId, chunks[i], opts);
   }
+}
+
+
+async function matchdayLlmInterpret(user, message) {
+  const apiKey=String(process.env.OPENAI_API_KEY||'').trim();
+  if(!apiKey) return null;
+  const model=String(process.env.OPENAI_MODEL||'gpt-5.6-luna').trim();
+  const plan=getTelegramAiPlan(user);
+  const llmLimit=Number(plan.dailyLlmMessages||0);
+  const llmUsed=Number(user.llmMessagesUsed||0);
+  if(llmLimit>0 && llmUsed>=llmLimit) return {quotaExceeded:true, limit:llmLimit, action:'chat', reply:''};
+  user.llmMessagesUsed=llmUsed+1;
+  const b=user.preferences?.builder||{};
+  const allowed=telegramAiAllowedBetIdsForPlan(plan.id);
+  const history=Array.isArray(user.llmHistory)?user.llmHistory.slice(-8):[];
+  const instructions=`You are Matchday AI, a concise conversational assistant inside a Telegram sports analytics app.
+Never invent fixtures, odds, booking codes, probabilities, results, or model data. The application engine—not you—retrieves and calculates those.
+Interpret normal conversation into either a reply or an app action.
+Current subscription: ${plan.name}. Allowed sports: ${plan.sports.join(', ')}. Allowed bet type IDs: ${allowed.join(', ')}.
+Current builder settings: ${JSON.stringify(b)}.
+Valid action values: chat, ticket, builder, plans, account, analyze.
+For ticket actions, only set fields the user clearly requested; the app merges them with current settings.
+Sport values: football, basketball, hockey, all. Do not bypass subscription restrictions.
+Bet IDs: home_win, draw, away_win, oneup, corners_over, corners_under, first_half_home_team_corners, first_half_away_team_corners, dc_1x, dc_x2, dnb, over05, over15, under45, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, hockey_winner, hockey_over, hockey_under.
+If the user asks to build/rebuild/replace/remove selections but the requested transformation cannot be safely represented by these parameters, explain what can be changed and ask one concise question instead of pretending it was done.
+If discussing betting, do not promise wins or guaranteed profit.`;
+  const input=[
+    ...history.map(x=>({role:x.role==='assistant'?'assistant':'user',content:String(x.content||'')})),
+    {role:'user',content:String(message)}
+  ];
+  const body={
+    model,
+    instructions,
+    input,
+    store:false,
+    max_output_tokens:500,
+    text:{format:{
+      type:'json_schema',
+      name:'matchday_router',
+      strict:true,
+      schema:{
+        type:'object',
+        additionalProperties:false,
+        properties:{
+          action:{type:'string',enum:['chat','ticket','builder','plans','account','analyze']},
+          reply:{type:'string'},
+          targetOdds:{type:['number','null']},
+          sport:{type:['string','null'],enum:['football','basketball','hockey','all',null]},
+          minProbability:{type:['number','null'],minimum:0,maximum:100},
+          maxMatchOdds:{type:['number','null']},
+          minEdge:{type:['number','null']},
+          maxSelections:{type:['integer','null']},
+          safe:{type:['boolean','null']},
+          betTypes:{type:['array','null'],items:{type:'string'}},
+          bookingCode:{type:['string','null']}
+        },
+        required:['action','reply','targetOdds','sport','minProbability','maxMatchOdds','minEdge','maxSelections','safe','betTypes','bookingCode']
+      }
+    }}
+  };
+  try{
+    const r=await fetch('https://api.openai.com/v1/responses',{
+      method:'POST',
+      headers:{'content-type':'application/json','authorization':`Bearer ${apiKey}`},
+      body:JSON.stringify(body),
+      signal:AbortSignal.timeout(20000)
+    });
+    if(!r.ok){const t=await r.text();throw new Error(`OpenAI ${r.status}: ${t.slice(0,180)}`)}
+    const data=await r.json();
+    let outText=data.output_text;
+    if(!outText){
+      for(const item of data.output||[]) for(const c of item.content||[]) if(c.type==='output_text'&&c.text){outText=c.text;break}
+    }
+    const parsed=JSON.parse(outText||'{}');
+    user.llmHistory=[...history,{role:'user',content:String(message)},{role:'assistant',content:String(parsed.reply||'')}].slice(-10);
+    return parsed;
+  }catch(e){
+    console.error('Matchday LLM error:',e.message);
+    return null;
+  }
+}
+
+function llmTicketIntent(x){
+  const out={intent:'ticket'};
+  for(const k of ['targetOdds','sport','minProbability','maxMatchOdds','minEdge','maxSelections','safe','betTypes']){
+    if(x[k]!==null&&x[k]!==undefined) out[k]=x[k];
+  }
+  return out;
 }
 
 async function handleTelegramAiUpdate(update) {
@@ -1573,7 +1678,36 @@ async function handleTelegramAiUpdate(update) {
     const built=await buildTelegramAiTicket(user,req).catch(e=>({error:e.message}));if(built.locked)return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});if(built.error)return sendTelegramAiMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiMainKeyboard()});
     const use=await consumeTelegramAiUsage(redis,user,'ticket');user=use.user;user.lastBuilderRequest=built.request;user.lastBookingCode=built.booking?.shareCode||null;await saveTelegramAiUser(redis,user);return sendTelegramAiLongMessage(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan),{reply_markup:telegramAiResultKeyboard()});
   }
-  return sendTelegramAiMessageTo(chatId,'Use 🎯 Auto Builder for the easiest setup, or type “Build a football 10x ticket”.',{reply_markup:telegramAiMainKeyboard()});
+  const llm=await matchdayLlmInterpret(user,text);
+  if(llm?.quotaExceeded){
+    await saveTelegramAiUser(redis,user);
+    return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${llm.limit} conversational AI messages. Your AI chat allowance resets tomorrow. Buttons and supported direct commands are still available.`,{reply_markup:telegramAiMainKeyboard()});
+  }
+  if(llm){
+    await saveTelegramAiUser(redis,user);
+    if(llm.action==='builder') return sendTelegramAiMessageTo(chatId,llm.reply||telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)});
+    if(llm.action==='plans') return sendTelegramAiMessageTo(chatId,llm.reply||telegramAiPlansText(),{reply_markup:telegramAiPlanKeyboard()});
+    if(llm.action==='account') return sendTelegramAiMessageTo(chatId,`${llm.reply?llm.reply+'\n\n':''}${telegramAiAccountText(user)}`,{reply_markup:telegramAiMainKeyboard()});
+    if(llm.action==='analyze'&&llm.bookingCode){
+      const p=getTelegramAiPlan(user);
+      if(p.dailyAnalyzes<=0)return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(p,'SportyBet code analysis'),{reply_markup:telegramAiPlanKeyboard()});
+      if(user.analyzesUsed>=p.dailyAnalyzes)return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${p.dailyAnalyzes} code analyses.`,{reply_markup:telegramAiPlanKeyboard()});
+      const cfg=user.preferences.analyzer||{minProbability:70,horizonDays:14};
+      try{const analysis=await analyzeTelegramAiCode(llm.bookingCode,cfg.minProbability,cfg.horizonDays);const use=await consumeTelegramAiUsage(redis,user,'analyze');user=use.user;return sendTelegramAiLongMessage(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiAnalyzerKeyboard()})}catch(e){return sendTelegramAiMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`,{reply_markup:telegramAiAnalyzerKeyboard()})}
+    }
+    if(llm.action==='ticket'){
+      const p=getTelegramAiPlan(user);
+      if(user.ticketsUsed>=p.dailyTickets)return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${p.dailyTickets} AI tickets.`,{reply_markup:telegramAiPlanKeyboard()});
+      const li=llmTicketIntent(llm),req={...(user.preferences.builder||{}),...li,betTypes:li.betTypes||user.preferences.builder.betTypes};
+      const built=await buildTelegramAiTicket(user,req).catch(e=>({error:e.message}));
+      if(built.locked)return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});
+      if(built.error)return sendTelegramAiMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiMainKeyboard()});
+      const use=await consumeTelegramAiUsage(redis,user,'ticket');user=use.user;user.lastBuilderRequest=built.request;user.lastBookingCode=built.booking?.shareCode||null;await saveTelegramAiUser(redis,user);
+      return sendTelegramAiLongMessage(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan),{reply_markup:telegramAiResultKeyboard()});
+    }
+    return sendTelegramAiMessageTo(chatId,llm.reply||'How can I help with your Matchday ticket?',{reply_markup:telegramAiMainKeyboard()});
+  }
+  return sendTelegramAiMessageTo(chatId,'I can understand structured Matchday commands, but conversational AI is temporarily unavailable. Try “Build a football 10x ticket”.',{reply_markup:telegramAiMainKeyboard()});
 }
 
 
