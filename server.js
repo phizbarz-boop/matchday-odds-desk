@@ -130,25 +130,31 @@ function telegramManualSlipText(payload) {
 function filterUpcomingSportyPayload(payload, { nowMs = Date.now(), kickoffBufferSeconds = 60 } = {}) {
   if (!payload || !Array.isArray(payload.rows)) return payload;
   const cutoff = nowMs + Math.max(0, Number(kickoffBufferSeconds) || 0) * 1000;
-  let validKickoff = 0, invalidKickoff = 0, pastOrStarted = 0;
-  const kickoffSamples = [];
+  let validKickoff = 0, missingOrInvalidKickoff = 0, pastOrStarted = 0;
   const rows = payload.rows.filter(row => {
-    const rawKickoff = row?.kickoffUtc;
-    const kickoffMs = Date.parse(rawKickoff || '');
-    if (kickoffSamples.length < 5) kickoffSamples.push(String(rawKickoff ?? '<missing>'));
-    if (!Number.isFinite(kickoffMs)) { invalidKickoff++; return false; }
+    const kickoffMs = Date.parse(row?.kickoffUtc || '');
+    // Important: the managed SportyBet market endpoint often omits kickoff time.
+    // Missing/invalid kickoff must NOT cause a valid current selection to be discarded.
+    // We only remove a row when a valid timestamp explicitly proves it has started/expired.
+    if (!Number.isFinite(kickoffMs)) {
+      missingOrInvalidKickoff++;
+      return true;
+    }
     validKickoff++;
-    if (kickoffMs <= cutoff) { pastOrStarted++; return false; }
+    if (kickoffMs <= cutoff) {
+      pastOrStarted++;
+      return false;
+    }
     return true;
   });
-  console.log(`[SportyBet diagnostic] raw=${payload.rows.length} validKickoff=${validKickoff} invalidKickoff=${invalidKickoff} pastOrStarted=${pastOrStarted} upcoming=${rows.length} kickoffSamples=${JSON.stringify(kickoffSamples)}`);
+  console.log(`[SportyBet filter] raw=${payload.rows.length} validKickoff=${validKickoff} missingKickoffKept=${missingOrInvalidKickoff} pastOrStartedRemoved=${pastOrStarted} returned=${rows.length}`);
   return {
     ...payload,
     rows,
     totalReturned: rows.length,
-    staleRowsRemoved: Math.max(0, payload.rows.length - rows.length),
+    staleRowsRemoved: pastOrStarted,
+    missingKickoffKept: missingOrInvalidKickoff,
     upcomingFilteredAt: new Date(nowMs).toISOString(),
-    diagnostic: { rawRows: payload.rows.length, validKickoff, invalidKickoff, pastOrStarted, upcomingRows: rows.length, kickoffSamples },
   };
 }
 
@@ -168,7 +174,7 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   const kickoffBufferSeconds = Math.max(0, Number(options.kickoffBufferSeconds ?? process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS ?? 60) || 0);
   // Keep Analyzer's 14/21-day cache completely separate from the normal Auto Builder cache.
   // Versioned cache key: bumping this invalidates stale/empty market caches after parser changes.
-  const cacheVersion = String(process.env.SPORTYBET_CACHE_VERSION || 'diag1');
+  const cacheVersion = String(process.env.SPORTYBET_CACHE_VERSION || '9');
   const cacheKey = `sportybet:v${cacheVersion}:${sport}:${kind}:h${hours}:p${maxPages}`;
   const client = await getRedis();
   const nowMs = Date.now();
