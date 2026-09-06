@@ -115,23 +115,56 @@ function telegramManualSlipText(payload) {
   return lines.join('\n');
 }
 
+function filterUpcomingSportyPayload(payload, { nowMs = Date.now(), kickoffBufferSeconds = 60 } = {}) {
+  if (!payload || !Array.isArray(payload.rows)) return payload;
+  const cutoff = nowMs + Math.max(0, Number(kickoffBufferSeconds) || 0) * 1000;
+  const rows = payload.rows.filter(row => {
+    const kickoffMs = Date.parse(row?.kickoffUtc || '');
+    // Auto Builder must never use a selection whose kickoff is missing/invalid,
+    // because it cannot safely determine whether that SportyBet event has expired.
+    return Number.isFinite(kickoffMs) && kickoffMs > cutoff;
+  });
+  return {
+    ...payload,
+    rows,
+    totalReturned: rows.length,
+    staleRowsRemoved: Math.max(0, Number(payload.rows.length) - rows.length),
+    upcomingFilteredAt: new Date(nowMs).toISOString(),
+  };
+}
+
+function sportyPayloadAgeSeconds(payload, nowMs = Date.now()) {
+  const fetchedMs = Date.parse(payload?.fetchedAt || '');
+  return Number.isFinite(fetchedMs) ? Math.max(0, (nowMs - fetchedMs) / 1000) : Infinity;
+}
+
 async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   const ttlSeconds = Math.max(60, parseInt(process.env.SPORTYBET_CACHE_SECONDS || '43200', 10));
   const normalHours = Math.max(1, parseInt(process.env.SPORTYBET_HOURS || String((parseInt(process.env.DAYS_AHEAD || '4', 10) + 1) * 24), 10));
   const hours = Math.max(1, Math.min(24 * 21, parseInt(options.hours || normalHours, 10)));
   const maxPages = Math.max(1, Math.min(20, parseInt(options.maxPages || process.env.SPORTYBET_MAX_PAGES || '5', 10)));
+  const maxCacheAgeSeconds = Number.isFinite(Number(options.maxCacheAgeSeconds))
+    ? Math.max(0, Number(options.maxCacheAgeSeconds))
+    : null;
+  const kickoffBufferSeconds = Math.max(0, Number(options.kickoffBufferSeconds ?? process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS ?? 60) || 0);
   // Keep Analyzer's 14/21-day cache completely separate from the normal Auto Builder cache.
   // Versioned cache key: bumping this invalidates stale/empty market caches after parser changes.
-  const cacheVersion = String(process.env.SPORTYBET_CACHE_VERSION || '4');
+  const cacheVersion = String(process.env.SPORTYBET_CACHE_VERSION || '5');
   const cacheKey = `sportybet:v${cacheVersion}:${sport}:${kind}:h${hours}:p${maxPages}`;
   const client = await getRedis();
+  const nowMs = Date.now();
 
+  let cached = null;
   if (client) {
     const raw = await client.get(cacheKey);
-    if (raw) return JSON.parse(raw);
+    if (raw) cached = JSON.parse(raw);
   } else {
     const hit = sportyMemoryCache.get(cacheKey);
-    if (hit && hit.expiresAt > Date.now()) return hit.payload;
+    if (hit && hit.expiresAt > nowMs) cached = hit.payload;
+  }
+
+  if (cached && (maxCacheAgeSeconds == null || sportyPayloadAgeSeconds(cached, nowMs) <= maxCacheAgeSeconds)) {
+    return filterUpcomingSportyPayload(cached, { nowMs, kickoffBufferSeconds });
   }
 
   const payload = sport === 'football'
@@ -142,11 +175,11 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
     await client.set(cacheKey, JSON.stringify(payload), { EX: ttlSeconds });
   } else {
     sportyMemoryCache.set(cacheKey, {
-      expiresAt: Date.now() + ttlSeconds * 1000,
+      expiresAt: nowMs + ttlSeconds * 1000,
       payload,
     });
   }
-  return payload;
+  return filterUpcomingSportyPayload(payload, { nowMs: Date.now(), kickoffBufferSeconds });
 }
 
 async function allowBookingRequest(req) {
@@ -436,24 +469,33 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
   const wantsFootball = scope === 'all' || scope === 'football';
   const wantsBasketball = scope === 'all' || scope === 'basketball';
   const wantsHockey = scope === 'all' || scope === 'hockey';
+  // The general sportsbook cache may live for hours to save API credits, but the Auto Builder
+  // needs much fresher availability data so expired events cannot remain eligible.
+  const autoMaxCacheAgeSeconds = Math.max(0, parseInt(process.env.AUTO_SPORTYBET_MAX_CACHE_AGE_SECONDS || '900', 10));
+  const autoMarketOptions = {
+    hours: marketHours || undefined,
+    maxPages: marketMaxPages || undefined,
+    maxCacheAgeSeconds: autoMaxCacheAgeSeconds,
+    kickoffBufferSeconds: Math.max(0, parseInt(process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS || '60', 10)),
+  };
 
   let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
     wantsFootball ? loadPredictions() : Promise.resolve({ matches: [] }),
-    wantsFootball ? loadSportyBetMarket('1x2', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('gg', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('dc', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('dnb', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('ou05', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('ou15', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('ou45', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('ah', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('corners', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('first_half_team_corners', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsFootball ? loadSportyBetMarket('oneup', 'football', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsBasketball ? loadSportyBetMarket('winner', 'basketball', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsBasketball ? loadSportyBetMarket('totals', 'basketball', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsHockey ? loadSportyBetMarket('winner', 'hockey', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
-    wantsHockey ? loadSportyBetMarket('totals', 'hockey', { hours: marketHours || undefined, maxPages: marketMaxPages || undefined }) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('1x2', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('gg', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('dc', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('dnb', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('ou05', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('ou15', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('ou45', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('ah', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('corners', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('first_half_team_corners', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsFootball ? loadSportyBetMarket('oneup', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsBasketball ? loadSportyBetMarket('winner', 'basketball', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsBasketball ? loadSportyBetMarket('totals', 'basketball', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsHockey ? loadSportyBetMarket('winner', 'hockey', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    wantsHockey ? loadSportyBetMarket('totals', 'hockey', autoMarketOptions) : Promise.resolve({ rows: [] }),
   ]);
 
   if (wantsFootball && cornerBetRequested(betTypes)) {
