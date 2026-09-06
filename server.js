@@ -293,12 +293,9 @@ app.get('/api/corners/test-live', async (req, res) => {
       return res.status(503).json({apiFootballConfigured:false,called:false,error:'API_FOOTBALL_KEY is not configured'});
     }
 
-    const [c,h]=await Promise.all([
-      loadSportyBetMarket('corners'),
-      loadSportyBetMarket('first_half_team_corners')
-    ]);
+    const c=await loadSportyBetMarket('corners');
 
-    const source=[...(c?.rows||[]),...(h?.rows||[])];
+    const source=[...(c?.rows||[])];
     const seen=new Set();
     const fixtures=source.filter(x=>{
       const k=String(x.eventId||'') || `${x.home}|${x.away}|${x.kickoffUtc}`;
@@ -312,7 +309,6 @@ app.get('/api/corners/test-live', async (req, res) => {
         apiFootballConfigured:true,
         called:false,
         sportyCornerRows:(c?.rows||[]).length,
-        sportyFirstHalfCornerRows:(h?.rows||[]).length,
         error:'No usable SportyBet corner fixture contained home, away and kickoffUtc'
       });
     }
@@ -350,10 +346,9 @@ app.get('/api/corners/test-live', async (req, res) => {
 
 app.get('/api/corners/diagnostics', async (req, res) => {
   try{
-    const [pred,c,h]=await Promise.all([
+    const [pred,c]=await Promise.all([
       loadPredictions(),
-      loadSportyBetMarket('corners'),
-      loadSportyBetMarket('first_half_team_corners')
+      loadSportyBetMarket('corners')
     ]);
     const matches=Array.isArray(pred?.matches)?pred.matches:[];
     const modeled=matches.filter(x=>Number(x?.corners?.totalLambda||0)>0);
@@ -362,7 +357,6 @@ app.get('/api/corners/diagnostics', async (req, res) => {
       predictionMatches:matches.length,
       matchesWithCornerModel:modeled.length,
       sportyCornerRows:Array.isArray(c?.rows)?c.rows.length:0,
-      sportyFirstHalfCornerRows:Array.isArray(h?.rows)?h.rows.length:0,
       sampleCornerModels:modeled.slice(0,5).map(x=>({
         eventId:x.eventId||x.sportyEventId||null,
         home:x.home,away:x.away,
@@ -390,12 +384,14 @@ app.get('/api/api-football/diagnostics', async (req, res) => {
 
 
 // Live-ish SportyBet price layer. The Parse API key never reaches the browser.
-// Supported football values: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, oneup. O/U 2.5 is intentionally not used by the Auto Builder.
+// Supported football values: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, corners. O/U 2.5 is intentionally not used by the Auto Builder.
+// 1UP and 1H Home/Away Team Corners were removed (owner request) to cut Parse.bot credit usage; they are
+// intentionally not accepted here even though older clients may still request them.
 app.get('/api/sportybet/odds', async (req, res) => {
   try {
     const kind = String(req.query.market || '1x2').toLowerCase();
-    if (!['1x2', 'gg', 'dc', 'dnb', 'ou05', 'ou15', 'ou45', 'ah', 'oneup', 'corners', 'first_half_team_corners'].includes(kind)) {
-      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, oneup, corners, first_half_team_corners' });
+    if (!['1x2', 'gg', 'dc', 'dnb', 'ou05', 'ou15', 'ou45', 'ah', 'corners'].includes(kind)) {
+      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, corners' });
     }
     const payload = await loadSportyBetMarket(kind);
     res.set('Cache-Control', 'public, max-age=60');
@@ -454,8 +450,7 @@ function normalizeSportScope(value) {
 function cornerBetRequested(betTypes) {
   return Array.isArray(betTypes) && betTypes.some(x => {
     const t=String(x || '');
-    return ['corners_over','corners_under','first_half_home_team_corners','first_half_away_team_corners'].includes(t)
-      || t.startsWith('first_half_home_corners_') || t.startsWith('first_half_away_corners_');
+    return ['corners_over','corners_under'].includes(t);
   });
 }
 
@@ -968,17 +963,15 @@ async function autoCornerDiagnostics(betTypes) {
   const wantsCorners=Array.isArray(betTypes) && betTypes.some(x=>String(x).includes('corner'));
   if(!wantsCorners) return null;
   try{
-    const [pred, c, h] = await Promise.all([
+    const [pred, c] = await Promise.all([
       loadPredictions(),
-      loadSportyBetMarket('corners'),
-      loadSportyBetMarket('first_half_team_corners')
+      loadSportyBetMarket('corners')
     ]);
     const matches=Array.isArray(pred?.matches)?pred.matches:[];
     return {
       predictionMatches:matches.length,
       matchesWithCornerModel:matches.filter(x=>Number(x?.corners?.totalLambda||0)>0).length,
       sportyCornerRows:Array.isArray(c?.rows)?c.rows.length:0,
-      sportyFirstHalfCornerRows:Array.isArray(h?.rows)?h.rows.length:0,
       apiFootballConfigured:!!(process.env.API_FOOTBALL_KEY||process.env.API_FOOTBALL_API_KEY),
     };
   }catch(e){
@@ -1682,7 +1675,7 @@ Current builder settings: ${JSON.stringify(b)}.
 Valid action values: chat, ticket, builder, plans, account, analyze.
 For ticket actions, only set fields the user clearly requested; the app merges them with current settings.
 Sport values: football, basketball, hockey, all. Do not bypass subscription restrictions.
-Bet IDs: home_win, draw, away_win, oneup, corners_over, corners_under, first_half_home_team_corners, first_half_away_team_corners, dc_1x, dc_x2, dnb, over05, over15, under45, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, hockey_winner, hockey_over, hockey_under.
+Bet IDs: home_win, draw, away_win, corners_over, corners_under, dc_1x, dc_x2, dnb, over05, over15, under45, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, hockey_winner, hockey_over, hockey_under.
 If the user asks to build/rebuild/replace/remove selections but the requested transformation cannot be safely represented by these parameters, explain what can be changed and ask one concise question instead of pretending it was done.
 If discussing betting, do not promise wins or guaranteed profit.`;
   const input=[
