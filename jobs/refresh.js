@@ -152,12 +152,26 @@ async function buildLeague(code) {
   return results;
 }
 
-async function storeResult(payload) {
+async function storeResult(payload, marketSnapshots = []) {
   if (process.env.REDIS_URL) {
     const { createClient } = require('redis');
     const client = createClient({ url: process.env.REDIS_URL });
     await client.connect();
     await client.set('predictions:latest', JSON.stringify(payload));
+
+    // Seed the shared SportyBet daily snapshot cache from data already paid for by
+    // this refresh. These keys deliberately do not include horizon/page count, so
+    // Analyzer/Auto Builder requests can reuse a broader refresh snapshot.
+    const cacheVersion = String(process.env.SPORTYBET_CACHE_VERSION || '9');
+    const snapshotTtl = Math.max(3600, parseInt(process.env.SPORTYBET_DAILY_SNAPSHOT_SECONDS || '93600', 10));
+    for (const snap of marketSnapshots) {
+      if (!snap?.payload || !Array.isArray(snap.payload.rows) || !snap.payload.rows.length) continue;
+      const key = `sportybet:snapshot:v${cacheVersion}:${snap.sport}:${snap.kind}`;
+      const value = { ...snap.payload, snapshotHours:Number(snap.hours)||0, snapshotSavedAt:new Date().toISOString() };
+      await client.set(key, JSON.stringify(value), { EX: snapshotTtl });
+      console.log(`Seeded daily SportyBet snapshot ${snap.sport}/${snap.kind}: ${snap.payload.rows.length} rows`);
+    }
+
     await client.quit();
     console.log('Wrote predictions to Redis key "predictions:latest"');
   } else {
@@ -168,6 +182,7 @@ async function storeResult(payload) {
 }
 
 async function main() {
+  const marketSnapshots = [];
   const hasFootballData = !!TOKEN;
   const hasApiFootball = !!(process.env.API_FOOTBALL_KEY || process.env.API_FOOTBALL_API_KEY);
   if (!hasFootballData && !hasApiFootball) {
@@ -193,10 +208,19 @@ async function main() {
       const hours = Math.min(24 * 21, Math.max(24, DAYS_AHEAD * 24));
       const maxPages = Math.max(1, Math.min(20, parseInt(process.env.API_FOOTBALL_SPORTY_MAX_PAGES || process.env.ANALYZER_MAX_PAGES || '12', 10)));
       const oneXtwo = await getFootballMarket('1x2', { hours, maxPages });
+      marketSnapshots.push({ sport:'football', kind:'1x2', hours, payload:oneXtwo });
       let cornerRows = [], firstHalfTeamCornerRows = [];
-      try { cornerRows = (await getFootballMarket('corners', { hours, maxPages })).rows || []; }
+      try {
+        const cornerPayload = await getFootballMarket('corners', { hours, maxPages });
+        cornerRows = cornerPayload.rows || [];
+        if (cornerRows.length) marketSnapshots.push({ sport:'football', kind:'corners', hours, payload:cornerPayload });
+      }
       catch (err) { console.warn(`SportyBet corners market unavailable during refresh: ${err.message}`); }
-      try { firstHalfTeamCornerRows = (await getFootballMarket('first_half_team_corners', { hours, maxPages })).rows || []; }
+      try {
+        const firstHalfPayload = await getFootballMarket('first_half_team_corners', { hours, maxPages });
+        firstHalfTeamCornerRows = firstHalfPayload.rows || [];
+        if (firstHalfTeamCornerRows.length) marketSnapshots.push({ sport:'football', kind:'first_half_team_corners', hours, payload:firstHalfPayload });
+      }
       catch (err) { console.warn(`SportyBet 1H team corners market unavailable during refresh: ${err.message}`); }
       const cornerEventIds = new Set([...cornerRows, ...firstHalfTeamCornerRows].map(x => String(x.eventId)));
       const apiRows = await enrichSportyFixtures(oneXtwo.rows || [], {
@@ -238,7 +262,7 @@ async function main() {
       h2hMaxMeetings: H2H_MAX_MEETINGS,
     },
     matches: all,
-  });
+  }, marketSnapshots);
   console.log(`Done. ${all.length} total fixtures.`);
 }
 

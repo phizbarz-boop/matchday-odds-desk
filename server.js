@@ -10,7 +10,7 @@ const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
 const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG } = require('./lib/sportybet');
 const { buildCandidates, selectAutoBet, passesRedFlagFilter} = require('./lib/autoPicker');
 const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest, sendTelegramAiMessageTo, telegramAiRequest } = require('./lib/telegram');
-const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, allowedBetIdsForPlan: telegramAiAllowedBetIdsForPlan, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, addExtraTickets: addTelegramAiExtraTickets, hasTicketCredit: telegramAiHasTicketCredit, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, ticketLimitKeyboard: telegramAiTicketLimitKeyboard, mainKeyboard: telegramAiMainKeyboard, builderSummary: telegramAiBuilderSummary, builderKeyboard: telegramAiBuilderKeyboard, sportKeyboard: telegramAiSportKeyboard, targetKeyboard: telegramAiTargetKeyboard, probabilityKeyboard: telegramAiProbabilityKeyboard, maxOddKeyboard: telegramAiMaxOddKeyboard, edgeKeyboard: telegramAiEdgeKeyboard, maxGamesKeyboard: telegramAiMaxGamesKeyboard, marketsKeyboard: telegramAiMarketsKeyboard, analyzerSummary: telegramAiAnalyzerSummary, analyzerKeyboard: telegramAiAnalyzerKeyboard, analyzerProbKeyboard: telegramAiAnalyzerProbKeyboard, analyzerHorizonKeyboard: telegramAiAnalyzerHorizonKeyboard, resultKeyboard: telegramAiResultKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
+const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, allowedBetIdsForPlan: telegramAiAllowedBetIdsForPlan, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, addExtraTickets: addTelegramAiExtraTickets, hasTicketCredit: telegramAiHasTicketCredit, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, ticketLimitKeyboard: telegramAiTicketLimitKeyboard, mainKeyboard: telegramAiMainKeyboard, builderSummary: telegramAiBuilderSummary, builderKeyboard: telegramAiBuilderKeyboard, sportKeyboard: telegramAiSportKeyboard, targetKeyboard: telegramAiTargetKeyboard, probabilityKeyboard: telegramAiProbabilityKeyboard, maxOddKeyboard: telegramAiMaxOddKeyboard, edgeKeyboard: telegramAiEdgeKeyboard, maxGamesKeyboard: telegramAiMaxGamesKeyboard, marketsKeyboard: telegramAiMarketsKeyboard, analyzerSummary: telegramAiAnalyzerSummary, analyzerKeyboard: telegramAiAnalyzerKeyboard, analyzerAnalysisKeyboard: telegramAiAnalyzerAnalysisKeyboard, analyzerProbKeyboard: telegramAiAnalyzerProbKeyboard, analyzerHorizonKeyboard: telegramAiAnalyzerHorizonKeyboard, resultKeyboard: telegramAiResultKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
 const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
 const { apiFetch, enrichSportyFixtures } = require('./lib/apiFootball');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
@@ -163,6 +163,47 @@ function sportyPayloadAgeSeconds(payload, nowMs = Date.now()) {
   return Number.isFinite(fetchedMs) ? Math.max(0, (nowMs - fetchedMs) / 1000) : Infinity;
 }
 
+function filterSportyPayloadToHours(payload, hours, nowMs = Date.now()) {
+  if (!payload || !Array.isArray(payload.rows)) return payload;
+  const upper = nowMs + Math.max(1, Number(hours) || 1) * 3600 * 1000;
+  const rows = payload.rows.filter(row => {
+    const t = Date.parse(row?.kickoffUtc || '');
+    return !Number.isFinite(t) || t <= upper;
+  });
+  return { ...payload, rows, totalReturned: rows.length };
+}
+
+function sportySnapshotKey(sport, kind) {
+  const v = String(process.env.SPORTYBET_CACHE_VERSION || '9');
+  return `sportybet:snapshot:v${v}:${sport}:${kind}`;
+}
+
+async function readSportySnapshot(client, sport, kind, hours, nowMs, kickoffBufferSeconds) {
+  const key = sportySnapshotKey(sport, kind);
+  let snapshot = null;
+  if (client) {
+    try { const raw = await client.get(key); if (raw) snapshot = JSON.parse(raw); } catch {}
+  } else {
+    const hit = sportyMemoryCache.get(key);
+    if (hit && hit.expiresAt > nowMs) snapshot = hit.payload;
+  }
+  if (!snapshot || Number(snapshot.snapshotHours || 0) < Number(hours || 0)) return null;
+  const maxAge = Math.max(300, parseInt(process.env.SPORTYBET_DAILY_SNAPSHOT_MAX_AGE_SECONDS || '90000', 10));
+  if (sportyPayloadAgeSeconds(snapshot, nowMs) > maxAge) return null;
+  let filtered = filterUpcomingSportyPayload(snapshot, { nowMs, kickoffBufferSeconds });
+  filtered = filterSportyPayloadToHours(filtered, hours, nowMs);
+  return Array.isArray(filtered?.rows) && filtered.rows.length ? filtered : null;
+}
+
+async function writeSportySnapshot(client, sport, kind, payload, hours) {
+  if (!payload || !Array.isArray(payload.rows) || !payload.rows.length) return;
+  const key = sportySnapshotKey(sport, kind);
+  const ttl = Math.max(3600, parseInt(process.env.SPORTYBET_DAILY_SNAPSHOT_SECONDS || '93600', 10));
+  const snapshot = { ...payload, snapshotHours: Number(hours) || 0, snapshotSavedAt: new Date().toISOString() };
+  if (client) await client.set(key, JSON.stringify(snapshot), { EX: ttl }).catch(()=>{});
+  else sportyMemoryCache.set(key, { expiresAt: Date.now() + ttl * 1000, payload: snapshot });
+}
+
 async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   const ttlSeconds = Math.max(60, parseInt(process.env.SPORTYBET_CACHE_SECONDS || '43200', 10));
   const normalHours = Math.max(1, parseInt(process.env.SPORTYBET_HOURS || String((parseInt(process.env.DAYS_AHEAD || '4', 10) + 1) * 24), 10));
@@ -178,6 +219,15 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   const cacheKey = `sportybet:v${cacheVersion}:${sport}:${kind}:h${hours}:p${maxPages}`;
   const client = await getRedis();
   const nowMs = Date.now();
+
+  // Shared daily snapshot is independent of request horizon/page count. A 7/14-day
+  // Analyzer request can therefore reuse a 21-day Daily Refresh snapshot instead of
+  // purchasing the same SportyBet rows again.
+  const snapshot = await readSportySnapshot(client, sport, kind, hours, nowMs, kickoffBufferSeconds);
+  if (snapshot) {
+    console.log(`[SportyBet snapshot] HIT ${sport}/${kind} requested=${hours}h snapshot=${snapshot.snapshotHours}h rows=${snapshot.rows.length}`);
+    return snapshot;
+  }
 
   let cached = null;
   if (client) {
@@ -204,6 +254,13 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
     else sportyMemoryCache.delete(cacheKey);
   }
 
+  // Analyzer replacement can be configured to use only data already saved by the Daily Refresh.
+  // When cacheOnly is true, never purchase a fresh Parse.bot market call here.
+  if (options.cacheOnly) {
+    console.log(`[SportyBet cache-only] MISS ${sport}/${kind} requested=${hours}h`);
+    return { rows: [], cacheOnly: true, fetchedAt: null };
+  }
+
   // Collapse concurrent requests for the same sport/market/window into one upstream call.
   // This is important because the Auto Builder and Analyzer can ask for overlapping markets.
   let refreshPromise = sportyMarketInFlight.get(cacheKey);
@@ -217,6 +274,7 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
       if (Array.isArray(filteredPayload?.rows) && filteredPayload.rows.length > 0) {
         if (client) await client.set(cacheKey, JSON.stringify(payload), { EX: ttlSeconds });
         else sportyMemoryCache.set(cacheKey, { expiresAt: Date.now() + ttlSeconds * 1000, payload });
+        await writeSportySnapshot(client, sport, kind, payload, hours);
       } else {
         // Short negative cache: prevents every page click from making another slow Parse call,
         // while still retrying quickly enough to discover newly-added SportyBet fixtures.
@@ -632,7 +690,7 @@ async function addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorne
   return {...predictions,matches};
 }
 
-async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null } = {}) {
+async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, marketCacheOnly = false } = {}) {
   const scope = normalizeSportScope(sportScope);
   const wantsFootball = scope === 'all' || scope === 'football';
   const wantsBasketball = scope === 'all' || scope === 'basketball';
@@ -660,12 +718,13 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
 
   // The general sportsbook cache may live for hours to save API credits, but the Auto Builder
   // needs much fresher availability data so expired events cannot remain eligible.
-  const autoMaxCacheAgeSeconds = Math.max(0, parseInt(process.env.AUTO_SPORTYBET_MAX_CACHE_AGE_SECONDS || '900', 10));
+  const autoMaxCacheAgeSeconds = Math.max(0, parseInt(process.env.AUTO_SPORTYBET_MAX_CACHE_AGE_SECONDS || '43200', 10));
   const autoMarketOptions = {
     hours: marketHours || undefined,
     maxPages: marketMaxPages || undefined,
     maxCacheAgeSeconds: autoMaxCacheAgeSeconds,
     kickoffBufferSeconds: Math.max(0, parseInt(process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS || '60', 10)),
+    cacheOnly: !!marketCacheOnly,
   };
 
   // Do not let one unavailable Parse.bot market family kill the complete Auto/Telegram pool.
@@ -946,7 +1005,7 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
     const minProbability = Math.min(95, Math.max(0, Number(req.body?.minProbability) || 55));
     const horizonDays = [7, 14, 21].includes(Number(req.body?.horizonDays)) ? Number(req.body.horizonDays) : Math.max(7, Math.min(21, parseInt(process.env.ANALYZER_DAYS || '14', 10)));
     const analyzerHours = horizonDays * 24;
-    const analyzerMaxPages = Math.max(5, Math.min(20, parseInt(process.env.ANALYZER_MAX_PAGES || '12', 10)));
+    const analyzerMaxPages = Math.max(1, Math.min(4, parseInt(process.env.ANALYZER_MAX_PAGES || '2', 10)));
     if (!bookingCode) return res.status(400).json({ error: 'Enter a SportyBet booking code' });
 
     const startedAt = Date.now();
@@ -1743,35 +1802,96 @@ async function buildTelegramAiTicket(user, request) {
   return { result, booking, plan, request: { ...merged, sport, targetOdds, minProbability, minEdge, maxSelections, betTypes } };
 }
 
-async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDays = 14) {
+function telegramAnalyzerSameFixture(leg, c) {
+  if (leg.eventId && c.eventId) return String(leg.eventId) === String(c.eventId);
+  const direct = analyzerTeamMatch(leg.home, c.home) && analyzerTeamMatch(leg.away, c.away);
+  const reverse = analyzerTeamMatch(leg.home, c.away) && analyzerTeamMatch(leg.away, c.home);
+  return direct || reverse;
+}
+
+function telegramAnalyzerReplacementFor(leg, candidates, minProbability) {
+  return candidates
+    .filter(c => telegramAnalyzerSameFixture(leg, c))
+    .filter(c => Number(c.probability || 0) >= Number(minProbability || 0))
+    .filter(passesRedFlagFilter)
+    .sort((a,b) => {
+      const p = Number(b.probability||0) - Number(a.probability||0); if (p) return p;
+      const q = Number(b.qualityScore||0) - Number(a.qualityScore||0); if (q) return q;
+      const e = Number(b.edge||0) - Number(a.edge||0); if (e) return e;
+      return Number(a.odds||99) - Number(b.odds||99);
+    })[0] || null;
+}
+
+async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDays = 14, replaceUnsupported = false) {
   horizonDays = Math.min(21, Math.max(7, Number(horizonDays) || 14));
   const analyzerHours = horizonDays * 24;
   const booking = await getBooking(bookingCode);
   const decodedRows = extractBookingOutcomes(booking).map(normalizeBookingLeg).filter(x => x.home || x.away || x.eventId);
   if (!decodedRows.length) throw new Error('The SportyBet code was found, but no selections could be read from it.');
-  const analyzerOver15 = await loadSportyBetMarket('ou15', 'football', { hours: analyzerHours, maxPages: 12 });
+
+  const decodedSports = decodedRows.map(x => analyzerNormText(x.sport)).filter(Boolean);
+  let sportScope = 'all';
+  if (decodedSports.length && decodedSports.every(x => x.includes('football') || x.includes('soccer'))) sportScope = 'football';
+  else if (decodedSports.length && decodedSports.every(x => x.includes('basket'))) sportScope = 'basketball';
+  else if (decodedSports.length && decodedSports.every(x => x.includes('hockey') || x.includes('ice hockey'))) sportScope = 'hockey';
+
+  // Only use the Daily Refresh/shared cache for market matching and replacement. get_booking
+  // remains the one live lookup needed to decode the submitted code.
+  const analyzerOver15 = sportScope === 'football'
+    ? await loadSportyBetMarket('ou15', 'football', { hours: analyzerHours, maxPages: 2, cacheOnly: true })
+    : { rows: [] };
   const sourceRows = decodedRows.map(leg => resolveGenericOver15Leg(leg, analyzerOver15?.rows));
-  const candidates = await loadAutoCandidates({ sportScope:'all', minProbability:0, minEdge:-25, leagues:null, betTypes:null, marketHours:analyzerHours, marketMaxPages:12 });
+
+  // Load the full supported market universe for the booking's sport from cache only.
+  // This lets an unsupported imported market be replaced by another supported saved
+  // market on the exact same fixture without spending new Parse.bot market credits.
+  const candidates = await loadAutoCandidates({
+    sportScope, minProbability:0, minEdge:-25, leagues:null, betTypes:null,
+    marketHours:analyzerHours, marketMaxPages:2, marketCacheOnly:true
+  });
+
   const analyzed = sourceRows.map((leg, index) => {
     let best=null, bestScore=-1;
     const exact = leg.eventId ? candidates.filter(c => String(c.eventId||'') === String(leg.eventId)) : [];
     for (const c of (exact.length ? exact : candidates)) {
       const score=analyzerCandidateScore(leg,c); if(score>bestScore){bestScore=score;best=c;}
     }
-    if (!best || bestScore < 60) return { index, ...leg, supported:false, qualified:false };
-    return { index, ...leg, supported:true, qualified:Number(best.probability||0)>=minProbability, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:best.outcomeDesc, marketDesc:best.marketDesc, odds:Number(best.odds||leg.odds||0) };
+    if (!best || bestScore < 60) {
+      if (replaceUnsupported) {
+        const replacement = telegramAnalyzerReplacementFor(leg, candidates, minProbability);
+        if (replacement) {
+          return {
+            index, ...leg, supported:true, qualified:true, replaced:true,
+            originalMarketDesc: leg.marketDesc, originalOutcomeDesc: leg.outcomeDesc, originalOdds: leg.odds,
+            eventId:String(replacement.eventId||leg.eventId||''), marketId:String(replacement.marketId||''), outcomeId:String(replacement.outcomeId||''), specifier:replacement.specifier||null,
+            sport:replacement.sport||leg.sport, home:replacement.home||leg.home, away:replacement.away||leg.away,
+            outcomeDesc:replacement.outcomeDesc, marketDesc:replacement.marketDesc, odds:Number(replacement.odds||0),
+            probability:Number(replacement.probability||0), edge:Number(replacement.edge||0), qualityScore:Number(replacement.qualityScore||0),
+            replacementReason:'Unsupported imported market replaced from saved/cached data on the same fixture'
+          };
+        }
+      }
+      return { index, ...leg, supported:false, qualified:false, replaced:false };
+    }
+    return { index, ...leg, supported:true, qualified:Number(best.probability||0)>=minProbability, replaced:false, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:best.outcomeDesc, marketDesc:best.marketDesc, odds:Number(best.odds||leg.odds||0) };
   });
-  return { bookingCode, analyzed, supported: analyzed.filter(x=>x.supported).length, qualified: analyzed.filter(x=>x.qualified).length, total: analyzed.length, minProbability };
+  return { bookingCode, analyzed, supported: analyzed.filter(x=>x.supported).length, qualified: analyzed.filter(x=>x.qualified).length, replaced: analyzed.filter(x=>x.replaced).length, unsupported: analyzed.filter(x=>!x.supported).length, total: analyzed.length, minProbability, replaceUnsupported:!!replaceUnsupported, cacheOnlyMarkets:true };
 }
 
 function telegramAiAnalysisText(a) {
-  const lines=[`🔎 MATCHDAY AI CODE ANALYSIS — ${a.bookingCode}`, `Scored: ${a.supported}/${a.total}`, `Qualified ≥ ${a.minProbability}%: ${a.qualified}/${a.total}`, ''];
+  const lines=[`🔎 MATCHDAY AI CODE ANALYSIS — ${a.bookingCode}`, `Scored: ${a.supported}/${a.total}`, `Qualified ≥ ${a.minProbability}%: ${a.qualified}/${a.total}`, ...(a.replaceUnsupported?[`Replaced from saved data: ${a.replaced||0}`]:[]), ''];
   a.analyzed.forEach((x,i)=>{
-    const icon=!x.supported?'⚪':x.qualified?'✅':'❌';
+    const icon=x.replaced?'♻️':!x.supported?'⚪':x.qualified?'✅':'❌';
     lines.push(`${icon} ${i+1}. ${x.home||'Unknown'} vs ${x.away||'Unknown'}`);
-    lines.push(`   ${x.outcomeDesc||x.marketDesc||'Selection'}${x.odds?` @ ${Number(x.odds).toFixed(2)}`:''}${x.supported?` | ${Number(x.probability).toFixed(1)}% | Q ${Number(x.qualityScore||0).toFixed(1)}`:' | NOT SCORED'}`);
+    if (x.replaced) {
+      lines.push(`   ORIGINAL: ${x.originalOutcomeDesc||x.originalMarketDesc||'Unsupported selection'}${x.originalOdds?` @ ${Number(x.originalOdds).toFixed(2)}`:''}`);
+      lines.push(`   REPLACED → ${x.outcomeDesc||x.marketDesc||'Selection'}${x.odds?` @ ${Number(x.odds).toFixed(2)}`:''} | ${Number(x.probability).toFixed(1)}% | Q ${Number(x.qualityScore||0).toFixed(1)}`);
+    } else {
+      lines.push(`   ${x.outcomeDesc||x.marketDesc||'Selection'}${x.odds?` @ ${Number(x.odds).toFixed(2)}`:''}${x.supported?` | ${Number(x.probability).toFixed(1)}% | Q ${Number(x.qualityScore||0).toFixed(1)}`:' | NOT SCORED'}`);
+    }
   });
-  lines.push('', '✅ = keep by threshold · ❌ = below threshold · ⚪ = unsupported/unresolved');
+  lines.push('', '✅ = keep · ❌ = below threshold · ♻️ = same-fixture cached replacement · ⚪ = unsupported/unresolved');
+  lines.push('Cached replacement never switches to a different fixture and does not make a fresh Parse market call.');
   return lines.join('\n');
 }
 
@@ -1916,11 +2036,21 @@ async function handleTelegramAiUpdate(update) {
     else if (d === 'action:analyze') {
       const plan = getTelegramAiPlan(user);
       if (plan.dailyAnalyzes <= 0) return sendTelegramAiMessageTo(chatId, telegramAiUpgradeText(plan,'SportyBet code analysis'), { reply_markup: telegramAiPlanKeyboard() });
-      return sendTelegramAiMessageTo(chatId, telegramAiAnalyzerSummary(user), { reply_markup: telegramAiAnalyzerKeyboard() });
+      return sendTelegramAiMessageTo(chatId, telegramAiAnalyzerSummary(user), { reply_markup: telegramAiAnalyzerKeyboard(user) });
     }
     else if (d === 'analyzer:prob') return sendTelegramAiMessageTo(chatId, '📈 Choose the probability threshold used to KEEP selections:', { reply_markup: telegramAiAnalyzerProbKeyboard() });
     else if (d === 'analyzer:horizon') return sendTelegramAiMessageTo(chatId, '📅 How far ahead should Matchday search for fixtures in the imported code?', { reply_markup: telegramAiAnalyzerHorizonKeyboard() });
-    else if (d === 'analyzer:enter') return sendTelegramAiMessageTo(chatId, `⌨️ Send the SportyBet booking code now.\n\nCurrent analyzer: ≥ ${user.preferences.analyzer.minProbability}% · ${user.preferences.analyzer.horizonDays} days\nExample: RKT1JT`);
+    else if (d === 'analyzer:replace:last') {
+      const last=user.lastAnalyzerRequest;
+      if(!last?.bookingCode)return sendTelegramAiMessageTo(chatId,'There is no recent analysis to repair. Analyze a booking code first.',{reply_markup:telegramAiAnalyzerKeyboard(user)});
+      await sendTelegramAiMessageTo(chatId,`♻️ Checking saved markets for safe same-fixture replacements in ${last.bookingCode}…`);
+      try{
+        const repaired=await analyzeTelegramAiCode(last.bookingCode,last.minProbability,last.horizonDays,true);
+        user.lastAnalyzerRequest={...last,repairedAt:new Date().toISOString()};await saveTelegramAiUser(redis,user);
+        return sendTelegramAiLongMessage(chatId,telegramAiAnalysisText(repaired),{reply_markup:telegramAiAnalysisKeyboard(false)});
+      }catch(e){return sendTelegramAiMessageTo(chatId,`⚠️ I could not replace the unsupported selections: ${e.message}`,{reply_markup:telegramAiAnalyzerKeyboard(user)})}
+    }
+    else if (d === 'analyzer:enter') return sendTelegramAiMessageTo(chatId, `⌨️ Send the SportyBet booking code now.\n\nCurrent analyzer: ≥ ${user.preferences.analyzer.minProbability}% · ${user.preferences.analyzer.horizonDays} days\n\nUnsupported selections will be shown first. Nothing is replaced unless you tap ♻️ Replace Unsupported after the analysis.\nExample: RKT1JT`);
     else if (d.startsWith('set:sport:')) {
       const nextSport=d.split(':')[2];
       user.preferences.builder.sport=nextSport;
@@ -1935,8 +2065,8 @@ async function handleTelegramAiUpdate(update) {
     else if (d.startsWith('set:maxodd:')) { const v=d.split(':')[2]; user.preferences.builder.maxMatchOdds=v==='none'?null:Number(v); await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)}); }
     else if (d.startsWith('set:edge:')) { user.preferences.builder.minEdge=Number(d.split(':')[2]); await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)}); }
     else if (d.startsWith('set:maxgames:')) { user.preferences.builder.maxSelections=Number(d.split(':')[2]); await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)}); }
-    else if (d.startsWith('set:anprob:')) { user.preferences.analyzer.minProbability=Number(d.split(':')[2]); await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiAnalyzerSummary(user),{reply_markup:telegramAiAnalyzerKeyboard()}); }
-    else if (d.startsWith('set:horizon:')) { user.preferences.analyzer.horizonDays=Number(d.split(':')[2]); await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiAnalyzerSummary(user),{reply_markup:telegramAiAnalyzerKeyboard()}); }
+    else if (d.startsWith('set:anprob:')) { user.preferences.analyzer.minProbability=Number(d.split(':')[2]); await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiAnalyzerSummary(user),{reply_markup:telegramAiAnalyzerKeyboard(user)}); }
+    else if (d.startsWith('set:horizon:')) { user.preferences.analyzer.horizonDays=Number(d.split(':')[2]); await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiAnalyzerSummary(user),{reply_markup:telegramAiAnalyzerKeyboard(user)}); }
     else if (d.startsWith('market:')) {
       const id=d.slice('market:'.length);
       const allowed=new Set(telegramAiAllowedBetIdsForPlan(getTelegramAiPlan(user).id));
@@ -2079,7 +2209,7 @@ async function handleTelegramAiUpdate(update) {
     const plan=getTelegramAiPlan(user);if(plan.dailyAnalyzes<=0)return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(plan,'SportyBet code analysis'),{reply_markup:telegramAiPlanKeyboard()});
     if(user.analyzesUsed>=plan.dailyAnalyzes)return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${plan.dailyAnalyzes} code analyses. Your daily allowance resets tomorrow.`,{reply_markup:telegramAiPlanKeyboard()});
     const cfg=user.preferences.analyzer||{minProbability:70,horizonDays:14};await sendTelegramAiMessageTo(chatId,`🔎 Analyzing ${intent.bookingCode} · keep ≥${cfg.minProbability}% · search ${cfg.horizonDays} days…`);
-    try{const analysis=await analyzeTelegramAiCode(intent.bookingCode,cfg.minProbability,cfg.horizonDays);const use=await consumeTelegramAiUsage(redis,user,'analyze');user=use.user;return sendTelegramAiLongMessage(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiAnalyzerKeyboard()})}catch(e){return sendTelegramAiMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`,{reply_markup:telegramAiAnalyzerKeyboard()})}
+    try{const analysis=await analyzeTelegramAiCode(intent.bookingCode,cfg.minProbability,cfg.horizonDays,false);const use=await consumeTelegramAiUsage(redis,user,'analyze');user=use.user;user.lastAnalyzerRequest={bookingCode:intent.bookingCode,minProbability:cfg.minProbability,horizonDays:cfg.horizonDays,analyzedAt:new Date().toISOString()};await saveTelegramAiUser(redis,user);return sendTelegramAiLongMessage(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiAnalysisKeyboard(Number(analysis.unsupported||0)>0)})}catch(e){return sendTelegramAiMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`,{reply_markup:telegramAiAnalyzerKeyboard(user)})}
   }
   if(intent.intent==='ticket'){
     const plan=getTelegramAiPlan(user);if(!telegramAiHasTicketCredit(user))return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${plan.dailyTickets} AI tickets and have no extra tickets left. Your daily allowance resets tomorrow, or you can buy an extra pack now.`,{reply_markup:telegramAiTicketLimitKeyboard(user)});
@@ -2102,7 +2232,7 @@ async function handleTelegramAiUpdate(update) {
       if(p.dailyAnalyzes<=0)return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(p,'SportyBet code analysis'),{reply_markup:telegramAiPlanKeyboard()});
       if(user.analyzesUsed>=p.dailyAnalyzes)return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${p.dailyAnalyzes} code analyses.`,{reply_markup:telegramAiPlanKeyboard()});
       const cfg=user.preferences.analyzer||{minProbability:70,horizonDays:14};
-      try{const analysis=await analyzeTelegramAiCode(llm.bookingCode,cfg.minProbability,cfg.horizonDays);const use=await consumeTelegramAiUsage(redis,user,'analyze');user=use.user;return sendTelegramAiLongMessage(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiAnalyzerKeyboard()})}catch(e){return sendTelegramAiMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`,{reply_markup:telegramAiAnalyzerKeyboard()})}
+      try{const analysis=await analyzeTelegramAiCode(llm.bookingCode,cfg.minProbability,cfg.horizonDays,false);const use=await consumeTelegramAiUsage(redis,user,'analyze');user=use.user;user.lastAnalyzerRequest={bookingCode:llm.bookingCode,minProbability:cfg.minProbability,horizonDays:cfg.horizonDays,analyzedAt:new Date().toISOString()};await saveTelegramAiUser(redis,user);return sendTelegramAiLongMessage(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiAnalysisKeyboard(Number(analysis.unsupported||0)>0)})}catch(e){return sendTelegramAiMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`,{reply_markup:telegramAiAnalyzerKeyboard(user)})}
     }
     if(llm.action==='ticket'){
       const p=getTelegramAiPlan(user);
