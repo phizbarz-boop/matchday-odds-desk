@@ -273,7 +273,123 @@ async function loadPredictions() {
   return { generatedAt: null, matches: [] };
 }
 
+
+// -----------------------------------------------------------------------------
+// Website access-code gate
+// -----------------------------------------------------------------------------
+// This protects the browser UI without interfering with GitHub/Telegram job APIs.
+// Configure WEBSITE_ACCESS_CODE in Render. Do not hard-code the code in public files.
+const WEBSITE_ACCESS_COOKIE = 'matchday_access';
+const WEBSITE_ACCESS_MAX_AGE_SECONDS = Math.max(
+  300,
+  parseInt(process.env.WEBSITE_ACCESS_MAX_AGE_SECONDS || String(7 * 24 * 60 * 60), 10) || (7 * 24 * 60 * 60)
+);
+
+function websiteAccessCode() {
+  return String(process.env.WEBSITE_ACCESS_CODE || '');
+}
+
+function websiteAccessToken() {
+  const code = websiteAccessCode();
+  if (!code) return '';
+  const secret = String(process.env.WEBSITE_ACCESS_SESSION_SECRET || code);
+  return crypto.createHmac('sha256', secret).update(`matchday-access-v1:${code}`).digest('hex');
+}
+
+function parseCookieHeader(header) {
+  const out = {};
+  String(header || '').split(';').forEach(part => {
+    const idx = part.indexOf('=');
+    if (idx < 1) return;
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (!key) return;
+    try { out[key] = decodeURIComponent(value); }
+    catch { out[key] = value; }
+  });
+  return out;
+}
+
+function safeEqualString(a, b) {
+  const aa = Buffer.from(String(a || ''), 'utf8');
+  const bb = Buffer.from(String(b || ''), 'utf8');
+  if (aa.length !== bb.length) return false;
+  return crypto.timingSafeEqual(aa, bb);
+}
+
+function hasWebsiteAccess(req) {
+  const expected = websiteAccessToken();
+  if (!expected) return false;
+  const cookies = parseCookieHeader(req.headers.cookie);
+  return safeEqualString(cookies[WEBSITE_ACCESS_COOKIE], expected);
+}
+
+function accessPage(message = '') {
+  const error = message ? `<div class="error">${String(message).replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]))}</div>` : '';
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Matchday Odds Desk — Access</title>
+<style>
+  *{box-sizing:border-box} body{margin:0;min-height:100vh;display:grid;place-items:center;background:#070b09;color:#f3f7f4;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px}
+  .card{width:min(430px,100%);background:linear-gradient(180deg,#111814,#0c110e);border:1px solid #26352c;border-radius:20px;padding:30px;box-shadow:0 24px 70px rgba(0,0,0,.5)}
+  .brand{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#58df84;font-weight:800;margin-bottom:10px}.title{font-size:28px;font-weight:850;margin:0 0 8px}.sub{color:#9eaaa2;line-height:1.55;margin:0 0 24px}
+  label{display:block;font-size:13px;font-weight:700;margin-bottom:8px;color:#cbd5ce} input{width:100%;border:1px solid #34463a;background:#070a08;color:#fff;border-radius:12px;padding:14px 15px;font-size:17px;outline:none} input:focus{border-color:#36cf6a;box-shadow:0 0 0 3px rgba(54,207,106,.12)}
+  button{width:100%;margin-top:14px;border:0;border-radius:12px;padding:14px 16px;font-size:15px;font-weight:850;background:#27c45b;color:#031006;cursor:pointer} button:hover{filter:brightness(1.06)}
+  .error{margin:0 0 16px;padding:11px 13px;border:1px solid #6b2929;background:#2a1111;color:#ffb6b6;border-radius:10px;font-size:13px}.foot{margin-top:18px;text-align:center;font-size:11px;color:#68746c}
+</style>
+</head>
+<body><main class="card"><div class="brand">PLOT207 SPORTS</div><h1 class="title">Access required</h1><p class="sub">Enter the website access code to continue to Matchday Odds Desk.</p>${error}<form method="post" action="/access"><label for="code">Access code</label><input id="code" name="code" type="password" autocomplete="current-password" required autofocus><button type="submit">Unlock Website</button></form><div class="foot">Authorized access only</div></main></body></html>`;
+}
+
+app.get('/access', (req, res) => {
+  if (hasWebsiteAccess(req)) return res.redirect('/');
+  res.set('Cache-Control', 'no-store');
+  if (!websiteAccessCode()) return res.status(503).send(accessPage('Website access is not configured yet. Set WEBSITE_ACCESS_CODE in Render.'));
+  res.status(200).send(accessPage(''));
+});
+
+app.post('/access', express.urlencoded({ extended: false, limit: '2kb' }), (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const expected = websiteAccessCode();
+  if (!expected) return res.status(503).send(accessPage('Website access is not configured yet. Set WEBSITE_ACCESS_CODE in Render.'));
+  const supplied = String(req.body?.code || '');
+  if (!safeEqualString(supplied, expected)) return res.status(401).send(accessPage('Incorrect access code.'));
+
+  const cookie = [
+    `${WEBSITE_ACCESS_COOKIE}=${encodeURIComponent(websiteAccessToken())}`,
+    'Path=/',
+    'HttpOnly',
+    'Secure',
+    'SameSite=Lax',
+    `Max-Age=${WEBSITE_ACCESS_MAX_AGE_SECONDS}`
+  ].join('; ');
+  res.setHeader('Set-Cookie', cookie);
+  res.redirect('/');
+});
+
+app.get('/logout', (req, res) => {
+  res.setHeader('Set-Cookie', `${WEBSITE_ACCESS_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+  res.redirect('/access');
+});
+
+// Protect browser/static website requests. API routes keep their existing own secrets/auth
+// so scheduled GitHub workflows and Telegram integrations are not broken by this gate.
+app.use((req, res, next) => {
+  if (req.path === '/access' || req.path === '/logout' || req.path.startsWith('/api/')) return next();
+  if (!websiteAccessCode()) {
+    res.set('Cache-Control', 'no-store');
+    return res.status(503).send(accessPage('Website access is not configured yet. Set WEBSITE_ACCESS_CODE in Render.'));
+  }
+  if (!hasWebsiteAccess(req)) return res.redirect('/access');
+  return next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
+
 
 app.get('/api/predictions', async (req, res) => {
   try {
