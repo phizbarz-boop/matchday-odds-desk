@@ -77,7 +77,7 @@ function sanitizeItem(raw = {}) {
       popularity: Number.isFinite(Number(code.popularity)) ? Number(code.popularity) : null,
       isBetBuilder: Boolean(code.isBetBuilder),
       source: Number.isFinite(Number(code.source)) ? Number(code.source) : null,
-      shareCodeDetail: Array.isArray(code.shareCodeDetail) ? code.shareCodeDetail.slice(0, 40).map(sanitizeSelection) : [],
+      shareCodeDetail: Array.isArray(code.shareCodeDetail) ? code.shareCodeDetail.slice(0, 50).map(sanitizeSelection) : [],
     },
   };
 }

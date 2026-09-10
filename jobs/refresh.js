@@ -29,6 +29,92 @@ function pickLabel(p) {
   return 'Draw';
 }
 
+function predictionCacheKey(row) {
+  const eventId = String(row?.sportyEventId || row?.eventId || '').trim();
+  if (eventId) return `event:${eventId}`;
+  const norm = value => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const day = String(row?.kickoffUtc || '').slice(0, 10);
+  return `fixture:${norm(row?.home)}|${norm(row?.away)}|${day}`;
+}
+
+function isFutureFixture(row, nowMs = Date.now()) {
+  const kickoffMs = Date.parse(row?.kickoffUtc || '');
+  return Number.isFinite(kickoffMs) && kickoffMs > nowMs;
+}
+
+function hasUsablePrediction(row) {
+  const fields = ['h', 'd', 'a', 'btts', 'o05', 'o15', 'u45', 'o25', 'pickProb'];
+  return fields.some(field => Number(row?.[field]) > 0);
+}
+
+function mergeWithExistingPredictions(freshPayload, previousPayload) {
+  const fresh = Array.isArray(freshPayload?.matches) ? freshPayload.matches : [];
+  const previous = Array.isArray(previousPayload?.matches) ? previousPayload.matches : [];
+  const previousByKey = new Map(previous.map(row => [predictionCacheKey(row), row]));
+  const freshKeys = new Set();
+  const merged = [];
+  let restoredGoodModel = 0;
+  let carriedForward = 0;
+  let expiredDropped = 0;
+  const nowMs = Date.now();
+
+  for (const row of fresh) {
+    const key = predictionCacheKey(row);
+    freshKeys.add(key);
+    const old = previousByKey.get(key);
+
+    if (old && isFutureFixture(row, nowMs) && hasUsablePrediction(old) && !hasUsablePrediction(row)) {
+      merged.push({
+        ...old,
+        home: row.home || old.home,
+        away: row.away || old.away,
+        league: row.league || old.league,
+        leagueCode: row.leagueCode || old.leagueCode,
+        kickoffUtc: row.kickoffUtc || old.kickoffUtc,
+        eventId: row.eventId || old.eventId,
+        sportyEventId: row.sportyEventId || old.sportyEventId,
+        apiFootballFixtureId: row.apiFootballFixtureId || old.apiFootballFixtureId,
+        apiFootballMatchConfidence: row.apiFootballMatchConfidence || old.apiFootballMatchConfidence,
+        cacheCarryForward: true,
+        cacheCarryForwardReason: 'fresh_fixture_had_no_usable_model',
+      });
+      restoredGoodModel++;
+    } else {
+      merged.push(row);
+    }
+  }
+
+  for (const old of previous) {
+    const key = predictionCacheKey(old);
+    if (freshKeys.has(key)) continue;
+    if (!isFutureFixture(old, nowMs)) {
+      expiredDropped++;
+      continue;
+    }
+    if (!hasUsablePrediction(old)) continue;
+    merged.push({
+      ...old,
+      cacheCarryForward: true,
+      cacheCarryForwardReason: 'missing_from_latest_refresh',
+    });
+    carriedForward++;
+  }
+
+  return {
+    ...freshPayload,
+    matches: merged,
+    cacheMerge: {
+      previousCount: previous.length,
+      freshCount: fresh.length,
+      finalCount: merged.length,
+      restoredGoodModel,
+      carriedForward,
+      expiredDropped,
+      mergedAt: new Date().toISOString(),
+    },
+  };
+}
+
 // European football seasons are represented by their starting year.
 function activeSeasonStartYear(now = new Date()) {
   return now.getUTCMonth() >= 6 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
@@ -157,7 +243,22 @@ async function storeResult(payload, marketSnapshots = []) {
     const { createClient } = require('redis');
     const client = createClient({ url: process.env.REDIS_URL });
     await client.connect();
-    await client.set('predictions:latest', JSON.stringify(payload));
+
+    let finalPayload = payload;
+    try {
+      const previousRaw = await client.get('predictions:latest');
+      const previousPayload = previousRaw ? JSON.parse(previousRaw) : null;
+      finalPayload = mergeWithExistingPredictions(payload, previousPayload);
+      const m = finalPayload.cacheMerge || {};
+      console.log(
+        `Prediction cache merge: fresh=${m.freshCount || 0}, previous=${m.previousCount || 0}, ` +
+        `restored=${m.restoredGoodModel || 0}, carried=${m.carriedForward || 0}, final=${m.finalCount || 0}`
+      );
+    } catch (err) {
+      console.warn(`Prediction cache merge skipped: ${err.message}`);
+    }
+
+    await client.set('predictions:latest', JSON.stringify(finalPayload));
 
     // Seed the shared SportyBet daily snapshot cache from data already paid for by
     // this refresh. These keys deliberately do not include horizon/page count, so
@@ -176,7 +277,16 @@ async function storeResult(payload, marketSnapshots = []) {
     console.log('Wrote predictions to Redis key "predictions:latest"');
   } else {
     fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-    fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2));
+    let finalPayload = payload;
+    try {
+      const previousPayload = fs.existsSync(DATA_FILE)
+        ? JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'))
+        : null;
+      finalPayload = mergeWithExistingPredictions(payload, previousPayload);
+    } catch (err) {
+      console.warn(`Local prediction cache merge skipped: ${err.message}`);
+    }
+    fs.writeFileSync(DATA_FILE, JSON.stringify(finalPayload, null, 2));
     console.log(`Wrote predictions to ${DATA_FILE} (no REDIS_URL set)`);
   }
 }
