@@ -225,7 +225,7 @@ async function main() {
       const cornerEventIds = new Set([...cornerRows, ...firstHalfTeamCornerRows].map(x => String(x.eventId)));
       const apiRows = await enrichSportyFixtures(oneXtwo.rows || [], {
         daysAhead: DAYS_AHEAD,
-        maxFixtures: Math.max(1, Math.min(500, parseInt(process.env.API_FOOTBALL_MAX_FIXTURES || '180', 10))),
+        maxFixtures: Math.max(1, Math.min(500, parseInt(process.env.API_FOOTBALL_MAX_FIXTURES || '500', 10))),
         cornerEventIds,
       });
       const key = r => `${String(r.home||'').toLowerCase().replace(/[^a-z0-9]/g,'')}|${String(r.away||'').toLowerCase().replace(/[^a-z0-9]/g,'')}|${String(r.kickoffUtc||'').slice(0,10)}`;

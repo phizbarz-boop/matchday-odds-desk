@@ -8,7 +8,7 @@ app.set('trust proxy', 1); // Render forwards the real client IP.
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
 const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG } = require('./lib/sportybet');
-const { buildCandidates, selectAutoBet, passesRedFlagFilter} = require('./lib/autoPicker');
+const { buildCandidates, selectAutoBet, passesRedFlagFilter, normalMetrics } = require('./lib/autoPicker');
 const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest, sendTelegramAiMessageTo, telegramAiRequest } = require('./lib/telegram');
 const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, allowedBetIdsForPlan: telegramAiAllowedBetIdsForPlan, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, addExtraTickets: addTelegramAiExtraTickets, hasTicketCredit: telegramAiHasTicketCredit, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, ticketLimitKeyboard: telegramAiTicketLimitKeyboard, mainKeyboard: telegramAiMainKeyboard, builderSummary: telegramAiBuilderSummary, builderKeyboard: telegramAiBuilderKeyboard, sportKeyboard: telegramAiSportKeyboard, targetKeyboard: telegramAiTargetKeyboard, probabilityKeyboard: telegramAiProbabilityKeyboard, maxOddKeyboard: telegramAiMaxOddKeyboard, edgeKeyboard: telegramAiEdgeKeyboard, maxGamesKeyboard: telegramAiMaxGamesKeyboard, marketsKeyboard: telegramAiMarketsKeyboard, analyzerSummary: telegramAiAnalyzerSummary, analyzerKeyboard: telegramAiAnalyzerKeyboard, analyzerAnalysisKeyboard: telegramAiAnalyzerAnalysisKeyboard, analyzerProbKeyboard: telegramAiAnalyzerProbKeyboard, analyzerHorizonKeyboard: telegramAiAnalyzerHorizonKeyboard, resultKeyboard: telegramAiResultKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
 const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
@@ -848,6 +848,51 @@ function analyzerTeamMatch(a, b) {
   return x === y || (Math.min(x.length, y.length) >= 6 && (x.includes(y) || y.includes(x)));
 }
 
+
+function findSavedPredictionForAnalyzerLeg(leg, predictions) {
+  const rows=Array.isArray(predictions?.matches)?predictions.matches:[];
+  if(leg?.eventId){
+    const exact=rows.find(r=>String(r?.sportyEventId||r?.eventId||'')===String(leg.eventId));
+    if(exact) return exact;
+  }
+  return rows.find(r=>analyzerTeamMatch(leg?.home,r?.home)&&analyzerTeamMatch(leg?.away,r?.away)) || null;
+}
+
+function directSavedFootballAnalyzerCandidate(leg, prediction) {
+  if(!prediction || !Number.isFinite(Number(leg?.odds)) || Number(leg.odds)<=1) return null;
+  const text=analyzerNormText(`${leg.marketDesc||''} ${leg.outcomeDesc||''} ${leg.specifier||''}`);
+  let probability=null, betType=null, probabilitySource=null;
+
+  if(/over 0 5/.test(text) || /total 0 5/.test(text) && /over/.test(text)){
+    probability=Number(prediction.o05); betType='over05';
+  } else if(/over 1 5/.test(text) || /total 1 5/.test(text) && /over/.test(text)){
+    probability=Number(prediction.o15); betType='over15';
+  } else if(/under 4 5/.test(text) || /total 4 5/.test(text) && /under/.test(text)){
+    probability=Number(prediction.u45); betType='under45';
+  }
+
+  if(!betType || !Number.isFinite(probability) || probability<=0) return null;
+  probabilitySource=String(prediction.dataSource||prediction.source||'Saved daily prediction');
+  const metrics=normalMetrics(Number(leg.odds),probability);
+  const edgeScore=Math.max(0,Math.min(100,50+Number(metrics.edge||0)*4));
+  const qualityScore=Math.round((Math.max(0,Math.min(100,probability))*0.55 + edgeScore*0.25 + 92*0.20)*10)/10;
+  return {
+    ...leg,
+    eventId:String(leg.eventId||prediction.sportyEventId||prediction.eventId||''),
+    sport:leg.sport||'Football',
+    home:leg.home||prediction.home,
+    away:leg.away||prediction.away,
+    tournament:leg.tournament||prediction.league||'',
+    kickoffUtc:prediction.kickoffUtc||null,
+    betType,
+    probabilitySource:`${probabilitySource} · daily cache`,
+    ...metrics,
+    qualityScore,
+    marketReliability:92,
+    supported:true,
+  };
+}
+
 function extractBookingOutcomes(booking) {
   if (!booking || typeof booking !== 'object') return [];
   for (const key of ['outcomes', 'selections', 'bets', 'items']) {
@@ -1062,8 +1107,22 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
     // which the browser reports only as "NetworkError when attempting to fetch resource".
     const analyzerBetTypes = analyzerBetTypesFromBooking(sourceRows, analyzerSportScope);
     console.log(`[Analyzer] scope=${analyzerSportScope} legs=${sourceRows.length} betTypes=${analyzerBetTypes ? analyzerBetTypes.join(',') : 'all-supported'}`);
+
+    // First score common football goal lines directly from the Daily Predictions cache.
+    // This avoids repurchasing SportyBet market pages simply to score a booked Over 0.5/
+    // Over 1.5/Under 4.5 selection. Imported booking identifiers remain untouched.
+    const savedPredictions = analyzerSportScope === 'football' || analyzerSportScope === 'all'
+      ? await loadPredictions()
+      : { matches: [] };
+    const directSaved = sourceRows.map(leg => {
+      if(analyzerSportScope!=='football' && analyzerSportScope!=='all') return null;
+      const p=findSavedPredictionForAnalyzerLeg(leg,savedPredictions);
+      return directSavedFootballAnalyzerCandidate(leg,p);
+    });
+    const needsCandidateLookup = directSaved.some(x=>!x);
+
     const candidateStartedAt = Date.now();
-    const candidates = await loadAutoCandidates({
+    const candidates = needsCandidateLookup ? await loadAutoCandidates({
       sportScope: analyzerSportScope,
       minProbability: 0,
       minEdge: -25,
@@ -1071,9 +1130,20 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
       betTypes: analyzerBetTypes,
       marketHours: analyzerHours,
       marketMaxPages: analyzerMaxPages
-    });
-    console.log(`[Analyzer] candidates=${candidates.length} loaded in ${Date.now()-candidateStartedAt}ms total=${Date.now()-startedAt}ms`);
+    }) : [];
+    console.log(`[Analyzer] direct-cache=${directSaved.filter(Boolean).length}/${sourceRows.length} candidates=${candidates.length} loaded in ${Date.now()-candidateStartedAt}ms total=${Date.now()-startedAt}ms`);
     const analyzed = sourceRows.map((leg, index) => {
+      const direct=directSaved[index];
+      if(direct){
+        const probability=Number(direct.probability)||0;
+        const qualified=probability>=minProbability;
+        return {
+          index,
+          ...direct,
+          qualified,
+          reason: qualified ? `Meets ${minProbability}% minimum (saved Daily Prediction)` : `Below ${minProbability}% minimum (saved Daily Prediction)`,
+        };
+      }
       let best = null, bestScore = -1;
       // Exact SportyBet event ID is the strongest signal. Only fall back to team-name
       // matching when the imported booking does not provide a usable event ID.
