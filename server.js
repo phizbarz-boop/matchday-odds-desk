@@ -552,23 +552,37 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
     kickoffBufferSeconds: Math.max(0, parseInt(process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS || '60', 10)),
   };
 
+  // Do not let one unavailable Parse.bot market family kill the complete Auto/Telegram pool.
+  // This is particularly important for corners: the managed NG API may return zero corner rows
+  // and older code then falls back to full-market endpoints that may not exist on the current
+  // single Parse API subscription.
+  const safeMarket = async (label, enabled, fn, emptyValue = { rows: [] }) => {
+    if (!enabled) return emptyValue;
+    try {
+      return await fn();
+    } catch (err) {
+      console.error(`[Auto candidates] ${label} unavailable: ${err.message}`);
+      return { ...emptyValue, rows: Array.isArray(emptyValue.rows) ? emptyValue.rows : [], error: err.message };
+    }
+  };
+
   let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
-    wantsFootball ? loadPredictions() : Promise.resolve({ matches: [] }),
-    needF1x2 ? loadSportyBetMarket('1x2', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needFGg ? loadSportyBetMarket('gg', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needFDc ? loadSportyBetMarket('dc', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needFDnb ? loadSportyBetMarket('dnb', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needFOu05 ? loadSportyBetMarket('ou05', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needFOu15 ? loadSportyBetMarket('ou15', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needFOu45 ? loadSportyBetMarket('ou45', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needFAh ? loadSportyBetMarket('ah', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needFCorners ? loadSportyBetMarket('corners', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needF1hCorners ? loadSportyBetMarket('first_half_team_corners', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needFOneup ? loadSportyBetMarket('oneup', 'football', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needBasketballWinner ? loadSportyBetMarket('winner', 'basketball', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needBasketballTotals ? loadSportyBetMarket('totals', 'basketball', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needHockeyWinner ? loadSportyBetMarket('winner', 'hockey', autoMarketOptions) : Promise.resolve({ rows: [] }),
-    needHockeyTotals ? loadSportyBetMarket('totals', 'hockey', autoMarketOptions) : Promise.resolve({ rows: [] }),
+    safeMarket('football predictions', wantsFootball, () => loadPredictions(), { matches: [] }),
+    safeMarket('football 1X2', needF1x2, () => loadSportyBetMarket('1x2', 'football', autoMarketOptions)),
+    safeMarket('football GG/NG', needFGg, () => loadSportyBetMarket('gg', 'football', autoMarketOptions)),
+    safeMarket('football Double Chance', needFDc, () => loadSportyBetMarket('dc', 'football', autoMarketOptions)),
+    safeMarket('football Draw No Bet', needFDnb, () => loadSportyBetMarket('dnb', 'football', autoMarketOptions)),
+    safeMarket('football Over 0.5', needFOu05, () => loadSportyBetMarket('ou05', 'football', autoMarketOptions)),
+    safeMarket('football Over 1.5', needFOu15, () => loadSportyBetMarket('ou15', 'football', autoMarketOptions)),
+    safeMarket('football Under 4.5', needFOu45, () => loadSportyBetMarket('ou45', 'football', autoMarketOptions)),
+    safeMarket('football Asian Handicap', needFAh, () => loadSportyBetMarket('ah', 'football', autoMarketOptions)),
+    safeMarket('football Corners', needFCorners, () => loadSportyBetMarket('corners', 'football', autoMarketOptions)),
+    safeMarket('football 1H team corners', needF1hCorners, () => loadSportyBetMarket('first_half_team_corners', 'football', autoMarketOptions)),
+    safeMarket('football 1UP', needFOneup, () => loadSportyBetMarket('oneup', 'football', autoMarketOptions)),
+    safeMarket('basketball winner', needBasketballWinner, () => loadSportyBetMarket('winner', 'basketball', autoMarketOptions)),
+    safeMarket('basketball totals', needBasketballTotals, () => loadSportyBetMarket('totals', 'basketball', autoMarketOptions)),
+    safeMarket('hockey winner', needHockeyWinner, () => loadSportyBetMarket('winner', 'hockey', autoMarketOptions)),
+    safeMarket('hockey totals', needHockeyTotals, () => loadSportyBetMarket('totals', 'hockey', autoMarketOptions)),
   ]);
 
   if (wantsFootball && cornerBetRequested(betTypes)) {
@@ -2049,7 +2063,8 @@ app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
     console.error('Telegram daily picks error:', err.message);
     res.status(err.code === 'TELEGRAM_CONFIG_MISSING' ? 503 : 502).json({
       error: err.code === 'TELEGRAM_CONFIG_MISSING' ? 'Telegram integration is not configured yet' : 'Telegram picks job failed',
-      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+      code: err.code || null,
+      detail: String(err.message || 'Unknown Telegram picks error').slice(0, 500),
     });
   }
 });
