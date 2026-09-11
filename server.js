@@ -784,6 +784,25 @@ async function loadAutoCandidates({ sportScope = 'all', minProbability = 55, min
 }
 
 
+
+function fixtureDateKeyInTimeZone(value, timeZone = 'Africa/Lagos') {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(d);
+  const get = type => parts.find(x => x.type === type)?.value || '';
+  const y=get('year'), m=get('month'), day=get('day');
+  return y && m && day ? `${y}-${m}-${day}` : null;
+}
+
+function isCandidateToday(candidate, { now = new Date(), timeZone = 'Africa/Lagos' } = {}) {
+  const kickoffKey = fixtureDateKeyInTimeZone(candidate?.kickoffUtc, timeZone);
+  const todayKey = fixtureDateKeyInTimeZone(now, timeZone);
+  return !!kickoffKey && kickoffKey === todayKey;
+}
+
 async function prepareAutoCandidatePool({
   sportScope='all',
   minProbability=0,
@@ -793,6 +812,7 @@ async function prepareAutoCandidatePool({
   maxMatchOdds=null,
   marketHours=null,
   marketMaxPages=null,
+  todayOnly=false,
 } = {}) {
   // Single source of truth for Website + Telegram AI candidate eligibility.
   // Keeping the complete filtering path here prevents one surface from finding
@@ -811,7 +831,10 @@ async function prepareAutoCandidatePool({
     marketMaxPages,
   });
 
-  const redFlagSafe = rawCandidates.filter(passesRedFlagFilter);
+  const todayFiltered = todayOnly
+    ? rawCandidates.filter(c => isCandidateToday(c, { timeZone: 'Africa/Lagos' }))
+    : rawCandidates;
+  const redFlagSafe = todayFiltered.filter(passesRedFlagFilter);
   const maxOdd = Number(maxMatchOdds);
   const oddsSafe = Number.isFinite(maxOdd) && maxOdd > 1
     ? redFlagSafe.filter(c => Number.isFinite(Number(c.odds)) && Number(c.odds) <= maxOdd)
@@ -822,7 +845,9 @@ async function prepareAutoCandidatePool({
     candidates: oddsSafe,
     diagnostics: {
       rawCandidates: rawCandidates.length,
-      redFlagRejected: rawCandidates.length - redFlagSafe.length,
+      afterTodayFilter: todayFiltered.length,
+      todayOnly: !!todayOnly,
+      redFlagRejected: todayFiltered.length - redFlagSafe.length,
       afterRedFlag: redFlagSafe.length,
       afterMaxOdds: oddsSafe.length,
       minProbability: probabilityFloor,
@@ -1354,8 +1379,9 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const leagues = Array.isArray(body.leagues) ? body.leagues.map(String) : null;
     const sportScope = normalizeSportScope(body.sportScope);
     const betTypes = Array.isArray(body.betTypes) ? body.betTypes.map(String) : null;
+    const todayOnly = body.todayOnly === true || String(body.todayOnly || '').toLowerCase() === 'true';
 
-    const prepared = await prepareAutoCandidatePool({ sportScope, minProbability, minEdge, leagues, betTypes, maxMatchOdds });
+    const prepared = await prepareAutoCandidatePool({ sportScope, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly });
     const oddsFilteredCandidates = prepared.candidates;
     const redFlagSafeCandidatesCount = prepared.diagnostics.afterRedFlag;
     const rawCandidatesCount = prepared.diagnostics.rawCandidates;
@@ -1375,6 +1401,8 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
         candidatesBeforeRedFlagFilter: rawCandidatesCount,
         redFlagRejected,
         maxMatchOdds,
+        todayOnly,
+        todayCandidateCount: prepared.diagnostics.afterTodayFilter,
         cornerDiagnostics,
         hint: cornerDiagnostics
           ? 'Corner diagnostics included. matchesWithCornerModel must be > 0 and SportyBet corner rows must be > 0.'
@@ -1389,6 +1417,8 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       minEdge,
       maxSelections,
       maxMatchOdds,
+      todayOnly,
+      todayCandidateCount: prepared.diagnostics.afterTodayFilter,
       candidatesBeforeMaxOddsFilter: redFlagSafeCandidatesCount,
       candidatesBeforeRedFlagFilter: rawCandidatesCount,
       redFlagRejected,
@@ -1942,12 +1972,14 @@ async function buildTelegramAiTicket(user, request) {
     leagues: null,
     betTypes,
     maxMatchOdds: merged.maxMatchOdds,
+    todayOnly: !!merged.todayOnly,
   });
   const pool = prepared.candidates;
   if (!pool.length) {
     const d = prepared.diagnostics;
-    console.warn(`[Telegram AI pool] sport=${sport} raw=${d.rawCandidates} afterRedFlag=${d.afterRedFlag} afterMaxOdds=${d.afterMaxOdds} minProb=${minProbability} minEdge=${minEdge} betTypes=${betTypes.join(',')}`);
-    return { error: `No current SportyBet selections passed your ${minProbability}% probability rule, ${minEdge} edge setting and red-flag protection. (Candidates: ${d.rawCandidates} raw, ${d.afterRedFlag} after red flags, ${d.afterMaxOdds} after max-odd filter.)` };
+    console.warn(`[Telegram AI pool] sport=${sport} raw=${d.rawCandidates} afterToday=${d.afterTodayFilter} todayOnly=${!!merged.todayOnly} afterRedFlag=${d.afterRedFlag} afterMaxOdds=${d.afterMaxOdds} minProb=${minProbability} minEdge=${minEdge} betTypes=${betTypes.join(',')}`);
+    const todayPart = merged.todayOnly ? `, ${d.afterTodayFilter} playing today (WAT)` : '';
+    return { error: `No current SportyBet selections passed your ${minProbability}% probability rule, ${minEdge} edge setting and red-flag protection. (Candidates: ${d.rawCandidates} raw${todayPart}, ${d.afterRedFlag} after red flags, ${d.afterMaxOdds} after max-odd filter.)` };
   }
   const result = selectAutoBet(pool, {
     targetOdds: merged.safe ? 1.325 : targetOdds,
@@ -2126,10 +2158,11 @@ If discussing betting, do not promise wins or guaranteed profit.`;
           minEdge:{type:['number','null']},
           maxSelections:{type:['integer','null']},
           safe:{type:['boolean','null']},
+          todayOnly:{type:['boolean','null']},
           betTypes:{type:['array','null'],items:{type:'string'}},
           bookingCode:{type:['string','null']}
         },
-        required:['action','reply','targetOdds','sport','minProbability','maxMatchOdds','minEdge','maxSelections','safe','betTypes','bookingCode']
+        required:['action','reply','targetOdds','sport','minProbability','maxMatchOdds','minEdge','maxSelections','safe','todayOnly','betTypes','bookingCode']
       }
     }}
   };
@@ -2157,7 +2190,7 @@ If discussing betting, do not promise wins or guaranteed profit.`;
 
 function llmTicketIntent(x){
   const out={intent:'ticket'};
-  for(const k of ['targetOdds','sport','minProbability','maxMatchOdds','minEdge','maxSelections','safe','betTypes']){
+  for(const k of ['targetOdds','sport','minProbability','maxMatchOdds','minEdge','maxSelections','safe','betTypes','todayOnly']){
     if(x[k]!==null&&x[k]!==undefined) out[k]=x[k];
   }
   return out;
@@ -2188,6 +2221,7 @@ async function handleTelegramAiUpdate(update) {
     else if (d === 'builder:maxodd') return sendTelegramAiMessageTo(chatId, '💰 Select the maximum SportyBet odd allowed for any individual match:', { reply_markup: telegramAiMaxOddKeyboard() });
     else if (d === 'builder:edge') return sendTelegramAiMessageTo(chatId, '📊 Select the minimum football probability edge. Negative values allow more candidates; positive values demand model value over price:', { reply_markup: telegramAiEdgeKeyboard() });
     else if (d === 'builder:maxgames') return sendTelegramAiMessageTo(chatId, '🔢 Select the maximum number of games the builder can use:', { reply_markup: telegramAiMaxGamesKeyboard(user) });
+    else if (d === 'builder:today') { user.preferences.builder.todayOnly=!user.preferences.builder.todayOnly; await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)}); }
     else if (d === 'builder:markets') return sendTelegramAiMessageTo(chatId, '🎲 Select the exact bet types the Auto Builder may use. Tap a market to toggle it:', { reply_markup: telegramAiMarketsKeyboard(user) });
     else if (d === 'builder:build') callbackAction = 'build';
     else if (d === 'builder:safe' || d === 'ticket:safe') callbackAction = 'safe';
