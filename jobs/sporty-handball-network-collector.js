@@ -185,7 +185,7 @@ function parseHandballPageFixtureMetadata(bodyText) {
 
 (async () => {
   if (!LOGIN_ID || !PASSWORD) {
-    console.error('[Handball V3] Missing SPORTYSOCIAL_LOGIN_ID or SPORTYSOCIAL_PASSWORD');
+    console.error('[Handball V4] Missing SPORTYSOCIAL_LOGIN_ID or SPORTYSOCIAL_PASSWORD');
     process.exit(1);
   }
 
@@ -205,14 +205,14 @@ function parseHandballPageFixtureMetadata(bodyText) {
       if (!ct.includes('json') && !ct.includes('text')) return;
       const body = await res.json();
       captured.push({ url, status: res.status(), body });
-      console.log(`[Handball V3] Captured fixture endpoint: ${res.status()} ${url}`);
+      console.log(`[Handball V4] Captured fixture endpoint: ${res.status()} ${url}`);
     } catch (e) {
-      console.log(`[Handball V3] Fixture endpoint captured but JSON parse failed: ${e.message}`);
+      console.log(`[Handball V4] Fixture endpoint captured but JSON parse failed: ${e.message}`);
     }
   });
 
   try {
-    console.log('[Handball V3] Opening SportyBet');
+    console.log('[Handball V4] Opening SportyBet');
     await page.goto('https://www.sportybet.com/ng/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
     // Generic login strategy: click likely login button then fill visible fields.
@@ -252,9 +252,9 @@ function parseHandballPageFixtureMetadata(bodyText) {
     }
 
     await page.waitForTimeout(5000);
-    console.log('[Handball V3] Login attempt completed');
+    console.log('[Handball V4] Login attempt completed');
 
-    console.log('[Handball V3] Opening Handball prematch page');
+    console.log('[Handball V4] Opening Handball prematch page');
     await page.goto('https://www.sportybet.com/ng/m/sport/handball?sort=0', {
       waitUntil: 'domcontentloaded',
       timeout: 60000
@@ -262,11 +262,44 @@ function parseHandballPageFixtureMetadata(bodyText) {
 
     await page.waitForTimeout(10000);
 
-    const bodyText = await page.locator('body').innerText().catch(() => '');
-    const pageFixtureMetadata = parseHandballPageFixtureMetadata(bodyText);
-    console.log(`[Handball V3] Page fixture metadata rows parsed: ${pageFixtureMetadata.size}`);
+    const pageFixtureMetadata = new Map();
+    let stableRounds = 0;
+    let previousCount = 0;
 
-    await page.screenshot({ path: path.join(OUT_DIR, 'handball-v3-page.png'), fullPage: true });
+    for (let round = 0; round < 30; round++) {
+      const bodyText = await page.locator('body').innerText().catch(() => '');
+      const parsed = parseHandballPageFixtureMetadata(bodyText);
+      for (const [gameId, row] of parsed.entries()) {
+        pageFixtureMetadata.set(gameId, row);
+      }
+
+      console.log(`[Handball V4] Metadata scan ${round + 1}: ${pageFixtureMetadata.size} unique fixture rows`);
+
+      if (pageFixtureMetadata.size === previousCount) stableRounds += 1;
+      else stableRounds = 0;
+
+      previousCount = pageFixtureMetadata.size;
+
+      if (stableRounds >= 3) break;
+
+      await page.evaluate(() => {
+        window.scrollBy(0, Math.max(window.innerHeight * 0.9, 700));
+      });
+      await page.waitForTimeout(1200);
+    }
+
+    // Final pass at the bottom in case virtualization swaps in the last rows.
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(1500);
+    const finalBodyText = await page.locator('body').innerText().catch(() => '');
+    const finalParsed = parseHandballPageFixtureMetadata(finalBodyText);
+    for (const [gameId, row] of finalParsed.entries()) {
+      pageFixtureMetadata.set(gameId, row);
+    }
+
+    console.log(`[Handball V4] Total page fixture metadata rows parsed: ${pageFixtureMetadata.size}`);
+
+    await page.screenshot({ path: path.join(OUT_DIR, 'handball-v4-page.png'), fullPage: true });
 
     safeJsonWrite('handball-page-fixture-metadata.json', Array.from(pageFixtureMetadata.values()));
     safeJsonWrite('captured-fixture-responses.json', captured.map(x => ({
@@ -290,7 +323,19 @@ function parseHandballPageFixtureMetadata(bodyText) {
 
         const markets = extractMarkets(node);
         const gameId = getGameId(node);
-        const pageMeta = gameId != null ? pageFixtureMetadata.get(String(gameId)) : null;
+        let pageMeta = gameId != null ? pageFixtureMetadata.get(String(gameId)) : null;
+
+        if (!pageMeta) {
+          const norm = v => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const nh = norm(teams.home);
+          const na = norm(teams.away);
+          if (nh && na) {
+            pageMeta = Array.from(pageFixtureMetadata.values()).find(row =>
+              norm(row.homeTeamName) === nh && norm(row.awayTeamName) === na
+            ) || null;
+          }
+        }
+
         eventCandidates.push({
           sport: getSport(node),
           sportId: node.sportId ?? node.sport_id ?? node.sport?.id ?? null,
@@ -314,11 +359,11 @@ function parseHandballPageFixtureMetadata(bodyText) {
     const withTournament = eventCandidates.filter(x => x.tournament).length;
     const complete = eventCandidates.filter(x => x.kickoffTime && x.tournament && x.homeTeamName && x.awayTeamName).length;
 
-    console.log(`[Handball V3] Fixture endpoint responses captured: ${captured.length}`);
-    console.log(`[Handball V3] Handball fixture candidates extracted: ${eventCandidates.length}`);
-    console.log(`[Handball V3] With kickoff: ${withKickoff}/${eventCandidates.length}`);
-    console.log(`[Handball V3] With tournament: ${withTournament}/${eventCandidates.length}`);
-    console.log(`[Handball V3] Complete metadata: ${complete}/${eventCandidates.length}`);
+    console.log(`[Handball V4] Fixture endpoint responses captured: ${captured.length}`);
+    console.log(`[Handball V4] Handball fixture candidates extracted: ${eventCandidates.length}`);
+    console.log(`[Handball V4] With kickoff: ${withKickoff}/${eventCandidates.length}`);
+    console.log(`[Handball V4] With tournament: ${withTournament}/${eventCandidates.length}`);
+    console.log(`[Handball V4] Complete metadata: ${complete}/${eventCandidates.length}`);
 
     eventCandidates.slice(0, 10).forEach((e, i) => {
       console.log(JSON.stringify({
@@ -350,9 +395,14 @@ function parseHandballPageFixtureMetadata(bodyText) {
       throw new Error('FIXTURES_FOUND_BUT_KICKOFF_OR_TOURNAMENT_NOT_MAPPED');
     }
 
-    console.log('[Handball V3] SUCCESS');
+    const completenessRatio = eventCandidates.length ? complete / eventCandidates.length : 0;
+    if (completenessRatio < 0.8) {
+      throw new Error(`HANDALL_METADATA_INCOMPLETE:${complete}/${eventCandidates.length}`);
+    }
+
+    console.log('[Handball V4] SUCCESS');
   } catch (err) {
-    console.error('[Handball V3] FAILED:', err.message);
+    console.error('[Handball V4] FAILED:', err.message);
     try {
       await page.screenshot({ path: path.join(OUT_DIR, 'handball-v2-failure.png'), fullPage: true });
     } catch {}
