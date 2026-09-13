@@ -7,7 +7,7 @@ This build adds a conversational Telegram bot on top of the existing Matchday Od
 | Plan | Price | Tickets/day | Max target | Max selections | Sports | Analyzer/day | Copy Hub |
 |---|---:|---:|---:|---:|---|---:|---|
 | Free | ₦0 | 2 | 10x | 12 | Football | 0 | No |
-| Pro | ₦5,000/month | 10 | 100x | 30 | Football, Basketball, Ice Hockey | 5 | No |
+| Pro | ₦10,000/month | 10 | 100x | 30 | Football, Basketball, Ice Hockey | 5 | No |
 | Elite | ₦20,000/month | 40 | 1000x | 40 | All currently supported sports | 30 | Yes |
 
 The limits are enforced server-side per Telegram user. A Redis service is strongly recommended so subscriptions and usage survive Render restarts.
@@ -27,7 +27,7 @@ Add:
 
 Optional checkout/support buttons:
 
-- `PRO_PAYMENT_URL` = your hosted checkout/payment link for ₦5,000 Pro.
+- `PRO_PAYMENT_URL` = your hosted checkout/payment link for ₦10,000 Pro.
 - `ELITE_PAYMENT_URL` = your hosted checkout/payment link for ₦20,000 Elite.
 - `TELEGRAM_SUPPORT_URL` = e.g. a Telegram `https://t.me/...` support URL.
 
@@ -94,7 +94,7 @@ The webhook path did not change, so if `/api/telegram/bot/webhook` is already re
 The Telegram Auto Builder enforces bet-type access server-side:
 
 - **Free — ₦0:** Football only; **Home, Draw, Away** only.
-- **Pro — ₦5,000/month:** 5 tickets/day, 2 analyses/day, Football + Basketball only. Hockey is locked.
+- **Pro — ₦10,000/month:** 5 tickets/day, 2 analyses/day, Football + Basketball + Ice Hockey. Hockey is locked.
 - **Elite — ₦20,000/month:** 10 tickets/day, 5 analyses/day, all supported sports and all supported bet types.
 
 Locked markets are displayed with a 🔒 button. The restriction is also re-checked when a ticket is built, so a user cannot bypass the plan by sending a crafted Telegram callback or natural-language request.

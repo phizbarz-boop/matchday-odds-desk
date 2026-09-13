@@ -1,7 +1,7 @@
 Added without changing existing plan limits or selection rules.
 
 Extra AI ticket packs:
-- Pro: ₦2,500 -> +25 tickets
+- Pro: ₦5,000 -> +25 tickets
 - Elite: ₦10,000 -> +75 tickets
 - Daily included tickets are consumed first.
 - Extra tickets remain across daily resets and expire with the active subscription.

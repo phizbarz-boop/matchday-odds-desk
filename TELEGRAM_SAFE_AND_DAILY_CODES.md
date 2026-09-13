@@ -35,5 +35,5 @@ Codes are cached in Redis for 48 hours under a WAT-date key. A process-memory fa
 
 
 ## Updated access
-- Free: SAFE + 10x only.
+- Free: SAFE only.
 - Pro/Elite: all daily codes.

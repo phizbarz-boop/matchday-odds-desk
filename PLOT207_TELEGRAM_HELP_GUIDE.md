@@ -12,5 +12,5 @@ Current SAFE guide:
 - 1.30–2.00 combined odds
 
 Today's Codes:
-- Free: SAFE + 10x only
+- Free: SAFE only
 - Pro/Elite: all daily codes
