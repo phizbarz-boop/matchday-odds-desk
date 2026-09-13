@@ -1,0 +1,50 @@
+name: Plot207 Volleyball Collector V1
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test-volleyball-v1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Install Playwright
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Capture Volleyball fixtures and publish snapshot
+        env:
+          SPORTYSOCIAL_LOGIN_ID: ${{ secrets.SPORTYSOCIAL_LOGIN_ID }}
+          SPORTYSOCIAL_PASSWORD: ${{ secrets.SPORTYSOCIAL_PASSWORD }}
+          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
+          MATCHDAY_BASE_URL: https://matchday-odds-desk.onrender.com
+        run: |
+          test -n "$SPORTYSOCIAL_LOGIN_ID" || (echo "Missing GitHub secret SPORTYSOCIAL_LOGIN_ID" && exit 1)
+          test -n "$SPORTYSOCIAL_PASSWORD" || (echo "Missing GitHub secret SPORTYSOCIAL_PASSWORD" && exit 1)
+          test -n "$TELEGRAM_JOB_SECRET" || (echo "Missing GitHub secret TELEGRAM_JOB_SECRET" && exit 1)
+          node jobs/sporty-volleyball-network-collector.js
+
+      - name: Upload Volleyball diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sportybet-volleyball-v1
+          path: volleyball-discovery-v1/
+          if-no-files-found: ignore
+          retention-days: 3
