@@ -40,6 +40,69 @@ const sportyMemoryCache = new Map();
 const sportyMarketInFlight = new Map();
 const bookingMemoryRate = new Map();
 const telegramSendMemory = new Map();
+const telegramDailyCodesMemory = new Map();
+
+
+function telegramDailyCodeVisibleForPlan(planId, label) {
+  const plan = String(planId || 'free').toLowerCase();
+  if (plan !== 'free') return true;
+  const key = String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return key.includes('safe') || key === '10x' || key === '10odds' || key === '10';
+}
+
+function telegramDailyCodesKey(dateKey) { return `telegram:daily-codes:${dateKey}`; }
+
+async function saveTelegramDailyCodes(redis, dateKey, payload) {
+  const safePayload = {
+    date: dateKey,
+    generatedAt: payload?.generatedAt || new Date().toISOString(),
+    codes: Array.isArray(payload?.codes) ? payload.codes.map(x => ({
+      targetOdds: String(x?.targetOdds || ''),
+      combinedOdds: Number(x?.combinedOdds || 0),
+      shareCode: String(x?.shareCode || ''),
+    })).filter(x => x.targetOdds && x.shareCode) : [],
+  };
+  telegramDailyCodesMemory.set(dateKey, safePayload);
+  if (redis) await redis.set(telegramDailyCodesKey(dateKey), JSON.stringify(safePayload), { EX: 172800 });
+  return safePayload;
+}
+
+async function loadTelegramDailyCodes(redis, dateKey) {
+  if (redis) {
+    try {
+      const raw = await redis.get(telegramDailyCodesKey(dateKey));
+      if (raw) return JSON.parse(raw);
+    } catch (e) { console.warn('Daily codes Redis read failed:', e.message); }
+  }
+  return telegramDailyCodesMemory.get(dateKey) || { date: dateKey, generatedAt: null, codes: [] };
+}
+
+function telegramDailyCodesText(snapshot, plan) {
+  const codes = Array.isArray(snapshot?.codes) ? snapshot.codes : [];
+  const isFree = plan?.id === 'free';
+  const order = ['1.30–2.00 SAFE','1.30–1.35 SAFE','10','20','1000','10000'];
+  const byTarget = new Map(codes.map(x => [String(x.targetOdds), x]));
+  const lines = ['🎟 TODAY’S AUTO-PICK CODES', '', `Date: ${snapshot?.date || fixtureDateKeyInTimeZone(new Date(), 'Africa/Lagos')} (WAT)`, ''];
+  if (!codes.length) {
+    lines.push('No daily Auto Pick codes have been generated yet today.');
+  } else {
+    for (const target of order) {
+      const row = byTarget.get(target);
+      if (!row) continue;
+      const isSafe = target.includes('SAFE');
+      const freeAllowed = isSafe || target === '10';
+      if (isFree && !freeAllowed) {
+        lines.push(`🔒 ${isSafe ? 'SAFE' : target + 'x'} — Pro/Elite only`);
+      } else {
+        const label = isSafe ? 'SAFE 1.30–2.00' : `${target}x`;
+        lines.push(`${label}: ${row.shareCode}`);
+      }
+    }
+  }
+  lines.push('', 'Codes only — game selections are not shown here.');
+  if (isFree) lines.push('Free access: SAFE + 10x only. Upgrade to Pro or Elite to reveal all other daily codes.');
+  return lines.join('\n');
+}
 
 
 
@@ -1515,7 +1578,7 @@ async function runTelegramDailyPicks() {
     { label: '1000', targetOdds: 1000, minProbability: 70 },
     { label: '20', targetOdds: 20, minProbability: 70 },
     { label: '10', targetOdds: 10, minProbability: 70 },
-    { label: '1.30–1.35 SAFE', targetOdds: 1.325, minProbability: 80, minOdds: 1.30, maxOdds: 1.35 },
+    { label: '1.30–2.00 SAFE', targetOdds: 2.00, minProbability: 90, minOdds: 1.30, maxOdds: 2.00 },
   ];
 
   // Load broadly enough that positive/negative edge does not determine Telegram eligibility.
@@ -1527,24 +1590,45 @@ async function runTelegramDailyPicks() {
     leagues
   });
 
+  // SAFE must always have Basketball + Ice Hockey available even if a deployment
+  // narrows TELEGRAM_SPORT_SCOPE for the other daily target slips.
+  let safeSourceCandidates = allCandidates;
+  if (sportScope !== 'all') {
+    const [basketballSafe, hockeySafe] = await Promise.all([
+      loadAutoCandidates({ sportScope: 'basketball', minProbability: 0, minEdge: -25, leagues: null }),
+      loadAutoCandidates({ sportScope: 'hockey', minProbability: 0, minEdge: -25, leagues: null }),
+    ]);
+    safeSourceCandidates = [...basketballSafe, ...hockeySafe];
+  }
+
   // Daily Auto Picks are intentionally SAME-DAY ONLY.
   // "Today" is evaluated in Africa/Lagos (WAT), matching the Website/Telegram
   // Today Only filter. Missing/invalid kickoff times are excluded because the
   // job cannot safely prove that such fixtures play today.
   const todayCandidates = allCandidates.filter(c => isCandidateToday(c, { timeZone: 'Africa/Lagos' }));
   const saneCandidates = todayCandidates.filter(passesRedFlagFilter);
+  const safeTodayCandidates = safeSourceCandidates
+    .filter(c => isCandidateToday(c, { timeZone: 'Africa/Lagos' }))
+    .filter(passesRedFlagFilter)
+    .filter(c => {
+      const sport = String(c?.sport || '').toLowerCase();
+      return sport.includes('basket') || sport.includes('hockey');
+    });
   const dateRejected = allCandidates.length - todayCandidates.length;
   const redFlagRejected = todayCandidates.length - saneCandidates.length;
-  if (!saneCandidates.length) throw new Error('No eligible same-day (WAT) candidates remain after Telegram daily-picks filters');
+  if (!saneCandidates.length && !safeTodayCandidates.length) throw new Error('No eligible same-day (WAT) candidates remain after Telegram daily-picks filters');
 
   const watToday = fixtureDateKeyInTimeZone(new Date(), 'Africa/Lagos');
+  const redis = await getRedis();
+  const dailyCodes = [];
+  await saveTelegramDailyCodes(redis, watToday, { generatedAt: new Date().toISOString(), codes: dailyCodes });
   await sendTelegramMessage([
     '🤖 MATCHDAY ODDS DESK — AUTO PICKS',
     `Scope: ${sportScope.toUpperCase()}`,
     `Fixture date: TODAY ONLY (WAT) — ${watToday}`,
-    'Targets: 10000, 1000, 20, 10, 1.30–1.35 SAFE',
+    'Targets: 10000, 1000, 20, 10, 1.30–2.00 SAFE',
     '10000x / 1000x / 20x / 10x: minimum probability 70%',
-    'SAFE: minimum probability 80% | combined odds 1.30–1.35',
+    'SAFE: Basketball + Ice Hockey only | minimum probability 90% | combined odds 1.30–2.00',
     'Positive-edge requirement: OFF',
     'Red-flag protection: ON',
     `Non-today/invalid-kickoff selections rejected: ${dateRejected}`,
@@ -1558,7 +1642,11 @@ async function runTelegramDailyPicks() {
 
   const output = [];
   for (const plan of plans) {
-    const planCandidates = saneCandidates.filter(c => Number(c.probability || 0) >= plan.minProbability);
+    // SAFE daily picks are intentionally Basketball + Ice Hockey only.
+    // Other daily targets continue to use the configured Telegram sport scope.
+    const isSafePlan = plan.minOdds != null && plan.maxOdds != null;
+    const baseCandidates = isSafePlan ? safeTodayCandidates : saneCandidates;
+    const planCandidates = baseCandidates.filter(c => Number(c.probability || 0) >= plan.minProbability);
 
     if (!planCandidates.length) {
       output.push({ targetOdds: plan.label, error: `No selections met the ${plan.minProbability}% probability minimum` });
@@ -1580,15 +1668,15 @@ async function runTelegramDailyPicks() {
       continue;
     }
 
-    // SAFE must actually land inside 1.30–1.35. Do not send a closest-outside-range slip.
+    // SAFE must actually land inside 1.30–2.00. Do not send a closest-outside-range slip.
     if (plan.minOdds != null && plan.maxOdds != null &&
         (Number(result.combinedOdds) < plan.minOdds || Number(result.combinedOdds) > plan.maxOdds)) {
       output.push({
         targetOdds: plan.label,
         combinedOdds: result.combinedOdds,
-        error: 'No qualifying combination landed inside 1.30–1.35'
+        error: 'No qualifying combination landed inside 1.30–2.00'
       });
-      await sendTelegramMessage(`⚠️ ${plan.label} set NOT GENERATED — no qualifying combination landed inside 1.30–1.35.`);
+      await sendTelegramMessage(`⚠️ ${plan.label} set NOT GENERATED — no qualifying combination landed inside 1.30–2.00.`);
       continue;
     }
 
@@ -1601,7 +1689,7 @@ async function runTelegramDailyPicks() {
       })));
       await sendTelegramMessage(telegramSlipText(plan.label, result, booking, sportScope));
 
-      await trackTelegramSlip(await getRedis(), {
+      await trackTelegramSlip(redis, {
         shareCode: booking?.shareCode,
         shareURL: booking?.shareURL,
         targetOdds: plan.label,
@@ -1609,6 +1697,11 @@ async function runTelegramDailyPicks() {
         sportScope,
         selections: result.selections,
       });
+
+      if (booking?.shareCode) {
+        dailyCodes.push({ targetOdds: plan.label, combinedOdds: result.combinedOdds, shareCode: booking.shareCode });
+        await saveTelegramDailyCodes(redis, watToday, { generatedAt: new Date().toISOString(), codes: dailyCodes });
+      }
 
       output.push({
         targetOdds: plan.label,
@@ -1641,7 +1734,7 @@ async function runTelegramDailyPicks() {
     redFlagProtection: true,
     redFlagRejected,
     maxSelections,
-    candidateCount: candidates.length,
+    candidateCount: saneCandidates.length,
     results: output
   };
 }
@@ -1977,20 +2070,28 @@ async function buildTelegramAiTicket(user, request) {
   const plan = getTelegramAiPlan(user);
   const saved = user?.preferences?.builder || {};
   const merged = { ...saved, ...(request || {}) };
-  let sports=normalizeSportScopes(Array.isArray(merged.sports)&&merged.sports.length?merged.sports:(merged.sport||(plan.id==='free'?'football':'all')));
-  const unavailable=sports.filter(sp=>!(plan.sports.includes(sp)||plan.sports.includes('all')));
-  if(unavailable.length)return{locked:true,message:telegramAiUpgradeText(plan,`${unavailable.join(' + ')} tickets`)};
+  // SAFE is a curated system ticket: always Basketball + Ice Hockey only,
+  // regardless of the user's last Builder sport selection. It remains accessible
+  // from the Best Picks button even on Free, while normal Builder sport limits stay unchanged.
+  let sports = merged.safe
+    ? ['basketball','hockey']
+    : normalizeSportScopes(Array.isArray(merged.sports)&&merged.sports.length?merged.sports:(merged.sport||(plan.id==='free'?'football':'all')));
+  if (!merged.safe) {
+    const unavailable=sports.filter(sp=>!(plan.sports.includes(sp)||plan.sports.includes('all')));
+    if(unavailable.length)return{locked:true,message:telegramAiUpgradeText(plan,`${unavailable.join(' + ')} tickets`)};
+  }
   const sport=sports.length===3?'all':(sports.length===1?sports[0]:'multi');
-  const targetOdds = Number(merged.targetOdds || 10);
-  if (targetOdds > plan.maxTargetOdds) {
+  const targetOdds = merged.safe ? 1.325 : Number(merged.targetOdds || 10);
+  if (!merged.safe && targetOdds > plan.maxTargetOdds) {
     return { locked: true, message: `${telegramAiUpgradeText(plan, `${targetOdds}x ticket building`)}\n\nYour current maximum target is ${plan.maxTargetOdds}x.` };
   }
   const minProbability = Math.min(95, Math.max(merged.safe ? 80 : 0, Number(merged.minProbability ?? (merged.safe ? 80 : 70))));
   const minEdge = Math.min(25, Math.max(-10, Number(merged.minEdge ?? 0)));
   const maxSelections = Math.min(plan.maxSelections, Math.max(1, Number(merged.maxSelections || plan.maxSelections)));
-  const allowedBetTypes = new Set(telegramAiAllowedBetIdsForPlan(plan.id));
-  const sportBetTypes=new Set(sports.flatMap(sp=>telegramAiBetTypesForSport(plan.id,sp)));
-  let requestedBetTypes=Array.isArray(merged.betTypes)&&merged.betTypes.length?merged.betTypes.map(String):[...sportBetTypes];
+  const safeBetTypes = ['basketball_winner','basketball_over','basketball_under','hockey_winner','hockey_over','hockey_under'];
+  const allowedBetTypes = new Set(merged.safe ? safeBetTypes : telegramAiAllowedBetIdsForPlan(plan.id));
+  const sportBetTypes = new Set(merged.safe ? safeBetTypes : sports.flatMap(sp=>telegramAiBetTypesForSport(plan.id,sp)));
+  let requestedBetTypes = merged.safe ? safeBetTypes : (Array.isArray(merged.betTypes)&&merged.betTypes.length?merged.betTypes.map(String):[...sportBetTypes]);
   let betTypes=requestedBetTypes.filter(id=>allowedBetTypes.has(id)&&sportBetTypes.has(id));
   // Basketball/Hockey only have three supported families. Old saved preferences could
   // contain a partial/corrupted list even though the Builder displayed “(3)”.
@@ -2028,8 +2129,8 @@ async function buildTelegramAiTicket(user, request) {
     requirePositiveEV: false,
   });
   if (!result?.selections?.length) return { error: 'I could not find a qualifying combination from the current SportyBet fixtures.' };
-  if (merged.safe && (Number(result.combinedOdds) < 1.30 || Number(result.combinedOdds) > 1.35)) {
-    return { error: 'No SAFE combination currently lands inside 1.30–1.35 while keeping every leg at 80%+.' };
+  if (merged.safe && (Number(result.combinedOdds) < 1.30 || Number(result.combinedOdds) > 2.00)) {
+    return { error: 'No SAFE combination currently lands inside 1.30–2.00 while keeping every leg at 90%+.' };
   }
   const booking = await bookBet(result.selections.map(x => ({ eventId:x.eventId, marketId:x.marketId, outcomeId:x.outcomeId, ...(x.specifier ? {specifier:x.specifier}: {}) })));
   return { result, booking, plan, request: { ...merged, sport, sports, targetOdds, minProbability, minEdge, maxSelections, betTypes } };
@@ -2267,6 +2368,12 @@ async function handleTelegramAiUpdate(update) {
     else if (d.startsWith('ticket:')) { user.preferences.builder.targetOdds = Number(d.split(':')[1]) || 10; await saveTelegramAiUser(redis,user); callbackAction='build'; }
     else if (d === 'action:plans') text = '/plans';
     else if (d === 'action:account') text = '/account';
+    else if (d === 'action:dailycodes') {
+      const plan = getTelegramAiPlan(user);
+      const dateKey = fixtureDateKeyInTimeZone(new Date(), 'Africa/Lagos');
+      const snapshot = await loadTelegramDailyCodes(redis, dateKey);
+      return sendTelegramAiMessageTo(chatId, telegramDailyCodesText(snapshot, plan), { reply_markup: telegramAiMainKeyboard() });
+    }
     else if (d === 'action:copy') text = 'copy rankings';
     else if (d === 'action:analyze') {
       const plan = getTelegramAiPlan(user);
@@ -2421,7 +2528,7 @@ async function handleTelegramAiUpdate(update) {
     if(!Array.isArray(req.betTypes)||!req.betTypes.length)return sendTelegramAiMessageTo(chatId,'⚠️ Select at least one Bet Type before building.',{reply_markup:telegramAiBuilderKeyboard(user)});
     if(callbackAction==='safe'||callbackAction==='safer'){req.safe=true;req.targetOdds=1.325;req.minProbability=Math.max(80,Number(req.minProbability||0));req.maxMatchOdds=req.maxMatchOdds||1.35;}
     if(callbackAction==='rebuild'&&user.lastBuilderRequest)req={...user.lastBuilderRequest,safe:false};
-    await sendTelegramAiMessageTo(chatId,`⏳ Scanning current SportyBet fixtures and applying your settings…\n${req.sport||'all'} · target ${req.safe?'SAFE 1.30–1.35':req.targetOdds+'x'} · ≥${req.minProbability}% · max ${req.maxMatchOdds||'no limit'} per match`);
+    await sendTelegramAiMessageTo(chatId,`⏳ Scanning current SportyBet fixtures and applying your settings…\n${req.sport||'all'} · target ${req.safe?'SAFE 1.30–2.00':req.targetOdds+'x'} · ≥${req.minProbability}% · max ${req.maxMatchOdds||'no limit'} per match`);
     const built=await buildTelegramAiTicket(user,req).catch(e=>({error:e.message}));
     if(built.locked)return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});
     if(built.error)return sendTelegramAiMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiBuilderKeyboard(user)});
@@ -2527,11 +2634,11 @@ app.post('/api/telegram/bot/setup', express.json(), async (req, res) => {
 app.get('/api/telegram/status', (req, res) => {
   res.json({
     configured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID && process.env.TELEGRAM_JOB_SECRET),
-    targets: [10000, 1000, 20, 10, '1.30-1.35 SAFE'],
+    targets: [10000, 1000, 20, 10, '1.30-2.00 SAFE'],
     sportScope: normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all'),
     rules: {
       regular: { minProbability: 70, positiveEdgeRequired: false, redFlagProtection: true },
-      safe: { minProbability: 80, combinedOddsMin: 1.30, combinedOddsMax: 1.35, positiveEdgeRequired: false, redFlagProtection: true },
+      safe: { minProbability: 90, combinedOddsMin: 1.30, combinedOddsMax: 2.00, positiveEdgeRequired: false, redFlagProtection: true },
     },
     maxSelections: Math.min(50, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '30', 10))),
     scheduler: 'GitHub Actions',
