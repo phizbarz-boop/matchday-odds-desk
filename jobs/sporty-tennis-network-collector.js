@@ -154,7 +154,7 @@ async function publishSnapshot(events) {
     if(!res.ok) throw new Error(`snapshot publish ${res.status}: ${text.slice(0,500)}`);
     let payload={};
     try{payload=JSON.parse(text)}catch{}
-    console.log(`[Tennis V1] Snapshot published: events=${payload.events??events.length}, winnerRows=${payload.winnerRows??'?'}, totalGamesRows=${payload.totalRows??'?'}, API-SPORTS matched=${payload.matched??0}/${payload.total??events.length}`);
+    console.log(`[Tennis V1] Snapshot published: events=${payload.events??events.length}, winnerRows=${payload.winnerRows??'?'}, totalGamesRows=${payload.totalRows??'?'}`);
     return payload;
   } finally {clearTimeout(t);}
 }
@@ -207,6 +207,33 @@ function parseTennisPageFixtureMetadata(bodyText) {
   }
 
   return byGameId;
+}
+
+
+function tennisNormName(v) {
+  return String(v || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g,' ')
+    .replace(/\s+/g,' ').trim();
+}
+
+function tennisMetadataMatch(event, rows) {
+  const gameId = String(event?.gameId || '');
+  if (gameId) {
+    const byId = (rows || []).find(r => String(r?.gameId || '') === gameId);
+    if (byId) return byId;
+  }
+  const h = tennisNormName(event?.homeTeamName || event?.home);
+  const a = tennisNormName(event?.awayTeamName || event?.away);
+  if (!h || !a) return null;
+  return (rows || []).find(r => {
+    const rh = tennisNormName(r?.homeTeamName || r?.home);
+    const ra = tennisNormName(r?.awayTeamName || r?.away);
+    return (rh === h && ra === a) ||
+      (rh.includes(h) && ra.includes(a)) ||
+      (h.includes(rh) && a.includes(ra));
+  }) || null;
 }
 
 (async () => {
@@ -426,7 +453,7 @@ function parseTennisPageFixtureMetadata(bodyText) {
 
     const completenessRatio = eventCandidates.length ? complete / eventCandidates.length : 0;
     if (completenessRatio < 0.8) {
-      throw new Error(`HANDALL_METADATA_INCOMPLETE:${complete}/${eventCandidates.length}`);
+      throw new Error(`TENNIS_METADATA_INCOMPLETE:${complete}/${eventCandidates.length}`);
     }
 
     console.log('[Tennis V1] SUCCESS');

@@ -217,8 +217,9 @@ function flattenTennisEvents(events, kind='winner') {
       const desc=String(m?.marketDesc||'');
       const mid=String(m?.marketId||'');
       const isWinner = kind==='winner' && /winner|moneyline|match winner|1x2/i.test(desc);
-      const isTotals = kind==='totals' && /total games|games total|total/i.test(desc) && !/sets?/i.test(desc);
-      if(!isWinner && !isTotals) continue;
+      const isTotals = kind==='totals' && /total games|games total|total/i.test(desc) && !/sets?|handicap/i.test(desc);
+      const isHandicap = kind==='handicap' && (/set handicap/i.test(desc) || mid==='188');
+      if(!isWinner && !isTotals && !isHandicap) continue;
       for(const o of Array.isArray(m?.outcomes)?m.outcomes:[]) {
         const odds=Number(o?.odds);
         if(!Number.isFinite(odds)||odds<=1) continue;
@@ -267,7 +268,7 @@ async function loadTennisMarket(kind='winner') {
   return {
     sport:'tennis',
     market:kind,
-    marketLabel:kind==='winner'?'Match Winner':'Total Games',
+    marketLabel:kind==='winner'?'Match Winner':(kind==='handicap'?'Set Handicap':'Total Games'),
     fetchedAt:snap?.fetchedAt||null,
     collectorVersion:snap?.collectorVersion||'V1',
     totalReturned:rows.length,
@@ -1022,8 +1023,9 @@ app.post('/api/internal/tennis/snapshot', express.json({limit:'5mb'}), async (re
     await saveTennisSnapshot(snapshot);
     const winnerRows=flattenTennisEvents(events,'winner').length;
     const totalRows=flattenTennisEvents(events,'totals').length;
+    const handicapRows=flattenTennisEvents(events,'handicap').length;
     res.json({
-      ok:true,events:events.length,winnerRows,totalRows,
+      ok:true,events:events.length,winnerRows,totalRows,handicapRows,
       probabilityModel:'no-vig SportyBet market probability (same non-football market model)'
     });
   }catch(err){
@@ -1037,12 +1039,14 @@ app.get('/api/tennis/status', async (req,res)=>{
     const snap=await loadTennisSnapshot();
     const winner=await loadTennisMarket('winner');
     const totals=await loadTennisMarket('totals');
+    const handicap=await loadTennisMarket('handicap');
     res.json({
       collectorVersion:snap?.collectorVersion||null,
       fetchedAt:snap?.fetchedAt||null,
       fixtures:Array.isArray(snap?.events)?snap.events.length:0,
       winnerRows:winner.rows.length,
       totalsRows:totals.rows.length,
+      handicapRows:handicap.rows.length,
       probabilityModel:'No-vig/de-margined SportyBet market probability'
     });
   }catch(err){res.status(500).json({error:'tennis status failed',detail:String(err.message||err)});}
@@ -1145,8 +1149,8 @@ app.get('/api/sportybet/sport/:sport', async (req, res) => {
     const sport = String(req.params.sport || '').toLowerCase();
     if (sport === 'tennis') {
       const kind = String(req.query.market || 'winner').toLowerCase();
-      if (!['winner','totals'].includes(kind)) {
-        return res.status(400).json({ error: 'tennis market must be one of: winner, totals' });
+      if (!['winner','totals','handicap'].includes(kind)) {
+        return res.status(400).json({ error: 'tennis market must be one of: winner, totals, handicap' });
       }
       const payload = await loadTennisMarket(kind);
       res.set('Cache-Control', 'public, max-age=60');
@@ -1286,7 +1290,7 @@ const AUTO_BET_TYPES_BY_SPORT = {
   hockey: ['hockey_winner','hockey_over','hockey_under'],
   handball: ['handball_winner','handball_over','handball_under'],
   volleyball: ['volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under'],
-  tennis: ['tennis_winner','tennis_over','tennis_under'],
+  tennis: ['tennis_winner','tennis_over','tennis_under','tennis_handicap_home','tennis_handicap_away'],
 };
 
 function normalizeAutoBetTypesForSports(sports, betTypes) {
@@ -1341,6 +1345,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
   const needVolleyballSets = wantsVolleyball && wantsAny(['volleyball_sets_over','volleyball_sets_under']);
   const needTennisWinner = wantsTennis && wantsAny(['tennis_winner']);
   const needTennisTotals = wantsTennis && wantsAny(['tennis_over','tennis_under']);
+  const needTennisHandicap = wantsTennis && wantsAny(['tennis_handicap_home','tennis_handicap_away']);
 
   // The general sportsbook cache may live for hours to save API credits, but the Auto Builder
   // needs much fresher availability data so expired events cannot remain eligible.
@@ -1367,7 +1372,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     }
   };
 
-  let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals, handballWinner, handballTotals, volleyballWinner, volleyballTotals, volleyballSets, tennisWinner, tennisTotals] = await Promise.all([
+  let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals, handballWinner, handballTotals, volleyballWinner, volleyballTotals, volleyballSets, tennisWinner, tennisTotals, tennisHandicap] = await Promise.all([
     safeMarket('football predictions', wantsFootball, () => loadPredictions(), { matches: [] }),
     safeMarket('football 1X2', needF1x2, () => loadSportyBetMarket('1x2', 'football', autoMarketOptions)),
     safeMarket('football GG/NG', needFGg, () => loadSportyBetMarket('gg', 'football', autoMarketOptions)),
@@ -1391,6 +1396,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     safeMarket('volleyball total sets', needVolleyballSets, () => loadVolleyballMarket('sets')),
     safeMarket('tennis winner', needTennisWinner, () => loadTennisMarket('winner')),
     safeMarket('tennis totals', needTennisTotals, () => loadTennisMarket('totals')),
+    safeMarket('tennis handicap', needTennisHandicap, () => loadTennisMarket('handicap')),
   ]);
 
   if (wantsFootball && cornerBetRequested(betTypes)) {
@@ -1415,6 +1421,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     volleyballSets,
     tennisWinner,
     tennisTotals,
+    tennisHandicap,
     minProbability,
     minEdge,
     leagues,
@@ -2655,8 +2662,8 @@ function telegramAiBetTypesForSport(planId, sport) {
     hockey: ['hockey_winner','hockey_over','hockey_under'],
     handball: ['handball_winner','handball_over','handball_under'],
     volleyball: ['volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under'],
-    tennis: ['tennis_winner','tennis_over','tennis_under'],
-  tennis: ['tennis_winner','tennis_over','tennis_under'],
+    tennis: ['tennis_winner','tennis_over','tennis_under','tennis_handicap_home','tennis_handicap_away'],
+  tennis: ['tennis_winner','tennis_over','tennis_under','tennis_handicap_home','tennis_handicap_away'],
   };
   if (sport === 'all') return [...allowed];
   return (bySport[sport] || []).filter(id => allowed.has(id));
