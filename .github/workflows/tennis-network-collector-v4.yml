@@ -1,4 +1,4 @@
-name: Plot207 Tennis Collector V3
+name: Plot207 Tennis Collector V4
 
 on:
   workflow_dispatch: {}
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  test-tennis-v3:
+  test-tennis-v4:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -38,13 +38,13 @@ jobs:
           test -n "$SPORTYSOCIAL_LOGIN_ID" || (echo "Missing GitHub secret SPORTYSOCIAL_LOGIN_ID" && exit 1)
           test -n "$SPORTYSOCIAL_PASSWORD" || (echo "Missing GitHub secret SPORTYSOCIAL_PASSWORD" && exit 1)
           test -n "$TELEGRAM_JOB_SECRET" || (echo "Missing GitHub secret TELEGRAM_JOB_SECRET" && exit 1)
-          node jobs/sporty-tennis-network-collector.js
+          SPORTYBET_TENNIS_MAX_SCANS=80 SPORTYBET_TENNIS_STABLE_SCANS=5 node jobs/sporty-tennis-network-collector.js
 
       - name: Upload Tennis diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sportybet-tennis-v3
+          name: sportybet-tennis-v4
           path: tennis-discovery-v1/
           if-no-files-found: ignore
           retention-days: 3

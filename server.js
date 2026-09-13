@@ -323,7 +323,7 @@ function plot207TelegramHelpText(plan = null) {
     '',
     '⭐ BEST PICKS / SAFE',
     'Tap ⭐ Best Picks when you want the dedicated SAFE ticket.',
-    'SAFE prioritizes Volleyball + Ice Hockey + Handball + Basketball, requires at least 90% probability per selected leg, applies red-flag protection, and aims for combined odds between 1.30 and 5.00.',
+    'SAFE prioritizes Tennis + Volleyball + Ice Hockey + Handball + Basketball, requires at least 90% probability per selected leg, applies red-flag protection, and aims for combined odds between 1.30 and 5.00.',
     'A SAFE pick is still a prediction, not a guaranteed win.',
     '',
     '🎟 TODAY’S CODES',
@@ -2140,11 +2140,12 @@ function telegramSlipText(target, result, booking, sportScope) {
 }
 
 
-const TELEGRAM_PRIORITY_SPORTS = ['volleyball','hockey','handball','basketball'];
+const TELEGRAM_PRIORITY_SPORTS = ['tennis','volleyball','hockey','handball','basketball'];
 
 function isTelegramPrioritySport(candidate) {
   const sport = String(candidate?.sport || '').toLowerCase();
   return (
+    sport.includes('tennis') ||
     sport.includes('volley') ||
     sport.includes('hockey') ||
     sport.includes('handball') ||
@@ -2211,13 +2212,14 @@ async function runTelegramDailyPicks() {
   // TELEGRAM_SPORT_SCOPE narrows the other daily target slips.
   let safeSourceCandidates = allCandidates;
   if (sportScope !== 'all') {
-    const [volleyballSafe, hockeySafe, handballSafe, basketballSafe] = await Promise.all([
+    const [tennisSafe, volleyballSafe, hockeySafe, handballSafe, basketballSafe] = await Promise.all([
+      loadAutoCandidates({ sportScope: 'tennis', minProbability: 0, minEdge: -25, leagues: null }),
       loadAutoCandidates({ sportScope: 'volleyball', minProbability: 0, minEdge: -25, leagues: null }),
       loadAutoCandidates({ sportScope: 'hockey', minProbability: 0, minEdge: -25, leagues: null }),
       loadAutoCandidates({ sportScope: 'handball', minProbability: 0, minEdge: -25, leagues: null }),
       loadAutoCandidates({ sportScope: 'basketball', minProbability: 0, minEdge: -25, leagues: null }),
     ]);
-    safeSourceCandidates = [...volleyballSafe, ...hockeySafe, ...handballSafe, ...basketballSafe];
+    safeSourceCandidates = [...tennisSafe, ...volleyballSafe, ...hockeySafe, ...handballSafe, ...basketballSafe];
   }
 
   // Daily Auto Picks are intentionally SAME-DAY ONLY.
@@ -2245,7 +2247,7 @@ async function runTelegramDailyPicks() {
     'Targets: 10000, 1000, 20, 10, 1.30–5.00 SAFE',
     '10000x / 1000x / 20x / 10x: minimum probability 70%',
     'SAFE: priority Volleyball + Ice Hockey + Handball + Basketball | minimum probability 90% | combined odds 1.30–5.00',
-    '10x / 20x priority: Volleyball + Ice Hockey + Handball + Basketball first; Football only as fallback',
+    '10x / 20x / 1000x / 10000x priority: Tennis + Volleyball + Ice Hockey + Handball + Basketball first; Football only as fallback',
     'Positive-edge requirement: OFF',
     'Red-flag protection: ON',
     `Non-today/invalid-kickoff selections rejected: ${dateRejected}`,
@@ -2269,7 +2271,7 @@ async function runTelegramDailyPicks() {
       continue;
     }
 
-    const usePriority = isSafePlan || plan.label === '10' || plan.label === '20';
+    const usePriority = isSafePlan || ['10','20','1000','10000'].includes(plan.label);
     const picked = usePriority
       ? selectTelegramPlanWithPriority(plan, planCandidates, maxSelections)
       : { result: selectAutoBet(planCandidates, {
@@ -2699,7 +2701,7 @@ async function buildTelegramAiTicket(user, request) {
   // regardless of the user's last Builder sport selection. It remains accessible
   // from the Best Picks button even on Free, while normal Builder sport limits stay unchanged.
   let sports = merged.safe
-    ? ['volleyball','hockey','handball','basketball']
+    ? ['tennis','volleyball','hockey','handball','basketball']
     : normalizeSportScopes(Array.isArray(merged.sports)&&merged.sports.length?merged.sports:(merged.sport||(plan.id==='free'?'football':'all')));
   if (!merged.safe) {
     const unavailable=sports.filter(sp=>!(plan.sports.includes(sp)||plan.sports.includes('all')));
@@ -2714,6 +2716,7 @@ async function buildTelegramAiTicket(user, request) {
   const minEdge = Math.min(25, Math.max(-10, Number(merged.minEdge ?? 0)));
   const maxSelections = Math.min(plan.maxSelections, Math.max(1, Number(merged.maxSelections || plan.maxSelections)));
   const safeBetTypes = [
+    'tennis_winner','tennis_over','tennis_under','tennis_handicap_home','tennis_handicap_away',
     'volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under',
     'hockey_winner','hockey_over','hockey_under',
     'handball_winner','handball_over','handball_under',
