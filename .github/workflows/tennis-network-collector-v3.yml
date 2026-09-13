@@ -1,4 +1,4 @@
-name: Plot207 Tennis Collector V2
+name: Plot207 Tennis Collector V3
 
 on:
   workflow_dispatch: {}
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  test-tennis-v2:
+  test-tennis-v3:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -44,7 +44,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sportybet-tennis-v2
+          name: sportybet-tennis-v3
           path: tennis-discovery-v1/
           if-no-files-found: ignore
           retention-days: 3

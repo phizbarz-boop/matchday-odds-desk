@@ -8,7 +8,7 @@ const PASSWORD = process.env.SPORTYSOCIAL_PASSWORD || '';
 const MATCHDAY_BASE_URL = String(process.env.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com').replace(/\/$/,'');
 const JOB_SECRET = process.env.TELEGRAM_JOB_SECRET || '';
 
-const OUT_DIR = path.join(process.cwd(), 'tennis-discovery-v1');
+const OUT_DIR = path.join(process.cwd(), 'tennis-discovery-v3');
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
 function safeJsonWrite(name, data) {
@@ -138,7 +138,7 @@ function toWatIso(day, month, timeText) {
 
 async function publishSnapshot(events) {
   if (!JOB_SECRET) {
-    console.log('[Tennis V1] TELEGRAM_JOB_SECRET not set; snapshot publish skipped');
+    console.log('[Tennis V3] TELEGRAM_JOB_SECRET not set; snapshot publish skipped');
     return null;
   }
   const ctrl=new AbortController();
@@ -147,14 +147,14 @@ async function publishSnapshot(events) {
     const res=await fetch(`${MATCHDAY_BASE_URL}/api/internal/tennis/snapshot`,{
       method:'POST',
       headers:{'Content-Type':'application/json','x-telegram-job-secret':JOB_SECRET},
-      body:JSON.stringify({collectorVersion:'V1',events}),
+      body:JSON.stringify({collectorVersion:'V3',events}),
       signal:ctrl.signal,
     });
     const text=await res.text();
     if(!res.ok) throw new Error(`snapshot publish ${res.status}: ${text.slice(0,500)}`);
     let payload={};
     try{payload=JSON.parse(text)}catch{}
-    console.log(`[Tennis V1] Snapshot published: events=${payload.events??events.length}, winnerRows=${payload.winnerRows??'?'}, totalGamesRows=${payload.totalRows??'?'}`);
+    console.log(`[Tennis V3] Snapshot published: events=${payload.events??events.length}, winnerRows=${payload.winnerRows??'?'}, totalGamesRows=${payload.totalRows??'?'}`);
     return payload;
   } finally {clearTimeout(t);}
 }
@@ -238,7 +238,7 @@ function tennisMetadataMatch(event, rows) {
 
 (async () => {
   if (!LOGIN_ID || !PASSWORD) {
-    console.error('[Tennis V1] Missing SPORTYSOCIAL_LOGIN_ID or SPORTYSOCIAL_PASSWORD');
+    console.error('[Tennis V3] Missing SPORTYSOCIAL_LOGIN_ID or SPORTYSOCIAL_PASSWORD');
     process.exit(1);
   }
 
@@ -258,14 +258,14 @@ function tennisMetadataMatch(event, rows) {
       if (!ct.includes('json') && !ct.includes('text')) return;
       const body = await res.json();
       captured.push({ url, status: res.status(), body });
-      console.log(`[Tennis V1] Captured fixture endpoint: ${res.status()} ${url}`);
+      console.log(`[Tennis V3] Captured fixture endpoint: ${res.status()} ${url}`);
     } catch (e) {
-      console.log(`[Tennis V1] Fixture endpoint captured but JSON parse failed: ${e.message}`);
+      console.log(`[Tennis V3] Fixture endpoint captured but JSON parse failed: ${e.message}`);
     }
   });
 
   try {
-    console.log('[Tennis V1] Opening SportyBet');
+    console.log('[Tennis V3] Opening SportyBet');
     await page.goto('https://www.sportybet.com/ng/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
     // Generic login strategy: click likely login button then fill visible fields.
@@ -305,9 +305,9 @@ function tennisMetadataMatch(event, rows) {
     }
 
     await page.waitForTimeout(5000);
-    console.log('[Tennis V1] Login attempt completed');
+    console.log('[Tennis V3] Login attempt completed');
 
-    console.log('[Tennis V1] Opening Tennis prematch page');
+    console.log('[Tennis V3] Opening Tennis prematch page');
     await page.goto('https://www.sportybet.com/ng/m/sport/tennis?sort=0', {
       waitUntil: 'domcontentloaded',
       timeout: 60000
@@ -326,7 +326,7 @@ function tennisMetadataMatch(event, rows) {
         pageFixtureMetadata.set(gameId, row);
       }
 
-      console.log(`[Tennis V1] Metadata scan ${round + 1}: ${pageFixtureMetadata.size} unique fixture rows`);
+      console.log(`[Tennis V3] Metadata scan ${round + 1}: ${pageFixtureMetadata.size} unique fixture rows`);
 
       if (pageFixtureMetadata.size === previousCount) stableRounds += 1;
       else stableRounds = 0;
@@ -350,7 +350,7 @@ function tennisMetadataMatch(event, rows) {
       pageFixtureMetadata.set(gameId, row);
     }
 
-    console.log(`[Tennis V1] Total page fixture metadata rows parsed: ${pageFixtureMetadata.size}`);
+    console.log(`[Tennis V3] Total page fixture metadata rows parsed: ${pageFixtureMetadata.size}`);
 
     await page.screenshot({ path: path.join(OUT_DIR, 'tennis-v1-page.png'), fullPage: true });
 
@@ -415,11 +415,11 @@ function tennisMetadataMatch(event, rows) {
     const withTournament = eventCandidates.filter(x => x.tournament).length;
     const complete = eventCandidates.filter(x => x.kickoffTime && x.tournament && x.homeTeamName && x.awayTeamName).length;
 
-    console.log(`[Tennis V1] Fixture endpoint responses captured: ${captured.length}`);
-    console.log(`[Tennis V1] Tennis fixture candidates extracted: ${eventCandidates.length}`);
-    console.log(`[Tennis V1] With kickoff: ${withKickoff}/${eventCandidates.length}`);
-    console.log(`[Tennis V1] With tournament: ${withTournament}/${eventCandidates.length}`);
-    console.log(`[Tennis V1] Complete metadata: ${complete}/${eventCandidates.length}`);
+    console.log(`[Tennis V3] Fixture endpoint responses captured: ${captured.length}`);
+    console.log(`[Tennis V3] Tennis fixture candidates extracted: ${eventCandidates.length}`);
+    console.log(`[Tennis V3] With kickoff: ${withKickoff}/${eventCandidates.length}`);
+    console.log(`[Tennis V3] With tournament: ${withTournament}/${eventCandidates.length}`);
+    console.log(`[Tennis V3] Complete metadata: ${complete}/${eventCandidates.length}`);
 
     eventCandidates.slice(0, 10).forEach((e, i) => {
       console.log(JSON.stringify({
@@ -456,9 +456,9 @@ function tennisMetadataMatch(event, rows) {
       throw new Error(`TENNIS_METADATA_INCOMPLETE:${complete}/${eventCandidates.length}`);
     }
 
-    console.log('[Tennis V1] SUCCESS');
+    console.log('[Tennis V3] SUCCESS');
   } catch (err) {
-    console.error('[Tennis V1] FAILED:', err.message);
+    console.error('[Tennis V3] FAILED:', err.message);
     try {
       await page.screenshot({ path: path.join(OUT_DIR, 'handball-v2-failure.png'), fullPage: true });
     } catch {}

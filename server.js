@@ -200,7 +200,7 @@ async function loadVolleyballMarket(kind='winner') {
     market:kind,
     marketLabel:kind==='winner'?'Match Winner':(kind==='sets'?'Total Sets':'Total Points'),
     fetchedAt:snap?.fetchedAt||null,
-    collectorVersion:snap?.collectorVersion||'V1',
+    collectorVersion:snap?.collectorVersion||'V3',
     apiSportsMatched:Number(snap?.apiSportsMatched||0),
     apiSportsTotal:Number(snap?.apiSportsTotal||0),
     totalReturned:rows.length,
@@ -270,7 +270,7 @@ async function loadTennisMarket(kind='winner') {
     market:kind,
     marketLabel:kind==='winner'?'Match Winner':(kind==='handicap'?'Set Handicap':'Total Games'),
     fetchedAt:snap?.fetchedAt||null,
-    collectorVersion:snap?.collectorVersion||'V1',
+    collectorVersion:snap?.collectorVersion||'V3',
     totalReturned:rows.length,
     rows
   };
@@ -1019,7 +1019,7 @@ app.post('/api/internal/tennis/snapshot', express.json({limit:'5mb'}), async (re
   try{
     const events=Array.isArray(req.body?.events)?req.body.events:[];
     if(!events.length) return res.status(400).json({error:'events must be a non-empty array'});
-    const snapshot={collectorVersion:'V1',fetchedAt:new Date().toISOString(),events};
+    const snapshot={collectorVersion:'V3',fetchedAt:new Date().toISOString(),events};
     await saveTennisSnapshot(snapshot);
     const winnerRows=flattenTennisEvents(events,'winner').length;
     const totalRows=flattenTennisEvents(events,'totals').length;
@@ -1074,7 +1074,7 @@ app.post('/api/internal/volleyball/snapshot', express.json({limit:'5mb'}), async
     }
 
     const snapshot={
-      collectorVersion:'V1',
+      collectorVersion:'V3',
       fetchedAt:new Date().toISOString(),
       events,
       apiSportsMatched:matchInfo.matched,
