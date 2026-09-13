@@ -3,8 +3,9 @@ name: Matchday Daily Slip Settlement Check
 on:
   workflow_dispatch:
   schedule:
-    # Once daily at 22:30 UTC = 23:30 in Lagos (WAT).
-    - cron: "30 22 * * *"
+    # Once daily at 00:00 UTC = 01:00 in Lagos (WAT).
+    # This checks the WAT matchday that ended at midnight.
+    - cron: "0 0 * * *"
 
 concurrency:
   group: matchday-telegram-settlement-check
@@ -14,7 +15,7 @@ jobs:
   check-settlements:
     runs-on: ubuntu-latest
     steps:
-      - name: Check generated SportyBet codes and alert winners
+      - name: Settle previous WAT matchday Auto Pick tickets
         env:
           TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
         run: |

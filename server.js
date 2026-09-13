@@ -2172,7 +2172,7 @@ function selectTelegramPlanWithPriority(plan, candidates, maxSelections) {
     return odds >= plan.minOdds && odds <= plan.maxOdds;
   };
 
-  // SAFE / 10x / 20x should stay concentrated on the four preferred sports
+  // SAFE / 10x / 20x should stay concentrated on the five preferred sports
   // whenever they can produce a valid ticket. Football is only fallback.
   if (resultInsidePlanRange(preferredResult)) {
     return { result: preferredResult, priorityOnly: true, preferredCount: preferred.length };
@@ -2246,7 +2246,7 @@ async function runTelegramDailyPicks() {
     `Fixture date: TODAY ONLY (WAT) — ${watToday}`,
     'Targets: 10000, 1000, 20, 10, 1.30–5.00 SAFE',
     '10000x / 1000x / 20x / 10x: minimum probability 70%',
-    'SAFE: priority Volleyball + Ice Hockey + Handball + Basketball | minimum probability 90% | combined odds 1.30–5.00',
+    'SAFE: priority Tennis + Volleyball + Ice Hockey + Handball + Basketball | minimum probability 90% | combined odds 1.30–5.00',
     '10x / 20x / 1000x / 10000x priority: Tennis + Volleyball + Ice Hockey + Handball + Basketball first; Football only as fallback',
     'Positive-edge requirement: OFF',
     'Red-flag protection: ON',
@@ -2362,22 +2362,48 @@ async function runTelegramDailyPicks() {
   };
 }
 
-function telegramWinningSlipText(slip) {
-  const successLegs = Array.isArray(slip.selections) ? slip.selections.length : 0;
+function watDateKey(value=new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone:'Africa/Lagos', year:'numeric', month:'2-digit', day:'2-digit'
+  }).formatToParts(value);
+  const get = t => parts.find(p=>p.type===t)?.value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+function previousWatDateKey(now=new Date()) {
+  // At 01:00 WAT, report the matchday that just ended at midnight.
+  return watDateKey(new Date(now.getTime() - 2 * 60 * 60 * 1000));
+}
+
+function settlementBreakdownText(evaluation, fallbackTotal=0) {
+  const c=evaluation?.counts || {won:0,lost:0,push:0,pending:0,unknown:0};
+  const knownTotal=Number(evaluation?.totalLegs||0);
+  const total=knownTotal || Number(fallbackTotal||0);
   return [
-    '🏆 BET CODE SUCCESSFUL',
-    '',
-    `SportyBet Code: ${slip.shareCode}`,
-    ...(slip.targetOdds ? [`Target Odds: ${slip.targetOdds}`] : []),
-    ...(slip.combinedOdds ? [`Actual Odds: ${Number(slip.combinedOdds).toFixed(2)}`] : []),
-    `✅ ${successLegs} / ${successLegs} selections successful/void-safe`,
-    '❌ 0 confirmed losses',
-    '',
-    `Generated: ${slip.createdAt}`,
-    `Confirmed: ${new Date().toISOString()}`,
-    '',
-    '🎯 FULL SLIP WON',
-    ...(slip.shareURL ? ['', `SportyBet link: ${slip.shareURL}`] : []),
+    `✅ Won: ${c.won}`,
+    `❌ Lost: ${c.lost}`,
+    `↩️ Void/Push: ${c.push}`,
+    `⏳ Pending: ${c.pending}`,
+    `❓ Unknown: ${c.unknown + (knownTotal ? 0 : total)}`,
+  ].join(' | ');
+}
+
+function telegramSettlementTicketText(slip, evaluation) {
+  const total = Array.isArray(slip?.selections) ? slip.selections.length : 0;
+  const finalWon = evaluation?.status === 'won';
+  const finalLost = evaluation?.status === 'lost';
+  const title = finalWon
+    ? '💥 BOOMED — ALL WON'
+    : finalLost
+      ? '❌ TICKET LOST'
+      : '⏳ TICKET NOT FULLY SETTLED';
+  return [
+    `${title} — ${slip.targetOdds || 'Ticket'}`,
+    `Code: ${slip.shareCode}`,
+    ...(slip.combinedOdds ? [`Odds: ${Number(slip.combinedOdds).toFixed(2)}`] : []),
+    `Selections: ${total}`,
+    settlementBreakdownText(evaluation, total),
+    ...(evaluation?.topStatus && evaluation.topStatus !== 'unknown' ? [`SportyBet ticket status: ${evaluation.topStatus.toUpperCase()}`] : []),
   ].join('\n');
 }
 
@@ -2386,60 +2412,101 @@ async function runTelegramSettlementCheck() {
   if (!client && process.env.NODE_ENV === 'production') {
     console.warn('Settlement tracker is using memory only. Configure REDIS_URL for reliable persistence across Render restarts.');
   }
-  const slips = await listTrackedSlips(client);
-  const pending = slips.filter(x => x.status === 'pending' && !x.successAlertSent);
-  const stats = { tracked: slips.length, checked: 0, won: 0, lost: 0, pending: 0, errors: 0, alertsSent: 0 };
 
-  for (const slip of pending) {
+  const slips = await listTrackedSlips(client);
+  const matchday = previousWatDateKey(new Date());
+  const matchdaySlips = slips.filter(x => watDateKey(new Date(x.createdAt)) === matchday);
+  const stats = {
+    matchday,
+    tracked: slips.length,
+    matchdayTickets: matchdaySlips.length,
+    checked: 0,
+    boomed: 0,
+    lost: 0,
+    pending: 0,
+    errors: 0,
+    legWon: 0,
+    legLost: 0,
+    legPush: 0,
+    legPending: 0,
+    legUnknown: 0,
+  };
+  const ticketReports = [];
+
+  for (const slip of matchdaySlips) {
     try {
-      // Avoid spending a booking-status API credit before the first scheduled event.
-      const kickoffTimes = (slip.selections || []).map(x => Date.parse(x.kickoffUtc || '')).filter(Number.isFinite);
-      if (kickoffTimes.length && Date.now() < Math.min(...kickoffTimes)) {
-        stats.pending++;
-        continue;
-      }
       const booking = await getBooking(slip.shareCode);
       const evaluation = evaluateBooking(booking);
       stats.checked++;
+
+      const counts=evaluation.counts || {};
+      stats.legWon += Number(counts.won||0);
+      stats.legLost += Number(counts.lost||0);
+      stats.legPush += Number(counts.push||0);
+      stats.legPending += Number(counts.pending||0);
+      stats.legUnknown += Number(counts.unknown||0);
+
       const patch = {
         status: evaluation.status,
         lastCheckedAt: new Date().toISOString(),
         lastStatusDetail: evaluation,
       };
+
       if (evaluation.status === 'won') {
-        stats.won++;
-        // Mark first, then alert. This favors never sending duplicate success alerts.
-        // If Telegram itself fails, the endpoint reports the error and an admin can
-        // inspect/reset the record rather than spamming the channel on every retry.
-        patch.successAlertSent = true;
-        patch.successAlertSentAt = new Date().toISOString();
-        const updated = await updateTrackedSlip(client, slip.shareCode, patch);
-        await sendTelegramMessage(telegramWinningSlipText(updated || { ...slip, ...patch }));
-        stats.alertsSent++;
+        stats.boomed++;
+        // Keep the old one-time success-alert fields for compatibility.
+        if (!slip.successAlertSent) {
+          patch.successAlertSent = true;
+          patch.successAlertSentAt = new Date().toISOString();
+        }
+      } else if (evaluation.status === 'lost') {
+        stats.lost++;
       } else {
-        await updateTrackedSlip(client, slip.shareCode, patch);
-        if (evaluation.status === 'lost') stats.lost++;
-        else stats.pending++;
+        stats.pending++;
       }
+
+      await updateTrackedSlip(client, slip.shareCode, patch);
+      ticketReports.push(telegramSettlementTicketText({ ...slip, ...patch }, evaluation));
     } catch (err) {
       stats.errors++;
       console.error(`Settlement check ${slip.shareCode}:`, err.message);
-      await updateTrackedSlip(client, slip.shareCode, { lastCheckedAt: new Date().toISOString(), lastStatusDetail: { error: err.message } }).catch(()=>{});
+      await updateTrackedSlip(client, slip.shareCode, {
+        lastCheckedAt: new Date().toISOString(),
+        lastStatusDetail: { error: err.message }
+      }).catch(()=>{});
+      ticketReports.push([
+        `⚠️ CHECK ERROR — ${slip.targetOdds || 'Ticket'}`,
+        `Code: ${slip.shareCode}`,
+        `Reason: ${err.message}`,
+      ].join('\n'));
     }
     await new Promise(resolve => setTimeout(resolve, 350));
   }
 
   if (String(process.env.TELEGRAM_SETTLEMENT_SUMMARY || 'true').toLowerCase() !== 'false') {
-    await sendTelegramMessage([
-      '📋 MATCHDAY — DAILY SLIP CHECK',
-      `Tracked codes: ${stats.tracked}`,
-      `Checked today: ${stats.checked}`,
-      `🏆 Newly successful: ${stats.won}`,
-      `❌ Newly confirmed lost: ${stats.lost}`,
-      `⏳ Still pending/not due: ${stats.pending}`,
+    const header = [
+      `📋 MATCHDAY SETTLEMENT — ${matchday} WAT`,
+      `Daily Auto Pick tickets: ${stats.matchdayTickets}`,
+      `Checked: ${stats.checked}`,
+      `💥 BOOMED / full ticket won: ${stats.boomed}`,
+      `❌ Tickets lost: ${stats.lost}`,
+      `⏳ Tickets pending/unknown: ${stats.pending}`,
+      '',
+      `TOTAL LEG RESULTS`,
+      `✅ Won: ${stats.legWon}`,
+      `❌ Lost: ${stats.legLost}`,
+      `↩️ Void/Push: ${stats.legPush}`,
+      `⏳ Pending: ${stats.legPending}`,
+      `❓ Unknown: ${stats.legUnknown}`,
       ...(stats.errors ? [`⚠️ Check errors: ${stats.errors}`] : []),
-      `Success alerts sent: ${stats.alertsSent}`,
-    ].join('\n'));
+    ].join('\n');
+
+    // Expected daily set is small (SAFE, 10x, 20x, 1000x, 10000x), but split
+    // messages defensively to stay below Telegram's message size limit.
+    await sendTelegramMessage(header);
+    for (const report of ticketReports) {
+      await sendTelegramMessage(report);
+    }
   }
   return stats;
 }
@@ -2665,7 +2732,6 @@ function telegramAiBetTypesForSport(planId, sport) {
     handball: ['handball_winner','handball_over','handball_under'],
     volleyball: ['volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under'],
     tennis: ['tennis_winner','tennis_over','tennis_under','tennis_handicap_home','tennis_handicap_away'],
-  tennis: ['tennis_winner','tennis_over','tennis_under','tennis_handicap_home','tennis_handicap_away'],
   };
   if (sport === 'all') return [...allowed];
   return (bySport[sport] || []).filter(id => allowed.has(id));
@@ -3032,21 +3098,36 @@ async function handleTelegramAiUpdate(update) {
     else if (d.startsWith('sporttoggle:')) {
       const id=d.split(':')[1];
       const plan=getTelegramAiPlan(user);
-      if(!(plan.sports.includes(id)||plan.sports.includes('all')))return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(plan,`${id} tickets`),{reply_markup:telegramAiPlanKeyboard()});
+      const allSports=['football','basketball','hockey','handball','volleyball','tennis'];
+      const unlocked=allSports.filter(sp=>plan.sports.includes(sp)||plan.sports.includes('all'));
       const selected=new Set(Array.isArray(user.preferences.builder.sports)?user.preferences.builder.sports:['football']);
-      if(selected.has(id)){if(selected.size>1)selected.delete(id);}else selected.add(id);
+
+      if(id==='all'){
+        const allSelected=unlocked.length>0&&unlocked.every(sp=>selected.has(sp));
+        selected.clear();
+        if(allSelected) selected.add(unlocked[0]||'football');
+        else unlocked.forEach(sp=>selected.add(sp));
+      } else {
+        if(!unlocked.includes(id)) return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(plan,`${id} tickets`),{reply_markup:telegramAiPlanKeyboard()});
+        if(selected.has(id)){if(selected.size>1)selected.delete(id);}else selected.add(id);
+      }
+
       user.preferences.builder.sports=[...selected];
-      user.preferences.builder.sport=user.preferences.builder.sports.length===3?'all':(user.preferences.builder.sports.length===1?user.preferences.builder.sports[0]:'multi');
+      user.preferences.builder.sport=user.preferences.builder.sports.length===allSports.length?'all':(user.preferences.builder.sports.length===1?user.preferences.builder.sports[0]:'multi');
       const compatible=[...new Set(user.preferences.builder.sports.flatMap(sp=>telegramAiBetTypesForSport(plan.id,sp)))];
       const current=(user.preferences.builder.betTypes||[]).filter(x=>compatible.includes(x));
       user.preferences.builder.betTypes=current.length?current:compatible;
       await saveTelegramAiUser(redis,user);
-      return sendTelegramAiMessageTo(chatId,'🏟 Select any 1, 2 or 3 sports for this ticket:',{reply_markup:telegramAiSportKeyboard(user)});
+      return sendTelegramAiMessageTo(chatId,'🏟 Select one or more unlocked sports, or use Select All:',{reply_markup:telegramAiSportKeyboard(user)});
     }
     else if (d.startsWith('set:sport:')) {
       const nextSport=d.split(':')[2];
-      user.preferences.builder.sport=nextSport;user.preferences.builder.sports=nextSport==='all'?['football','basketball','hockey']:[nextSport];
-      const compatible=telegramAiBetTypesForSport(getTelegramAiPlan(user).id,nextSport);
+      const plan=getTelegramAiPlan(user);
+      const allSports=['football','basketball','hockey','handball','volleyball','tennis'];
+      const unlocked=allSports.filter(sp=>plan.sports.includes(sp)||plan.sports.includes('all'));
+      user.preferences.builder.sport=nextSport;
+      user.preferences.builder.sports=nextSport==='all'?unlocked:[nextSport];
+      const compatible=telegramAiBetTypesForSport(plan.id,nextSport);
       const current=(user.preferences.builder.betTypes||[]).filter(id=>compatible.includes(id));
       if(!current.length) user.preferences.builder.betTypes=compatible;
       await saveTelegramAiUser(redis,user);
