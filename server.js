@@ -50,6 +50,81 @@ function telegramDailyCodeVisibleForPlan(planId, label) {
   return key.includes('safe') || key === '10x' || key === '10odds' || key === '10';
 }
 
+
+function plot207TelegramHelpText(plan = null) {
+  const planName = plan?.name || 'your current plan';
+  return [
+    '❓ PLOT207 SPORTS BOT — HOW TO USE',
+    '',
+    `Your plan: ${planName}`,
+    '',
+    '🏠 MAIN MENU',
+    'Use the buttons under every message. You can always type /start to return to the main menu or /help to reopen this guide.',
+    '',
+    '🎯 AUTO BUILDER',
+    'Use this when you want Plot207 to create a new SportyBet ticket for you.',
+    '1. Tap 🎯 Auto Builder.',
+    '2. Tap 🏟 Sport and choose the sport or sports you want.',
+    '3. Tap 🎯 Target and choose your desired combined odds.',
+    '4. Set 📈 Min Probability. Higher values mean stricter selections and usually fewer available games.',
+    '5. Set 💰 Max Odd/Match if you do not want high individual odds.',
+    '6. Set 📊 Min Edge to control how much model advantage is required.',
+    '7. Set 🔢 Max Games to limit how many selections can be used.',
+    '8. Turn ✅ Today Only on if every selected game must play today in WAT.',
+    '9. Tap 🎲 Bet Types to choose the markets the builder may use.',
+    '10. Tap 🚀 BUILD TICKET.',
+    '',
+    '⭐ BEST PICKS / SAFE',
+    'Tap ⭐ Best Picks when you want the dedicated SAFE ticket.',
+    'SAFE uses Basketball + Ice Hockey only, requires at least 90% probability per selected leg, applies red-flag protection, and aims for combined odds between 1.30 and 2.00.',
+    'A SAFE pick is still a prediction, not a guaranteed win.',
+    '',
+    '🎟 TODAY’S CODES',
+    'This shows only the SportyBet booking codes created by the scheduled Daily Auto Picks. It does not show the games.',
+    '• Free: SAFE + 10x codes only.',
+    '• Pro: all available daily codes.',
+    '• Elite: all available daily codes.',
+    'The list refreshes when the day’s automated picks are generated.',
+    '',
+    '🔎 ANALYZE CODE',
+    'Use this to check an existing SportyBet booking code.',
+    '1. Tap 🔎 Analyze Code.',
+    '2. Choose the minimum probability you want to KEEP.',
+    '3. Choose the fixture search horizon.',
+    '4. Tap ⌨️ Enter Code and send the SportyBet booking code.',
+    '5. Plot207 shows which selections meet the model threshold.',
+    'If unsupported selections are found, use ♻️ Replace Unsupported. Replacements are searched from saved/cached markets on the same fixture and are not automatic.',
+    '',
+    '📋 MY ACCOUNT',
+    'Shows your current plan, remaining daily ticket/analysis allowance, and other account limits.',
+    '',
+    '👑 PLANS',
+    'Shows Free, Pro and Elite features and lets you start an upgrade request.',
+    '',
+    '🏆 COPY RANKINGS',
+    'Shows tracked Copy Hub rankings when your plan includes access and settled results are available.',
+    '',
+    '💬 YOU CAN ALSO TYPE REQUESTS',
+    'Examples:',
+    '• Build football 20x today only',
+    '• Build football and basketball 10x, minimum 75%',
+    '• Safe ticket',
+    '• Analyze ABC123',
+    '',
+    '📌 QUICK TIPS',
+    '• Higher minimum probability = stricter filtering, but fewer candidates.',
+    '• Lower maximum odd per match = generally more conservative individual selections.',
+    '• Today Only means kickoff must fall on today’s WAT calendar date.',
+    '• Booking codes can only be created from markets where valid SportyBet event/market/outcome IDs are available.',
+    '• If no ticket is produced, loosen one setting at a time: probability, max odd, market selection, target odds, or Today Only.',
+    '',
+    '⚠️ IMPORTANT',
+    'Plot207 probabilities, edges and quality scores are model estimates. They do not guarantee a result. Bet responsibly and only with money you can afford to lose.',
+    '',
+    'Tap 🏠 Home or type /start when you are ready.'
+  ].join('\n');
+}
+
 function telegramDailyCodesKey(dateKey) { return `telegram:daily-codes:${dateKey}`; }
 
 async function saveTelegramDailyCodes(redis, dateKey, payload) {
@@ -2368,6 +2443,9 @@ async function handleTelegramAiUpdate(update) {
     else if (d.startsWith('ticket:')) { user.preferences.builder.targetOdds = Number(d.split(':')[1]) || 10; await saveTelegramAiUser(redis,user); callbackAction='build'; }
     else if (d === 'action:plans') text = '/plans';
     else if (d === 'action:account') text = '/account';
+    else if (d === 'action:help') {
+      return sendTelegramAiLongMessage(chatId, plot207TelegramHelpText(getTelegramAiPlan(user)), { reply_markup: telegramAiMainKeyboard() });
+    }
     else if (d === 'action:dailycodes') {
       const plan = getTelegramAiPlan(user);
       const dateKey = fixtureDateKeyInTimeZone(new Date(), 'Africa/Lagos');
@@ -2539,10 +2617,10 @@ async function handleTelegramAiUpdate(update) {
   const intent=parseTelegramAiRequest(text);
   if(intent.intent==='menu'){
     const plan=getTelegramAiPlan(user);
-    return sendTelegramAiMessageTo(chatId,[`🤖 Welcome${user.firstName?`, ${user.firstName}`:''} — Matchday AI`,`Plan: ${plan.name}`,'','Use 🎯 Auto Builder for the same core controls as the website, or type a request naturally.','','Examples:','• Build football 20x, max odd 1.25','• Safe ticket','• Analyze RKT1JT'].join('\n'),{reply_markup:telegramAiMainKeyboard()});
+    return sendTelegramAiMessageTo(chatId,[`🟢 Welcome${user.firstName?`, ${user.firstName}`:''} — PLOT207 SPORTS BOT`,`Plan: ${plan.name}`,'','Choose an option below to build or analyze a ticket. New here? Tap ❓ Help / How to Use for a complete step-by-step guide.','','Quick examples:','• Build football 20x today only','• Safe ticket','• Analyze RKT1JT'].join('\n'),{reply_markup:telegramAiMainKeyboard()});
   }
   if(intent.intent==='builder')return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)});
-  if(intent.intent==='help')return sendTelegramAiMessageTo(chatId,'🤖 MATCHDAY AI HELP\n\nBest option: tap 🎯 Auto Builder and choose Sport, Target Odds, Minimum Probability, Max Odd/Match, Minimum Edge, Max Games and Bet Types.\n\nYou can also type requests naturally, such as “Build football 20x, max odd 1.25, minimum 75%.”\n\nUse 🔎 Analyze Code to set the analyzer threshold and search horizon.',{reply_markup:telegramAiMainKeyboard()});
+  if(intent.intent==='help')return sendTelegramAiLongMessage(chatId,plot207TelegramHelpText(getTelegramAiPlan(user)),{reply_markup:telegramAiMainKeyboard()});
   if(intent.intent==='plans')return sendTelegramAiMessageTo(chatId,telegramAiPlansText(),{reply_markup:telegramAiPlanKeyboard()});
   if(intent.intent==='account')return sendTelegramAiMessageTo(chatId,telegramAiAccountText(user),{reply_markup:telegramAiMainKeyboard()});
   if(intent.intent==='copy'){
@@ -2626,7 +2704,7 @@ app.post('/api/telegram/bot/setup', express.json(), async (req, res) => {
     const webhookSecret=String(process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
     if(!webhookSecret) return res.status(400).json({error:'Set TELEGRAM_WEBHOOK_SECRET first'});
     const webhook=await telegramAiRequest('setWebhook',{url:`${base}/api/telegram/bot/webhook`,secret_token:webhookSecret,allowed_updates:['message','callback_query'],drop_pending_updates:false});
-    await telegramAiRequest('setMyCommands',{commands:[{command:'start',description:'Open Matchday AI'},{command:'plans',description:'View Free, Pro and Elite plans'},{command:'account',description:'View plan and daily usage'},{command:'help',description:'How to use Matchday AI'}]});
+    await telegramAiRequest('setMyCommands',{commands:[{command:'start',description:'Open Plot207 Sports Bot'},{command:'plans',description:'View Free, Pro and Elite plans'},{command:'account',description:'View plan and daily usage'},{command:'help',description:'How to use Plot207 Sports Bot'}]});
     res.json({ok:true,webhook,webhookUrl:`${base}/api/telegram/bot/webhook`});
   } catch(err){ res.status(502).json({error:'Telegram AI setup failed',detail:process.env.NODE_ENV==='production'?undefined:err.message}); }
 });
