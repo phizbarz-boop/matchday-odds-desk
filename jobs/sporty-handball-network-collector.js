@@ -101,9 +101,91 @@ function extractMarkets(o) {
   return out;
 }
 
+
+function watYearForDayMonth(day, month) {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Lagos',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(now);
+  const get = type => Number(parts.find(x => x.type === type)?.value || 0);
+  const nowYear = get('year');
+  const nowMonth = get('month');
+  const nowDay = get('day');
+
+  let year = nowYear;
+  // Around year-end SportyBet can show January fixtures while current date is December.
+  if (nowMonth === 12 && month === 1) year += 1;
+  // And the reverse can occur when the page still shows late-December events.
+  if (nowMonth === 1 && month === 12) year -= 1;
+
+  return year;
+}
+
+function toWatIso(day, month, timeText) {
+  const m = String(timeText || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const year = watYearForDayMonth(day, month);
+  const hh = String(Number(m[1])).padStart(2, '0');
+  const mm = String(Number(m[2])).padStart(2, '0');
+  return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}T${hh}:${mm}:00+01:00`;
+}
+
+function parseHandballPageFixtureMetadata(bodyText) {
+  const lines = String(bodyText || '')
+    .split(/\r?\n/)
+    .map(normalizeText)
+    .filter(Boolean);
+
+  const byGameId = new Map();
+  let currentDay = null;
+  let currentMonth = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const dateMatch = lines[i].match(/^(\d{1,2})\/(\d{1,2})(?:\s|$)/);
+    if (dateMatch) {
+      currentDay = Number(dateMatch[1]);
+      currentMonth = Number(dateMatch[2]);
+      continue;
+    }
+
+    if (!currentDay || !currentMonth) continue;
+
+    const timeMatch = lines[i].match(/^(\d{1,2}):(\d{2})$/);
+    if (!timeMatch) continue;
+
+    const idLine = lines[i + 1] || '';
+    const idMatch = idLine.match(/^ID\s+(\d+)$/i);
+    if (!idMatch) continue;
+
+    const gameId = idMatch[1];
+    const tournament = lines[i + 2] || '';
+    const homeTeamName = lines[i + 3] || '';
+    const awayTeamName = lines[i + 4] || '';
+
+    // Avoid swallowing page-navigation labels as fixtures.
+    if (!tournament || !homeTeamName || !awayTeamName) continue;
+    if (/^(all live|matches|outrights|daily|league|odds|sort)$/i.test(tournament)) continue;
+
+    byGameId.set(gameId, {
+      gameId,
+      tournament,
+      homeTeamName,
+      awayTeamName,
+      kickoffTime: toWatIso(currentDay, currentMonth, lines[i]),
+      dateText: `${String(currentDay).padStart(2,'0')}/${String(currentMonth).padStart(2,'0')}`,
+      timeText: lines[i]
+    });
+  }
+
+  return byGameId;
+}
+
 (async () => {
   if (!LOGIN_ID || !PASSWORD) {
-    console.error('[Handball V2] Missing SPORTYSOCIAL_LOGIN_ID or SPORTYSOCIAL_PASSWORD');
+    console.error('[Handball V3] Missing SPORTYSOCIAL_LOGIN_ID or SPORTYSOCIAL_PASSWORD');
     process.exit(1);
   }
 
@@ -123,14 +205,14 @@ function extractMarkets(o) {
       if (!ct.includes('json') && !ct.includes('text')) return;
       const body = await res.json();
       captured.push({ url, status: res.status(), body });
-      console.log(`[Handball V2] Captured fixture endpoint: ${res.status()} ${url}`);
+      console.log(`[Handball V3] Captured fixture endpoint: ${res.status()} ${url}`);
     } catch (e) {
-      console.log(`[Handball V2] Fixture endpoint captured but JSON parse failed: ${e.message}`);
+      console.log(`[Handball V3] Fixture endpoint captured but JSON parse failed: ${e.message}`);
     }
   });
 
   try {
-    console.log('[Handball V2] Opening SportyBet');
+    console.log('[Handball V3] Opening SportyBet');
     await page.goto('https://www.sportybet.com/ng/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
     // Generic login strategy: click likely login button then fill visible fields.
@@ -170,9 +252,9 @@ function extractMarkets(o) {
     }
 
     await page.waitForTimeout(5000);
-    console.log('[Handball V2] Login attempt completed');
+    console.log('[Handball V3] Login attempt completed');
 
-    console.log('[Handball V2] Opening Handball prematch page');
+    console.log('[Handball V3] Opening Handball prematch page');
     await page.goto('https://www.sportybet.com/ng/m/sport/handball?sort=0', {
       waitUntil: 'domcontentloaded',
       timeout: 60000
@@ -180,8 +262,13 @@ function extractMarkets(o) {
 
     await page.waitForTimeout(10000);
 
-    await page.screenshot({ path: path.join(OUT_DIR, 'handball-v2-page.png'), fullPage: true });
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const pageFixtureMetadata = parseHandballPageFixtureMetadata(bodyText);
+    console.log(`[Handball V3] Page fixture metadata rows parsed: ${pageFixtureMetadata.size}`);
 
+    await page.screenshot({ path: path.join(OUT_DIR, 'handball-v3-page.png'), fullPage: true });
+
+    safeJsonWrite('handball-page-fixture-metadata.json', Array.from(pageFixtureMetadata.values()));
     safeJsonWrite('captured-fixture-responses.json', captured.map(x => ({
       url: x.url,
       status: x.status,
@@ -202,15 +289,19 @@ function extractMarkets(o) {
         seen.add(key);
 
         const markets = extractMarkets(node);
+        const gameId = getGameId(node);
+        const pageMeta = gameId != null ? pageFixtureMetadata.get(String(gameId)) : null;
         eventCandidates.push({
           sport: getSport(node),
           sportId: node.sportId ?? node.sport_id ?? node.sport?.id ?? null,
           eventId,
-          gameId: getGameId(node),
-          homeTeamName: teams.home,
-          awayTeamName: teams.away,
-          tournament: getTournament(node),
-          kickoffTime: kickoff,
+          gameId,
+          homeTeamName: teams.home || pageMeta?.homeTeamName || '',
+          awayTeamName: teams.away || pageMeta?.awayTeamName || '',
+          tournament: getTournament(node) || pageMeta?.tournament || '',
+          kickoffTime: kickoff || pageMeta?.kickoffTime || null,
+          kickoffSource: kickoff ? 'network' : (pageMeta?.kickoffTime ? 'page_text' : null),
+          tournamentSource: getTournament(node) ? 'network' : (pageMeta?.tournament ? 'page_text' : null),
           markets
         });
       });
@@ -219,8 +310,15 @@ function extractMarkets(o) {
     // Fallback: if event node has no embedded markets, attach global market-like blocks by eventId where possible.
     safeJsonWrite('handball-events-extracted.json', eventCandidates);
 
-    console.log(`[Handball V2] Fixture endpoint responses captured: ${captured.length}`);
-    console.log(`[Handball V2] Complete Handball fixture candidates extracted: ${eventCandidates.length}`);
+    const withKickoff = eventCandidates.filter(x => x.kickoffTime).length;
+    const withTournament = eventCandidates.filter(x => x.tournament).length;
+    const complete = eventCandidates.filter(x => x.kickoffTime && x.tournament && x.homeTeamName && x.awayTeamName).length;
+
+    console.log(`[Handball V3] Fixture endpoint responses captured: ${captured.length}`);
+    console.log(`[Handball V3] Handball fixture candidates extracted: ${eventCandidates.length}`);
+    console.log(`[Handball V3] With kickoff: ${withKickoff}/${eventCandidates.length}`);
+    console.log(`[Handball V3] With tournament: ${withTournament}/${eventCandidates.length}`);
+    console.log(`[Handball V3] Complete metadata: ${complete}/${eventCandidates.length}`);
 
     eventCandidates.slice(0, 10).forEach((e, i) => {
       console.log(JSON.stringify({
@@ -233,6 +331,8 @@ function extractMarkets(o) {
         away: e.awayTeamName,
         tournament: e.tournament,
         kickoffTime: e.kickoffTime,
+        kickoffSource: e.kickoffSource,
+        tournamentSource: e.tournamentSource,
         marketCount: e.markets.length,
         sampleMarkets: e.markets.slice(0, 3)
       }));
@@ -246,9 +346,13 @@ function extractMarkets(o) {
       throw new Error('FIXTURE_RESPONSE_CAPTURED_BUT_EVENT_SCHEMA_NOT_YET_MAPPED');
     }
 
-    console.log('[Handball V2] SUCCESS');
+    if (!eventCandidates.some(x => x.kickoffTime && x.tournament)) {
+      throw new Error('FIXTURES_FOUND_BUT_KICKOFF_OR_TOURNAMENT_NOT_MAPPED');
+    }
+
+    console.log('[Handball V3] SUCCESS');
   } catch (err) {
-    console.error('[Handball V2] FAILED:', err.message);
+    console.error('[Handball V3] FAILED:', err.message);
     try {
       await page.screenshot({ path: path.join(OUT_DIR, 'handball-v2-failure.png'), fullPage: true });
     } catch {}
