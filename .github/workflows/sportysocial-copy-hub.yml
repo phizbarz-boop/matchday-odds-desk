@@ -1,17 +1,24 @@
-name: Plot207 Handball Collector V3
+name: SportySocial Copy Hub
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+  schedule:
+    # Nigeria (WAT) is UTC+1: 07:00 and 19:00 WAT daily.
+    - cron: '0 6,18 * * *'
 
 permissions:
   contents: read
 
+concurrency:
+  group: sportysocial-copy-hub
+  cancel-in-progress: false
+
 jobs:
-  test-handball-v3:
+  collect:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node
@@ -23,25 +30,25 @@ jobs:
       - name: Install app dependencies
         run: npm ci
 
-      - name: Install Playwright
+      - name: Install Playwright Chromium
         run: |
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
 
-      - name: Capture complete Handball fixture metadata
+      - name: Collect SportySocial booking codes
         env:
           SPORTYSOCIAL_LOGIN_ID: ${{ secrets.SPORTYSOCIAL_LOGIN_ID }}
           SPORTYSOCIAL_PASSWORD: ${{ secrets.SPORTYSOCIAL_PASSWORD }}
-        run: |
-          test -n "$SPORTYSOCIAL_LOGIN_ID" || (echo "Missing GitHub secret SPORTYSOCIAL_LOGIN_ID" && exit 1)
-          test -n "$SPORTYSOCIAL_PASSWORD" || (echo "Missing GitHub secret SPORTYSOCIAL_PASSWORD" && exit 1)
-          node jobs/sporty-handball-network-collector.js
+          COPY_HUB_SECRET: ${{ secrets.COPY_HUB_SECRET }}
+          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL }}
+          SPORTYSOCIAL_MAX_PAGES: ${{ vars.SPORTYSOCIAL_MAX_PAGES }}
+        run: node jobs/sportysocial-collector.js
 
-      - name: Upload Handball V3 diagnostics
-        if: always()
+      - name: Upload safe login diagnostics
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: sportybet-handball-v3
-          path: handball-discovery-v2/
+          name: sportysocial-login-diagnostics
+          path: artifacts/
           if-no-files-found: ignore
           retention-days: 3

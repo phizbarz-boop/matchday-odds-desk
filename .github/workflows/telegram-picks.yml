@@ -1,0 +1,26 @@
+name: Matchday Telegram Auto Picks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 9,18 * * *"
+      timezone: "America/New_York"
+
+concurrency:
+  group: matchday-telegram-auto-picks
+  cancel-in-progress: false
+
+jobs:
+  send-picks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate and send Telegram SportyBet codes
+        env:
+          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
+        run: |
+          test -n "$TELEGRAM_JOB_SECRET" || (echo "Missing GitHub secret TELEGRAM_JOB_SECRET" && exit 1)
+          curl --fail-with-body --show-error --silent --max-time 600 \
+            -X POST "https://matchday-odds-desk.onrender.com/api/telegram/daily-picks" \
+            -H "Content-Type: application/json" \
+            -H "x-telegram-job-secret: $TELEGRAM_JOB_SECRET" \
+            --data '{}'

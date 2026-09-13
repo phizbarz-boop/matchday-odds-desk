@@ -1,0 +1,382 @@
+// Daily job: pull fixtures + current-season form from football-data.org for the
+// configured leagues, compute Poisson probabilities, blend a capped H2H signal,
+// and store the result for the web service to serve.
+
+const fs = require('fs');
+const path = require('path');
+const { LEAGUES, getStandings, getUpcomingMatches, getFinishedMatches } = require('../lib/footballData');
+const { teamStrength, predictMatch, summarizeH2H, blendPredictionWithH2H } = require('../lib/model');
+const { getFootballMarket } = require('../lib/sportybet');
+const { enrichSportyFixtures } = require('../lib/apiFootball');
+
+const TOKEN = process.env.FOOTBALL_DATA_TOKEN;
+const LEAGUE_CODES = (process.env.LEAGUES || 'PL,PD,SA,BL1,FL1').split(',').map(s => s.trim());
+// Keep enough model fixtures for the Analyzer without forcing the normal SportyBet Auto Builder to scan the same horizon.
+const ANALYZER_DAYS = Math.max(7, Math.min(21, parseInt(process.env.ANALYZER_DAYS || '14', 10)));
+const DAYS_AHEAD = Math.max(parseInt(process.env.DAYS_AHEAD || '4', 10), parseInt(process.env.PREDICTION_DAYS_AHEAD || '21', 10));
+const H2H_PREVIOUS_SEASONS = Math.max(0, Math.min(3, parseInt(process.env.H2H_PREVIOUS_SEASONS || '1', 10)));
+const H2H_MAX_WEIGHT = Math.max(0, Math.min(0.35, parseFloat(process.env.H2H_MAX_WEIGHT || '0.18')));
+const H2H_MAX_MEETINGS = Math.max(1, Math.min(20, parseInt(process.env.H2H_MAX_MEETINGS || '8', 10)));
+const DATA_FILE = path.join(__dirname, '..', 'data', 'predictions.json');
+
+function fmtDate(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function pickLabel(p) {
+  if (p.homeWin >= p.draw && p.homeWin >= p.awayWin) return 'Home Win';
+  if (p.awayWin >= p.draw) return 'Away Win';
+  return 'Draw';
+}
+
+function predictionCacheKey(row) {
+  const eventId = String(row?.sportyEventId || row?.eventId || '').trim();
+  if (eventId) return `event:${eventId}`;
+  const norm = value => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const day = String(row?.kickoffUtc || '').slice(0, 10);
+  return `fixture:${norm(row?.home)}|${norm(row?.away)}|${day}`;
+}
+
+function isFutureFixture(row, nowMs = Date.now()) {
+  const kickoffMs = Date.parse(row?.kickoffUtc || '');
+  return Number.isFinite(kickoffMs) && kickoffMs > nowMs;
+}
+
+function hasUsablePrediction(row) {
+  const fields = ['h', 'd', 'a', 'btts', 'o05', 'o15', 'u45', 'o25', 'pickProb'];
+  return fields.some(field => Number(row?.[field]) > 0);
+}
+
+function mergeWithExistingPredictions(freshPayload, previousPayload) {
+  const fresh = Array.isArray(freshPayload?.matches) ? freshPayload.matches : [];
+  const previous = Array.isArray(previousPayload?.matches) ? previousPayload.matches : [];
+  const previousByKey = new Map(previous.map(row => [predictionCacheKey(row), row]));
+  const freshKeys = new Set();
+  const merged = [];
+  let restoredGoodModel = 0;
+  let carriedForward = 0;
+  let expiredDropped = 0;
+  const nowMs = Date.now();
+
+  for (const row of fresh) {
+    const key = predictionCacheKey(row);
+    freshKeys.add(key);
+    const old = previousByKey.get(key);
+
+    if (old && isFutureFixture(row, nowMs) && hasUsablePrediction(old) && !hasUsablePrediction(row)) {
+      merged.push({
+        ...old,
+        home: row.home || old.home,
+        away: row.away || old.away,
+        league: row.league || old.league,
+        leagueCode: row.leagueCode || old.leagueCode,
+        kickoffUtc: row.kickoffUtc || old.kickoffUtc,
+        eventId: row.eventId || old.eventId,
+        sportyEventId: row.sportyEventId || old.sportyEventId,
+        apiFootballFixtureId: row.apiFootballFixtureId || old.apiFootballFixtureId,
+        apiFootballMatchConfidence: row.apiFootballMatchConfidence || old.apiFootballMatchConfidence,
+        cacheCarryForward: true,
+        cacheCarryForwardReason: 'fresh_fixture_had_no_usable_model',
+      });
+      restoredGoodModel++;
+    } else {
+      merged.push(row);
+    }
+  }
+
+  for (const old of previous) {
+    const key = predictionCacheKey(old);
+    if (freshKeys.has(key)) continue;
+    if (!isFutureFixture(old, nowMs)) {
+      expiredDropped++;
+      continue;
+    }
+    if (!hasUsablePrediction(old)) continue;
+    merged.push({
+      ...old,
+      cacheCarryForward: true,
+      cacheCarryForwardReason: 'missing_from_latest_refresh',
+    });
+    carriedForward++;
+  }
+
+  return {
+    ...freshPayload,
+    matches: merged,
+    cacheMerge: {
+      previousCount: previous.length,
+      freshCount: fresh.length,
+      finalCount: merged.length,
+      restoredGoodModel,
+      carriedForward,
+      expiredDropped,
+      mergedAt: new Date().toISOString(),
+    },
+  };
+}
+
+// European football seasons are represented by their starting year.
+function activeSeasonStartYear(now = new Date()) {
+  return now.getUTCMonth() >= 6 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
+}
+
+async function loadH2HHistory(code) {
+  const all = [];
+  // Current-season completed games are useful for repeat cup/league meetings.
+  try {
+    all.push(...await getFinishedMatches(code, TOKEN));
+  } catch (err) {
+    console.warn(`${code}: current-season H2H history unavailable: ${err.message}`);
+  }
+
+  const currentStart = activeSeasonStartYear();
+  for (let i = 1; i <= H2H_PREVIOUS_SEASONS; i++) {
+    try {
+      all.push(...await getFinishedMatches(code, TOKEN, currentStart - i));
+    } catch (err) {
+      // Historical seasons can be restricted by football-data.org plan. The model
+      // remains valid without them, so degrade gracefully rather than failing refresh.
+      console.warn(`${code}: season ${currentStart - i} H2H history unavailable: ${err.message}`);
+      if (err.status === 403) break;
+    }
+  }
+
+  const seen = new Set();
+  return all.filter(m => {
+    if (!m || seen.has(m.id)) return false;
+    seen.add(m.id);
+    return true;
+  });
+}
+
+async function buildLeague(code) {
+  const meta = LEAGUES[code];
+  if (!meta) throw new Error(`Unknown league code ${code}`);
+
+  const standings = await getStandings(code, TOKEN);
+  const teamNames = Object.keys(standings);
+  if (teamNames.length === 0) return [];
+
+  let totalGoals = 0, totalPlayed = 0;
+  for (const t of teamNames) {
+    totalGoals += standings[t].gf;
+    totalPlayed += standings[t].played;
+  }
+  const leagueAvg = totalPlayed > 0 ? totalGoals / totalPlayed : 1.35;
+
+  const strengths = {};
+  for (const name of teamNames) {
+    strengths[name] = teamStrength(standings[name], leagueAvg, leagueAvg);
+  }
+
+  const today = new Date();
+  const from = fmtDate(today);
+  const toDate = new Date(today);
+  toDate.setDate(toDate.getDate() + DAYS_AHEAD);
+  const to = fmtDate(toDate);
+
+  const fixtures = await getUpcomingMatches(code, TOKEN, from, to);
+  const history = await loadH2HHistory(code);
+
+  const results = [];
+  for (const fx of fixtures) {
+    const home = strengths[fx.homeTeam];
+    const away = strengths[fx.awayTeam];
+    if (!home || !away) continue;
+
+    const base = predictMatch(home, away, leagueAvg, leagueAvg, 1.15);
+    const h2h = summarizeH2H(history, fx.homeTeam, fx.awayTeam, H2H_MAX_MEETINGS);
+    const probs = blendPredictionWithH2H(base, h2h, H2H_MAX_WEIGHT);
+
+    results.push({
+      league: meta.name,
+      leagueCode: code,
+      home: fx.homeTeam,
+      away: fx.awayTeam,
+      kickoffUtc: fx.utcDate,
+      h: Math.round(probs.homeWin * 100),
+      d: Math.round(probs.draw * 100),
+      a: Math.round(probs.awayWin * 100),
+      btts: Math.round(probs.bttsYes * 100),
+      o05: Math.round(probs.over05 * 100),
+      o15: Math.round(probs.over15 * 100),
+      u45: Math.round(probs.under45 * 100),
+      o25: Math.round(probs.over25 * 100),
+      oneUpHome: Math.round((probs.oneUpHome || 0) * 100),
+      oneUpAway: Math.round((probs.oneUpAway || 0) * 100),
+      score: `${probs.topScore.h}-${probs.topScore.a}`,
+      scoreP: Math.round(probs.topScore.p * 100),
+      pick: pickLabel(probs),
+      pickProb: Math.round(Math.max(probs.homeWin, probs.draw, probs.awayWin) * 100),
+      base: {
+        h: Math.round(base.homeWin * 100),
+        d: Math.round(base.draw * 100),
+        a: Math.round(base.awayWin * 100),
+        btts: Math.round(base.bttsYes * 100),
+        o05: Math.round(base.over05 * 100),
+        o15: Math.round(base.over15 * 100),
+        u45: Math.round(base.under45 * 100),
+        o25: Math.round(base.over25 * 100),
+        oneUpHome: Math.round((base.oneUpHome || 0) * 100),
+        oneUpAway: Math.round((base.oneUpAway || 0) * 100),
+      },
+      h2h: {
+        meetings: h2h.meetings,
+        influencePct: Math.round((probs.h2hWeight || 0) * 100),
+        homeWinPct: h2h.meetings ? Math.round(h2h.homeWins * 100) : null,
+        drawPct: h2h.meetings ? Math.round(h2h.draws * 100) : null,
+        awayWinPct: h2h.meetings ? Math.round(h2h.awayWins * 100) : null,
+        bttsPct: h2h.meetings ? Math.round(h2h.bttsRate * 100) : null,
+        over05Pct: h2h.meetings ? Math.round(h2h.over05Rate * 100) : null,
+        over15Pct: h2h.meetings ? Math.round(h2h.over15Rate * 100) : null,
+        under45Pct: h2h.meetings ? Math.round(h2h.under45Rate * 100) : null,
+        over25Pct: h2h.meetings ? Math.round(h2h.over25Rate * 100) : null,
+        recent: h2h.samples.slice(0, 5),
+      },
+    });
+  }
+  return results;
+}
+
+async function storeResult(payload, marketSnapshots = []) {
+  if (process.env.REDIS_URL) {
+    const { createClient } = require('redis');
+    const client = createClient({ url: process.env.REDIS_URL });
+    await client.connect();
+
+    let finalPayload = payload;
+    try {
+      const previousRaw = await client.get('predictions:latest');
+      const previousPayload = previousRaw ? JSON.parse(previousRaw) : null;
+      finalPayload = mergeWithExistingPredictions(payload, previousPayload);
+      const m = finalPayload.cacheMerge || {};
+      console.log(
+        `Prediction cache merge: fresh=${m.freshCount || 0}, previous=${m.previousCount || 0}, ` +
+        `restored=${m.restoredGoodModel || 0}, carried=${m.carriedForward || 0}, final=${m.finalCount || 0}`
+      );
+    } catch (err) {
+      console.warn(`Prediction cache merge skipped: ${err.message}`);
+    }
+
+    await client.set('predictions:latest', JSON.stringify(finalPayload));
+
+    // Seed the shared SportyBet daily snapshot cache from data already paid for by
+    // this refresh. These keys deliberately do not include horizon/page count, so
+    // Analyzer/Auto Builder requests can reuse a broader refresh snapshot.
+    const cacheVersion = String(process.env.SPORTYBET_CACHE_VERSION || '9');
+    const snapshotTtl = Math.max(3600, parseInt(process.env.SPORTYBET_DAILY_SNAPSHOT_SECONDS || '93600', 10));
+    for (const snap of marketSnapshots) {
+      if (!snap?.payload || !Array.isArray(snap.payload.rows) || !snap.payload.rows.length) continue;
+      const key = `sportybet:snapshot:v${cacheVersion}:${snap.sport}:${snap.kind}`;
+      const value = { ...snap.payload, snapshotHours:Number(snap.hours)||0, snapshotSavedAt:new Date().toISOString() };
+      await client.set(key, JSON.stringify(value), { EX: snapshotTtl });
+      console.log(`Seeded daily SportyBet snapshot ${snap.sport}/${snap.kind}: ${snap.payload.rows.length} rows`);
+    }
+
+    await client.quit();
+    console.log('Wrote predictions to Redis key "predictions:latest"');
+  } else {
+    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+    let finalPayload = payload;
+    try {
+      const previousPayload = fs.existsSync(DATA_FILE)
+        ? JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'))
+        : null;
+      finalPayload = mergeWithExistingPredictions(payload, previousPayload);
+    } catch (err) {
+      console.warn(`Local prediction cache merge skipped: ${err.message}`);
+    }
+    fs.writeFileSync(DATA_FILE, JSON.stringify(finalPayload, null, 2));
+    console.log(`Wrote predictions to ${DATA_FILE} (no REDIS_URL set)`);
+  }
+}
+
+async function main() {
+  const marketSnapshots = [];
+  const hasFootballData = !!TOKEN;
+  const hasApiFootball = !!(process.env.API_FOOTBALL_KEY || process.env.API_FOOTBALL_API_KEY);
+  if (!hasFootballData && !hasApiFootball) {
+    console.error('Missing football data source. Configure FOOTBALL_DATA_TOKEN and/or API_FOOTBALL_KEY.');
+    process.exit(1);
+  }
+  let all = [];
+  if (hasFootballData) for (const code of LEAGUE_CODES) {
+    try {
+      const rows = await buildLeague(code);
+      all = all.concat(rows);
+      console.log(`${code}: ${rows.length} fixtures`);
+    } catch (err) {
+      console.error(`Failed to build ${code}:`, err.message);
+    }
+  }
+  // API-Football expansion: use SportyBet's actual fixture list as the target universe,
+  // then match those fixtures to API-Football. This adds many leagues without ever
+  // creating a bet that does not exist on SportyBet. Corner profiles are only built
+  // for events where SportyBet returned a corners market, which saves API quota.
+  if (hasApiFootball && process.env.PARSE_API_KEY) {
+    try {
+      const hours = Math.min(24 * 21, Math.max(24, DAYS_AHEAD * 24));
+      const maxPages = Math.max(1, Math.min(20, parseInt(process.env.API_FOOTBALL_SPORTY_MAX_PAGES || process.env.ANALYZER_MAX_PAGES || '12', 10)));
+      const oneXtwo = await getFootballMarket('1x2', { hours, maxPages });
+      marketSnapshots.push({ sport:'football', kind:'1x2', hours, payload:oneXtwo });
+      let cornerRows = [], firstHalfTeamCornerRows = [];
+      try {
+        const cornerPayload = await getFootballMarket('corners', { hours, maxPages });
+        cornerRows = cornerPayload.rows || [];
+        if (cornerRows.length) marketSnapshots.push({ sport:'football', kind:'corners', hours, payload:cornerPayload });
+      }
+      catch (err) { console.warn(`SportyBet corners market unavailable during refresh: ${err.message}`); }
+      try {
+        const firstHalfPayload = await getFootballMarket('first_half_team_corners', { hours, maxPages });
+        firstHalfTeamCornerRows = firstHalfPayload.rows || [];
+        if (firstHalfTeamCornerRows.length) marketSnapshots.push({ sport:'football', kind:'first_half_team_corners', hours, payload:firstHalfPayload });
+      }
+      catch (err) { console.warn(`SportyBet 1H team corners market unavailable during refresh: ${err.message}`); }
+      const cornerEventIds = new Set([...cornerRows, ...firstHalfTeamCornerRows].map(x => String(x.eventId)));
+      const apiRows = await enrichSportyFixtures(oneXtwo.rows || [], {
+        daysAhead: DAYS_AHEAD,
+        maxFixtures: Math.max(1, Math.min(500, parseInt(process.env.API_FOOTBALL_MAX_FIXTURES || '500', 10))),
+        cornerEventIds,
+      });
+      const key = r => `${String(r.home||'').toLowerCase().replace(/[^a-z0-9]/g,'')}|${String(r.away||'').toLowerCase().replace(/[^a-z0-9]/g,'')}|${String(r.kickoffUtc||'').slice(0,10)}`;
+      const existing = new Set(all.map(key));
+      let added = 0, upgradedCorners = 0;
+      for (const r of apiRows) {
+        const k = key(r);
+        if (existing.has(k)) {
+          // If football-data.org already modeled the match, retain its goal model but
+          // attach API-Football corner statistics when available.
+          if (r.corners) {
+            const old = all.find(x => key(x) === k);
+            if (old && !old.corners) { old.corners = r.corners; old.apiFootballFixtureId = r.apiFootballFixtureId; upgradedCorners++; }
+          }
+          continue;
+        }
+        existing.add(k); all.push(r); added++;
+      }
+      console.log(`API-Football: ${apiRows.length} matched/modelled, ${added} new SportyBet fixtures added, ${upgradedCorners} existing fixtures got corner models.`);
+    } catch (err) {
+      console.error(`API-Football expansion failed: ${err.message}`);
+    }
+  } else if (hasApiFootball && !process.env.PARSE_API_KEY) {
+    console.warn('API_FOOTBALL_KEY is configured but PARSE_API_KEY is missing, so SportyBet-compatible fixture expansion was skipped.');
+  }
+
+  all.sort((x, y) => y.pickProb - x.pickProb);
+  await storeResult({
+    generatedAt: new Date().toISOString(),
+    model: {
+      name: hasApiFootball ? 'Poisson + H2H + API-Football expansion' : 'Poisson + H2H',
+      h2hMaxWeight: H2H_MAX_WEIGHT,
+      h2hPreviousSeasons: H2H_PREVIOUS_SEASONS,
+      h2hMaxMeetings: H2H_MAX_MEETINGS,
+    },
+    matches: all,
+  }, marketSnapshots);
+  console.log(`Done. ${all.length} total fixtures.`);
+}
+
+main().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
