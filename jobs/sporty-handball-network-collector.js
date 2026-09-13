@@ -5,6 +5,8 @@ const { chromium } = require('playwright');
 
 const LOGIN_ID = process.env.SPORTYSOCIAL_LOGIN_ID || '';
 const PASSWORD = process.env.SPORTYSOCIAL_PASSWORD || '';
+const MATCHDAY_BASE_URL = String(process.env.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com').replace(/\/$/,'');
+const JOB_SECRET = process.env.TELEGRAM_JOB_SECRET || '';
 
 const OUT_DIR = path.join(process.cwd(), 'handball-discovery-v2');
 fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -131,6 +133,30 @@ function toWatIso(day, month, timeText) {
   const hh = String(Number(m[1])).padStart(2, '0');
   const mm = String(Number(m[2])).padStart(2, '0');
   return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}T${hh}:${mm}:00+01:00`;
+}
+
+
+async function publishSnapshot(events) {
+  if (!JOB_SECRET) {
+    console.log('[Handball V4] TELEGRAM_JOB_SECRET not set; snapshot publish skipped');
+    return null;
+  }
+  const ctrl=new AbortController();
+  const t=setTimeout(()=>ctrl.abort(),60000);
+  try{
+    const res=await fetch(`${MATCHDAY_BASE_URL}/api/internal/handball/snapshot`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-telegram-job-secret':JOB_SECRET},
+      body:JSON.stringify({collectorVersion:'V4',events}),
+      signal:ctrl.signal,
+    });
+    const text=await res.text();
+    if(!res.ok) throw new Error(`snapshot publish ${res.status}: ${text.slice(0,500)}`);
+    let payload={};
+    try{payload=JSON.parse(text)}catch{}
+    console.log(`[Handball V4] Snapshot published: events=${payload.events??events.length}, winnerRows=${payload.winnerRows??'?'}, totalRows=${payload.totalRows??'?'}, API-SPORTS matched=${payload.matched??0}/${payload.total??events.length}`);
+    return payload;
+  } finally {clearTimeout(t);}
 }
 
 function parseHandballPageFixtureMetadata(bodyText) {
@@ -354,6 +380,9 @@ function parseHandballPageFixtureMetadata(bodyText) {
 
     // Fallback: if event node has no embedded markets, attach global market-like blocks by eventId where possible.
     safeJsonWrite('handball-events-extracted.json', eventCandidates);
+
+    const publishResult = await publishSnapshot(eventCandidates);
+    if (publishResult) safeJsonWrite('handball-publish-result.json', publishResult);
 
     const withKickoff = eventCandidates.filter(x => x.kickoffTime).length;
     const withTournament = eventCandidates.filter(x => x.tournament).length;

@@ -13,6 +13,7 @@ const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest, sendTelegra
 const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, allowedBetIdsForPlan: telegramAiAllowedBetIdsForPlan, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, addExtraTickets: addTelegramAiExtraTickets, hasTicketCredit: telegramAiHasTicketCredit, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, ticketLimitKeyboard: telegramAiTicketLimitKeyboard, mainKeyboard: telegramAiMainKeyboard, builderSummary: telegramAiBuilderSummary, builderKeyboard: telegramAiBuilderKeyboard, sportKeyboard: telegramAiSportKeyboard, targetKeyboard: telegramAiTargetKeyboard, probabilityKeyboard: telegramAiProbabilityKeyboard, maxOddKeyboard: telegramAiMaxOddKeyboard, edgeKeyboard: telegramAiEdgeKeyboard, maxGamesKeyboard: telegramAiMaxGamesKeyboard, marketsKeyboard: telegramAiMarketsKeyboard, analyzerSummary: telegramAiAnalyzerSummary, analyzerKeyboard: telegramAiAnalyzerKeyboard, analyzerAnalysisKeyboard: telegramAiAnalyzerAnalysisKeyboard, analyzerProbKeyboard: telegramAiAnalyzerProbKeyboard, analyzerHorizonKeyboard: telegramAiAnalyzerHorizonKeyboard, resultKeyboard: telegramAiResultKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
 const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
 const { apiFetch, enrichSportyFixtures } = require('./lib/apiFootball');
+const { matchSnapshot: matchHandballApiSportsSnapshot, apiKey: handballApiSportsKey } = require('./lib/apiSportsHandball');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
 
 let redisClient = null;
@@ -36,11 +37,97 @@ function authorizeCopyHub(req) {
 }
 
 
+function authorizeHandballCollector(req) {
+  const secret = process.env.TELEGRAM_JOB_SECRET || '';
+  return !!secret && req.headers['x-telegram-job-secret'] === secret;
+}
+
+function validFutureKickoff(value) {
+  const ms = new Date(value || '').getTime();
+  const buffer = Math.max(0, parseInt(process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS || '60', 10))*1000;
+  return Number.isFinite(ms) && ms > Date.now() + buffer;
+}
+
+function flattenHandballEvents(events, kind='winner') {
+  const rows=[];
+  for(const e of Array.isArray(events)?events:[]) {
+    if(!e?.eventId || !e?.homeTeamName || !e?.awayTeamName || !validFutureKickoff(e?.kickoffTime)) continue;
+    const markets=Array.isArray(e.markets)?e.markets:[];
+    for(const m of markets) {
+      const mid=String(m?.marketId||'');
+      const desc=String(m?.marketDesc||'');
+      const isWinner = kind==='winner' && (mid==='1' || /1x2|winner/i.test(desc));
+      const isTotals = kind==='totals' && (mid==='18' || /total goals|over\/under|total/i.test(desc));
+      if(!isWinner && !isTotals) continue;
+      for(const o of Array.isArray(m?.outcomes)?m.outcomes:[]) {
+        const odds=Number(o?.odds);
+        if(!Number.isFinite(odds)||odds<=1) continue;
+        rows.push({
+          sport:'Handball',
+          sportId:String(e.sportId||'sr:sport:6'),
+          eventId:String(e.eventId),
+          gameId:e.gameId!=null?String(e.gameId):null,
+          home:e.homeTeamName,
+          away:e.awayTeamName,
+          tournament:e.tournament||'',
+          kickoffUtc:e.kickoffTime,
+          marketId:mid,
+          marketDesc:desc,
+          specifier:m?.specifier ?? o?.specifier ?? null,
+          outcomeId:String(o?.outcomeId||''),
+          outcomeDesc:String(o?.outcomeDesc||''),
+          odds,
+          apiSportsMatched:!!e.apiSportsMatched,
+          apiSportsGameId:e.apiSportsGameId||null,
+          apiSportsMatchScore:e.apiSportsMatchScore||null,
+        });
+      }
+    }
+  }
+  return rows;
+}
+
+async function saveHandballSnapshot(snapshot) {
+  handballSnapshotMemory=snapshot;
+  const client=await getRedis();
+  if(client) await client.set(HANDBALL_SNAPSHOT_REDIS_KEY,JSON.stringify(snapshot),{EX:Math.max(3600,parseInt(process.env.HANDBALL_SNAPSHOT_TTL_SECONDS||'46800',10))});
+}
+
+async function loadHandballSnapshot() {
+  const client=await getRedis();
+  if(client) {
+    const raw=await client.get(HANDBALL_SNAPSHOT_REDIS_KEY);
+    if(raw) {
+      try { return JSON.parse(raw); } catch {}
+    }
+  }
+  return handballSnapshotMemory || {fetchedAt:null,events:[]};
+}
+
+async function loadHandballMarket(kind='winner') {
+  const snap=await loadHandballSnapshot();
+  const rows=flattenHandballEvents(snap?.events||[],kind);
+  return {
+    sport:'handball',
+    market:kind,
+    marketLabel:kind==='winner'?'1X2 / Match Winner':'Total Goals',
+    fetchedAt:snap?.fetchedAt||null,
+    collectorVersion:snap?.collectorVersion||'V4',
+    apiSportsMatched:Number(snap?.apiSportsMatched||0),
+    apiSportsTotal:Number(snap?.apiSportsTotal||0),
+    totalReturned:rows.length,
+    rows,
+  };
+}
+
+
 const sportyMemoryCache = new Map();
 const sportyMarketInFlight = new Map();
 const bookingMemoryRate = new Map();
 const telegramSendMemory = new Map();
 const telegramDailyCodesMemory = new Map();
+let handballSnapshotMemory = null;
+const HANDBALL_SNAPSHOT_REDIS_KEY = 'sportybet:handball:v4:snapshot';
 
 
 function telegramDailyCodeVisibleForPlan(planId, label) {
@@ -726,14 +813,81 @@ app.get('/api/sportybet/odds', async (req, res) => {
 
 
 
+
+app.post('/api/internal/handball/snapshot', express.json({limit:'5mb'}), async (req,res)=>{
+  if(!authorizeHandballCollector(req)) return res.status(401).json({error:'unauthorized'});
+  try{
+    const raw=Array.isArray(req.body?.events)?req.body.events:[];
+    if(!raw.length) return res.status(400).json({error:'events must be a non-empty array'});
+    let events=raw;
+    let matchInfo={matched:0,total:raw.length,datesQueried:[]};
+
+    // API-SPORTS is a matching/validation layer only. Handball probability remains
+    // the same no-vig SportyBet market model used by Basketball and Ice Hockey.
+    if(handballApiSportsKey()){
+      try{
+        const matched=await matchHandballApiSportsSnapshot(raw,{maxDates:5});
+        events=matched.events;
+        matchInfo={matched:matched.matched,total:matched.total,datesQueried:matched.datesQueried};
+      }catch(err){
+        console.warn('[Handball snapshot] API-SPORTS matching failed:',err.message);
+      }
+    }
+
+    const snapshot={
+      collectorVersion:'V4',
+      fetchedAt:new Date().toISOString(),
+      events,
+      apiSportsMatched:matchInfo.matched,
+      apiSportsTotal:matchInfo.total,
+      apiSportsDatesQueried:matchInfo.datesQueried,
+    };
+    await saveHandballSnapshot(snapshot);
+    const winnerRows=flattenHandballEvents(events,'winner').length;
+    const totalRows=flattenHandballEvents(events,'totals').length;
+    res.json({ok:true,events:events.length,winnerRows,totalRows,...matchInfo,probabilityModel:'no-vig SportyBet market probability (same as Basketball/Ice Hockey)'});
+  }catch(err){
+    console.error('[Handball snapshot] failed:',err);
+    res.status(500).json({error:'failed to save handball snapshot',detail:process.env.NODE_ENV==='production'?undefined:err.message});
+  }
+});
+
+app.get('/api/handball/status', async (req,res)=>{
+  try{
+    const snap=await loadHandballSnapshot();
+    const winner=await loadHandballMarket('winner');
+    const totals=await loadHandballMarket('totals');
+    res.json({
+      collectorVersion:snap?.collectorVersion||null,
+      fetchedAt:snap?.fetchedAt||null,
+      fixtures:Array.isArray(snap?.events)?snap.events.length:0,
+      winnerRows:winner.rows.length,
+      totalsRows:totals.rows.length,
+      apiSportsConfigured:!!handballApiSportsKey(),
+      apiSportsMatched:Number(snap?.apiSportsMatched||0),
+      apiSportsTotal:Number(snap?.apiSportsTotal||0),
+      probabilityModel:'No-vig/de-margined SportyBet market probability — same as Basketball and Ice Hockey',
+    });
+  }catch(err){res.status(500).json({error:'handball status failed',detail:String(err.message||err)});}
+});
+
 // Basketball and ice hockey odds. Parse currently exposes pre-match data for these
 // sports; this route is generic so more supported sports can be added later.
 app.get('/api/sportybet/sport/:sport', async (req, res) => {
   try {
     const sport = String(req.params.sport || '').toLowerCase();
+    if (sport === 'handball') {
+      const kind = String(req.query.market || 'winner').toLowerCase();
+      if (!['winner','totals'].includes(kind)) {
+        return res.status(400).json({ error: 'handball market must be one of: winner, totals' });
+      }
+      const payload = await loadHandballMarket(kind);
+      res.set('Cache-Control', 'public, max-age=60');
+      return res.json(payload);
+    }
     const cfg = SPORT_CONFIG[sport];
     if (!cfg) {
-      return res.status(400).json({ error: `sport must be one of: ${Object.keys(SPORT_CONFIG).join(', ')}` });
+      return res.status(400).json({ error: `sport must be one of: ${[...Object.keys(SPORT_CONFIG),'handball'].join(', ')}` });
     }
     const kind = String(req.query.market || cfg.defaultMarket).toLowerCase();
     if (!cfg.markets[kind]) {
@@ -759,7 +913,7 @@ app.get('/api/sportybet/sport/:sport', async (req, res) => {
 function normalizeSportScope(value) {
   const v = String(value || 'all').toLowerCase().replace(/\s+/g, '');
   if (v === 'icehockey' || v === 'ice-hockey') return 'hockey';
-  return ['all', 'football', 'basketball', 'hockey'].includes(v) ? v : 'all';
+  return ['all', 'football', 'basketball', 'hockey', 'handball'].includes(v) ? v : 'all';
 }
 
 function normalizeSportScopes(value) {
@@ -768,10 +922,10 @@ function normalizeSportScopes(value) {
   for (const item of raw) {
     const v = String(item || '').toLowerCase().replace(/\s+/g, '');
     const n = (v === 'icehockey' || v === 'ice-hockey') ? 'hockey' : v;
-    if (n === 'all') return ['football','basketball','hockey'];
-    if (['football','basketball','hockey'].includes(n) && !out.includes(n)) out.push(n);
+    if (n === 'all') return ['football','basketball','hockey','handball'];
+    if (['football','basketball','hockey','handball'].includes(n) && !out.includes(n)) out.push(n);
   }
-  return out.length ? out : ['football','basketball','hockey'];
+  return out.length ? out : ['football','basketball','hockey','handball'];
 }
 
 
@@ -846,6 +1000,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
   const wantsFootball = selectedSet.has('football');
   const wantsBasketball = selectedSet.has('basketball');
   const wantsHockey = selectedSet.has('hockey');
+  const wantsHandball = selectedSet.has('handball');
 
   // Fetch only the market families actually requested. Previously, even a one-market
   // Analyzer request could fan out to every football/basketball/hockey market.
@@ -866,6 +1021,8 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
   const needBasketballTotals = wantsBasketball && wantsAny(['basketball_over','basketball_under']);
   const needHockeyWinner = wantsHockey && wantsAny(['hockey_winner']);
   const needHockeyTotals = wantsHockey && wantsAny(['hockey_over','hockey_under']);
+  const needHandballWinner = wantsHandball && wantsAny(['handball_winner']);
+  const needHandballTotals = wantsHandball && wantsAny(['handball_over','handball_under']);
 
   // The general sportsbook cache may live for hours to save API credits, but the Auto Builder
   // needs much fresher availability data so expired events cannot remain eligible.
@@ -892,7 +1049,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     }
   };
 
-  let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals] = await Promise.all([
+  let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals, handballWinner, handballTotals] = await Promise.all([
     safeMarket('football predictions', wantsFootball, () => loadPredictions(), { matches: [] }),
     safeMarket('football 1X2', needF1x2, () => loadSportyBetMarket('1x2', 'football', autoMarketOptions)),
     safeMarket('football GG/NG', needFGg, () => loadSportyBetMarket('gg', 'football', autoMarketOptions)),
@@ -909,6 +1066,8 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     safeMarket('basketball totals', needBasketballTotals, () => loadSportyBetMarket('totals', 'basketball', autoMarketOptions)),
     safeMarket('hockey winner', needHockeyWinner, () => loadSportyBetMarket('winner', 'hockey', autoMarketOptions)),
     safeMarket('hockey totals', needHockeyTotals, () => loadSportyBetMarket('totals', 'hockey', autoMarketOptions)),
+    safeMarket('handball winner', needHandballWinner, () => loadHandballMarket('winner')),
+    safeMarket('handball totals', needHandballTotals, () => loadHandballMarket('totals')),
   ]);
 
   if (wantsFootball && cornerBetRequested(betTypes)) {
@@ -926,6 +1085,8 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     basketballTotals,
     hockeyWinner,
     hockeyTotals,
+    handballWinner,
+    handballTotals,
     minProbability,
     minEdge,
     leagues,
@@ -936,6 +1097,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     if (sportName.includes('football') || sportName.includes('soccer')) return selectedSet.has('football');
     if (sportName.includes('basket')) return selectedSet.has('basketball');
     if (sportName.includes('hockey')) return selectedSet.has('hockey');
+    if (sportName.includes('handball')) return selectedSet.has('handball');
     return false;
   });
 }
@@ -975,7 +1137,7 @@ async function prepareAutoCandidatePool({
   // Keeping the complete filtering path here prevents one surface from finding
   // selections while another reports zero for the same settings.
   const selectedSports = normalizeSportScopes(sportScope);
-  const sport = selectedSports.length === 3 ? 'all' : (selectedSports.length === 1 ? selectedSports[0] : 'multi');
+  const sport = selectedSports.length === 4 ? 'all' : (selectedSports.length === 1 ? selectedSports[0] : 'multi');
   const probabilityFloor = Math.min(95, Math.max(0, Number(minProbability) || 0));
   const edgeFloor = Math.min(50, Math.max(-25, Number(minEdge) || 0));
 
