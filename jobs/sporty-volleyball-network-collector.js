@@ -154,7 +154,7 @@ async function publishSnapshot(events) {
     if(!res.ok) throw new Error(`snapshot publish ${res.status}: ${text.slice(0,500)}`);
     let payload={};
     try{payload=JSON.parse(text)}catch{}
-    console.log(`[Volleyball V1] Snapshot published: events=${payload.events??events.length}, winnerRows=${payload.winnerRows??'?'}, totalRows=${payload.totalRows??'?'}, API-SPORTS matched=${payload.matched??0}/${payload.total??events.length}`);
+    console.log(`[Volleyball V1] Snapshot published: events=${payload.events??events.length}, winnerRows=${payload.winnerRows??'?'}, totalRows=${payload.totalRows??'?'}, setRows=${payload.setRows??'?'}, API-SPORTS matched=${payload.matched??0}/${payload.total??events.length}`);
     return payload;
   } finally {clearTimeout(t);}
 }
@@ -280,7 +280,7 @@ function parseVolleyballPageFixtureMetadata(bodyText) {
     await page.waitForTimeout(5000);
     console.log('[Volleyball V1] Login attempt completed');
 
-    console.log('[Volleyball V1] Opening Handball prematch page');
+    console.log('[Volleyball V1] Opening Volleyball prematch page');
     await page.goto('https://www.sportybet.com/ng/m/sport/volleyball?sort=0', {
       waitUntil: 'domcontentloaded',
       timeout: 60000
@@ -389,7 +389,7 @@ function parseVolleyballPageFixtureMetadata(bodyText) {
     const complete = eventCandidates.filter(x => x.kickoffTime && x.tournament && x.homeTeamName && x.awayTeamName).length;
 
     console.log(`[Volleyball V1] Fixture endpoint responses captured: ${captured.length}`);
-    console.log(`[Volleyball V1] Handball fixture candidates extracted: ${eventCandidates.length}`);
+    console.log(`[Volleyball V1] Volleyball fixture candidates extracted: ${eventCandidates.length}`);
     console.log(`[Volleyball V1] With kickoff: ${withKickoff}/${eventCandidates.length}`);
     console.log(`[Volleyball V1] With tournament: ${withTournament}/${eventCandidates.length}`);
     console.log(`[Volleyball V1] Complete metadata: ${complete}/${eventCandidates.length}`);

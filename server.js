@@ -137,9 +137,12 @@ function flattenVolleyballEvents(events, kind='winner') {
       );
       // Total Points/Total markets only. Set handicaps are intentionally not enabled yet.
       const isTotals = kind==='totals' && (
-        /total|over\/under|total points/i.test(desc)
+        /total points|points total/i.test(desc)
       );
-      if(!isWinner && !isTotals) continue;
+      const isSets = kind==='sets' && (
+        /total sets|sets total/i.test(desc)
+      );
+      if(!isWinner && !isTotals && !isSets) continue;
       for(const o of Array.isArray(m?.outcomes)?m.outcomes:[]) {
         const odds=Number(o?.odds);
         if(!Number.isFinite(odds)||odds<=1) continue;
@@ -195,7 +198,7 @@ async function loadVolleyballMarket(kind='winner') {
   return {
     sport:'volleyball',
     market:kind,
-    marketLabel:kind==='winner'?'Match Winner':'Total Points',
+    marketLabel:kind==='winner'?'Match Winner':(kind==='sets'?'Total Sets':'Total Points'),
     fetchedAt:snap?.fetchedAt||null,
     collectorVersion:snap?.collectorVersion||'V1',
     apiSportsMatched:Number(snap?.apiSportsMatched||0),
@@ -973,8 +976,9 @@ app.post('/api/internal/volleyball/snapshot', express.json({limit:'5mb'}), async
 
     const winnerRows=flattenVolleyballEvents(events,'winner').length;
     const totalRows=flattenVolleyballEvents(events,'totals').length;
+    const setRows=flattenVolleyballEvents(events,'sets').length;
     res.json({
-      ok:true,events:events.length,winnerRows,totalRows,...matchInfo,
+      ok:true,events:events.length,winnerRows,totalRows,setRows,...matchInfo,
       probabilityModel:'no-vig SportyBet market probability (same as Basketball/Ice Hockey/Handball)'
     });
   }catch(err){
@@ -991,12 +995,14 @@ app.get('/api/volleyball/status', async (req,res)=>{
     const snap=await loadVolleyballSnapshot();
     const winner=await loadVolleyballMarket('winner');
     const totals=await loadVolleyballMarket('totals');
+    const sets=await loadVolleyballMarket('sets');
     res.json({
       collectorVersion:snap?.collectorVersion||null,
       fetchedAt:snap?.fetchedAt||null,
       fixtures:Array.isArray(snap?.events)?snap.events.length:0,
       winnerRows:winner.rows.length,
       totalsRows:totals.rows.length,
+      setRows:sets.rows.length,
       apiSportsConfigured:!!volleyballApiSportsKey(),
       apiSportsMatched:Number(snap?.apiSportsMatched||0),
       apiSportsTotal:Number(snap?.apiSportsTotal||0),
@@ -1018,6 +1024,7 @@ app.get('/api/handball/status', async (req,res)=>{
       fixtures:Array.isArray(snap?.events)?snap.events.length:0,
       winnerRows:winner.rows.length,
       totalsRows:totals.rows.length,
+      setRows:sets.rows.length,
       apiSportsConfigured:!!handballApiSportsKey(),
       apiSportsMatched:Number(snap?.apiSportsMatched||0),
       apiSportsTotal:Number(snap?.apiSportsTotal||0),
@@ -1042,8 +1049,8 @@ app.get('/api/sportybet/sport/:sport', async (req, res) => {
     }
     if (sport === 'volleyball') {
       const kind = String(req.query.market || 'winner').toLowerCase();
-      if (!['winner','totals'].includes(kind)) {
-        return res.status(400).json({ error: 'volleyball market must be one of: winner, totals' });
+      if (!['winner','totals','sets'].includes(kind)) {
+        return res.status(400).json({ error: 'volleyball market must be one of: winner, totals, sets' });
       }
       const payload = await loadVolleyballMarket(kind);
       res.set('Cache-Control', 'public, max-age=60');
@@ -1158,6 +1165,30 @@ async function addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorne
   return {...predictions,matches};
 }
 
+
+const AUTO_BET_TYPES_BY_SPORT = {
+  football: ['home_win','draw','away_win','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under'],
+  basketball: ['basketball_winner','basketball_over','basketball_under'],
+  hockey: ['hockey_winner','hockey_over','hockey_under'],
+  handball: ['handball_winner','handball_over','handball_under'],
+  volleyball: ['volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under'],
+};
+
+function normalizeAutoBetTypesForSports(sports, betTypes) {
+  const selected = Array.isArray(sports) ? sports : normalizeSportScopes(sports);
+  const compatible = new Set(selected.flatMap(s => AUTO_BET_TYPES_BY_SPORT[s] || []));
+  const incoming = Array.isArray(betTypes) ? betTypes.map(String) : [];
+
+  // Critical compatibility behavior:
+  // old browsers may have localStorage saved before Handball/Volleyball existed.
+  // If none of the stored bet types belongs to the currently selected sports,
+  // automatically enable every supported market for those sports instead of
+  // returning an empty candidate pool.
+  const filtered = incoming.filter(id => compatible.has(id));
+  if (filtered.length) return filtered;
+  return [...compatible];
+}
+
 async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, marketCacheOnly = false } = {}) {
   const selectedSports = normalizeSportScopes(Array.isArray(sports) && sports.length ? sports : sportScope);
   const selectedSet = new Set(selectedSports);
@@ -1169,7 +1200,8 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
 
   // Fetch only the market families actually requested. Previously, even a one-market
   // Analyzer request could fan out to every football/basketball/hockey market.
-  const requestedBetTypes = Array.isArray(betTypes) && betTypes.length ? new Set(betTypes.map(String)) : null;
+  const effectiveBetTypes = normalizeAutoBetTypesForSports(selectedSports, betTypes);
+  const requestedBetTypes = effectiveBetTypes.length ? new Set(effectiveBetTypes) : null;
   const wantsAny = ids => !requestedBetTypes || ids.some(id => requestedBetTypes.has(id));
   const needF1x2 = wantsFootball && wantsAny(['home_win','draw','away_win']);
   const needFGg = wantsFootball && wantsAny(['gg_yes','ng_no']);
@@ -1190,6 +1222,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
   const needHandballTotals = wantsHandball && wantsAny(['handball_over','handball_under']);
   const needVolleyballWinner = wantsVolleyball && wantsAny(['volleyball_winner']);
   const needVolleyballTotals = wantsVolleyball && wantsAny(['volleyball_over','volleyball_under']);
+  const needVolleyballSets = wantsVolleyball && wantsAny(['volleyball_sets_over','volleyball_sets_under']);
 
   // The general sportsbook cache may live for hours to save API credits, but the Auto Builder
   // needs much fresher availability data so expired events cannot remain eligible.
@@ -1216,7 +1249,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     }
   };
 
-  let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals, handballWinner, handballTotals, volleyballWinner, volleyballTotals] = await Promise.all([
+  let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals, handballWinner, handballTotals, volleyballWinner, volleyballTotals, volleyballSets] = await Promise.all([
     safeMarket('football predictions', wantsFootball, () => loadPredictions(), { matches: [] }),
     safeMarket('football 1X2', needF1x2, () => loadSportyBetMarket('1x2', 'football', autoMarketOptions)),
     safeMarket('football GG/NG', needFGg, () => loadSportyBetMarket('gg', 'football', autoMarketOptions)),
@@ -1237,6 +1270,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     safeMarket('handball totals', needHandballTotals, () => loadHandballMarket('totals')),
     safeMarket('volleyball winner', needVolleyballWinner, () => loadVolleyballMarket('winner')),
     safeMarket('volleyball totals', needVolleyballTotals, () => loadVolleyballMarket('totals')),
+    safeMarket('volleyball total sets', needVolleyballSets, () => loadVolleyballMarket('sets')),
   ]);
 
   if (wantsFootball && cornerBetRequested(betTypes)) {
@@ -1258,11 +1292,12 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     handballTotals,
     volleyballWinner,
     volleyballTotals,
+    volleyballSets,
     minProbability,
     minEdge,
     leagues,
     sportScope: 'all',
-    betTypes,
+    betTypes: effectiveBetTypes,
   }).filter(c => {
     const sportName = String(c?.sport || '').toLowerCase();
     if (sportName.includes('football') || sportName.includes('soccer')) return selectedSet.has('football');
@@ -1873,8 +1908,8 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       : null;
     const leagues = Array.isArray(body.leagues) ? body.leagues.map(String) : null;
     const selectedSports = normalizeSportScopes(Array.isArray(body.sports) && body.sports.length ? body.sports : body.sportScope);
-    const sportScope = selectedSports.length === 3 ? 'all' : (selectedSports.length === 1 ? selectedSports[0] : 'multi');
-    const betTypes = Array.isArray(body.betTypes) ? body.betTypes.map(String) : null;
+    const sportScope = selectedSports.length === 5 ? 'all' : (selectedSports.length === 1 ? selectedSports[0] : 'multi');
+    const betTypes = normalizeAutoBetTypesForSports(selectedSports, Array.isArray(body.betTypes) ? body.betTypes.map(String) : null);
     const todayOnly = body.todayOnly === true || String(body.todayOnly || '').toLowerCase() === 'true';
 
     const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly });
@@ -1893,6 +1928,7 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
         sportScope,
         sports: selectedSports,
         requestedBetTypes: betTypes,
+        autoBetTypeFallbackApplied: Array.isArray(body.betTypes) && body.betTypes.length > 0 && !body.betTypes.some(id => betTypes.includes(String(id))),
         candidateCount: oddsFilteredCandidates.length,
         candidatesBeforeMaxOddsFilter: redFlagSafeCandidatesCount,
         candidatesBeforeRedFlagFilter: rawCandidatesCount,
