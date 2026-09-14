@@ -11,7 +11,7 @@ const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG } =
 const { buildCandidates, selectAutoBet, passesRedFlagFilter, normalMetrics } = require('./lib/autoPicker');
 const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest, sendTelegramAiMessageTo, telegramAiRequest } = require('./lib/telegram');
 const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, allowedBetIdsForPlan: telegramAiAllowedBetIdsForPlan, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, addExtraTickets: addTelegramAiExtraTickets, hasTicketCredit: telegramAiHasTicketCredit, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, ticketLimitKeyboard: telegramAiTicketLimitKeyboard, mainKeyboard: telegramAiMainKeyboard, builderSummary: telegramAiBuilderSummary, builderKeyboard: telegramAiBuilderKeyboard, sportKeyboard: telegramAiSportKeyboard, targetKeyboard: telegramAiTargetKeyboard, probabilityKeyboard: telegramAiProbabilityKeyboard, maxOddKeyboard: telegramAiMaxOddKeyboard, edgeKeyboard: telegramAiEdgeKeyboard, maxGamesKeyboard: telegramAiMaxGamesKeyboard, marketsKeyboard: telegramAiMarketsKeyboard, analyzerSummary: telegramAiAnalyzerSummary, analyzerKeyboard: telegramAiAnalyzerKeyboard, analyzerAnalysisKeyboard: telegramAiAnalyzerAnalysisKeyboard, analyzerProbKeyboard: telegramAiAnalyzerProbKeyboard, analyzerHorizonKeyboard: telegramAiAnalyzerHorizonKeyboard, resultKeyboard: telegramAiResultKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
-const { trackTelegramSlip, listTrackedSlips, updateTrackedSlip, evaluateBooking } = require('./lib/slipTracker');
+const { trackTelegramSlip } = require('./lib/slipTracker');
 const { apiFetch, enrichSportyFixtures } = require('./lib/apiFootball');
 const { matchSnapshot: matchHandballApiSportsSnapshot, apiKey: handballApiSportsKey } = require('./lib/apiSportsHandball');
 const { matchSnapshot: matchVolleyballApiSportsSnapshot, apiKey: volleyballApiSportsKey } = require('./lib/apiSportsVolleyball');
@@ -37,6 +37,11 @@ function authorizeCopyHub(req) {
   return !!secret && req.headers['x-copy-hub-secret'] === secret;
 }
 
+
+function authorizeTelegramJob(req) {
+  const secret = process.env.TELEGRAM_JOB_SECRET || '';
+  return !!secret && req.headers['x-telegram-job-secret'] === secret;
+}
 
 function authorizeHandballCollector(req) {
   const secret = process.env.TELEGRAM_JOB_SECRET || '';
@@ -2362,184 +2367,7 @@ async function runTelegramDailyPicks() {
   };
 }
 
-function watDateKey(value=new Date()) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone:'Africa/Lagos', year:'numeric', month:'2-digit', day:'2-digit'
-  }).formatToParts(value);
-  const get = t => parts.find(p=>p.type===t)?.value;
-  return `${get('year')}-${get('month')}-${get('day')}`;
-}
 
-function previousWatDateKey(now=new Date()) {
-  // At 01:00 WAT, report the matchday that just ended at midnight.
-  return watDateKey(new Date(now.getTime() - 2 * 60 * 60 * 1000));
-}
-
-function settlementBreakdownText(evaluation, fallbackTotal=0) {
-  const c=evaluation?.counts || {won:0,lost:0,push:0,pending:0,unknown:0};
-  const knownTotal=Number(evaluation?.totalLegs||0);
-  const total=knownTotal || Number(fallbackTotal||0);
-  return [
-    `✅ Won: ${c.won}`,
-    `❌ Lost: ${c.lost}`,
-    `↩️ Void/Push: ${c.push}`,
-    `⏳ Pending: ${c.pending}`,
-    `❓ Unknown: ${c.unknown + (knownTotal ? 0 : total)}`,
-  ].join(' | ');
-}
-
-function telegramSettlementTicketText(slip, evaluation) {
-  const total = Array.isArray(slip?.selections) ? slip.selections.length : 0;
-  const finalWon = evaluation?.status === 'won';
-  const finalLost = evaluation?.status === 'lost';
-  const title = finalWon
-    ? '💥 BOOMED — ALL WON'
-    : finalLost
-      ? '❌ TICKET LOST'
-      : '⏳ SPORTYBET SETTLEMENT STILL PENDING';
-  return [
-    `${title} — ${slip.targetOdds || 'Ticket'}`,
-    `Code: ${slip.shareCode}`,
-    ...(slip.combinedOdds ? [`Odds: ${Number(slip.combinedOdds).toFixed(2)}`] : []),
-    `Selections: ${total}`,
-    settlementBreakdownText(evaluation, total),
-    ...(evaluation?.topStatus && evaluation.topStatus !== 'unknown' ? [`SportyBet ticket status: ${evaluation.topStatus.toUpperCase()}`] : []),
-    ...(evaluation?.rawBookingSettlement != null ? [`Raw bookingSettlement: ${typeof evaluation.rawBookingSettlement === 'object' ? JSON.stringify(evaluation.rawBookingSettlement) : String(evaluation.rawBookingSettlement)}`] : []),
-  ].join('\n');
-}
-
-async function runTelegramSettlementCheck() {
-  const client = await getRedis();
-  if (!client && process.env.NODE_ENV === 'production') {
-    console.warn('Settlement tracker is using memory only. Configure REDIS_URL for reliable persistence across Render restarts.');
-  }
-
-  const slips = await listTrackedSlips(client);
-  const now = new Date();
-  const matchday = previousWatDateKey(now);
-  const recentCutoff = now.getTime() - Math.max(2, Math.min(14, parseInt(process.env.TELEGRAM_SETTLEMENT_LOOKBACK_DAYS || '3', 10))) * 86400000;
-
-  // Always include the just-ended WAT matchday, plus any still-unresolved recent slip.
-  // This prevents a legitimate winner from being skipped because it was tracked on a
-  // neighboring UTC/WAT date or remained pending during an earlier check.
-  const matchdaySlips = slips.filter(x => {
-    const createdMs = new Date(x.createdAt).getTime();
-    const sameMatchday = watDateKey(new Date(x.createdAt)) === matchday;
-    const unresolvedRecent = Number.isFinite(createdMs) &&
-      createdMs >= recentCutoff &&
-      !['won','lost'].includes(String(x.status || '').toLowerCase());
-    return sameMatchday || unresolvedRecent;
-  });
-
-  const stats = {
-    matchday,
-    tracked: slips.length,
-    matchdayTickets: matchdaySlips.length,
-    checked: 0,
-    boomed: 0,
-    lost: 0,
-    pending: 0,
-    errors: 0,
-    legWon: 0,
-    legLost: 0,
-    legPush: 0,
-    legPending: 0,
-    legUnknown: 0,
-  };
-  const ticketReports = [];
-  const checkedCodes = new Set();
-
-  for (const slip of matchdaySlips) {
-    const codeKey=String(slip.shareCode||'').toUpperCase();
-    if (!codeKey || checkedCodes.has(codeKey)) continue;
-    checkedCodes.add(codeKey);
-    try {
-      let booking = await getBooking(slip.shareCode, { fresh: true });
-      let evaluation = evaluateBooking(booking);
-
-      // If SportyBet/Parse.bot still says PENDING after the matchday has ended,
-      // retry a few times with a fresh request. This treats PENDING as upstream
-      // settlement lag, not as evidence that the games are still live.
-      const retryCount = Math.max(0, Math.min(4, parseInt(process.env.TELEGRAM_SETTLEMENT_RETRIES || '2', 10)));
-      const retryDelayMs = Math.max(1000, Math.min(30000, parseInt(process.env.TELEGRAM_SETTLEMENT_RETRY_DELAY_MS || '5000', 10)));
-      for (let attempt = 0; evaluation.status === 'pending' && attempt < retryCount; attempt++) {
-        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
-        booking = await getBooking(slip.shareCode, { fresh: true });
-        evaluation = evaluateBooking(booking);
-      }
-      stats.checked++;
-
-      const counts=evaluation.counts || {};
-      stats.legWon += Number(counts.won||0);
-      stats.legLost += Number(counts.lost||0);
-      stats.legPush += Number(counts.push||0);
-      stats.legPending += Number(counts.pending||0);
-      stats.legUnknown += Number(counts.unknown||0);
-
-      const patch = {
-        status: evaluation.status,
-        lastCheckedAt: new Date().toISOString(),
-        lastStatusDetail: evaluation,
-      };
-
-      if (evaluation.status === 'won') {
-        stats.boomed++;
-        // Keep the old one-time success-alert fields for compatibility.
-        if (!slip.successAlertSent) {
-          patch.successAlertSent = true;
-          patch.successAlertSentAt = new Date().toISOString();
-        }
-      } else if (evaluation.status === 'lost') {
-        stats.lost++;
-      } else {
-        stats.pending++;
-      }
-
-      await updateTrackedSlip(client, slip.shareCode, patch);
-      ticketReports.push(telegramSettlementTicketText({ ...slip, ...patch }, evaluation));
-    } catch (err) {
-      stats.errors++;
-      console.error(`Settlement check ${slip.shareCode}:`, err.message);
-      await updateTrackedSlip(client, slip.shareCode, {
-        lastCheckedAt: new Date().toISOString(),
-        lastStatusDetail: { error: err.message }
-      }).catch(()=>{});
-      ticketReports.push([
-        `⚠️ CHECK ERROR — ${slip.targetOdds || 'Ticket'}`,
-        `Code: ${slip.shareCode}`,
-        `Reason: ${err.message}`,
-      ].join('\n'));
-    }
-    await new Promise(resolve => setTimeout(resolve, 350));
-  }
-
-  if (String(process.env.TELEGRAM_SETTLEMENT_SUMMARY || 'true').toLowerCase() !== 'false') {
-    const header = [
-      `📋 MATCHDAY SETTLEMENT — ${matchday} WAT`,
-      `Tickets checked (matchday + unresolved recent): ${stats.matchdayTickets}`,
-      `Checked: ${stats.checked}`,
-      `💥 BOOMED / full ticket won: ${stats.boomed}`,
-      `❌ Tickets lost: ${stats.lost}`,
-      `⏳ SportyBet settlement still pending: ${stats.pending}`,
-      '',
-      `TOTAL LEG RESULTS`,
-      `✅ Won: ${stats.legWon}`,
-      `❌ Lost: ${stats.legLost}`,
-      `↩️ Void/Push: ${stats.legPush}`,
-      `⏳ Pending: ${stats.legPending}`,
-      `❓ Unknown: ${stats.legUnknown}`,
-      ...(stats.errors ? [`⚠️ Check errors: ${stats.errors}`] : []),
-    ].join('\n');
-
-    // Expected daily set is small (SAFE, 10x, 20x, 1000x, 10000x), but split
-    // messages defensively to stay below Telegram's message size limit.
-    await sendTelegramMessage(header);
-    for (const report of ticketReports) {
-      await sendTelegramMessage(report);
-    }
-  }
-  return stats;
-}
 
 // Copy Hub is isolated from the Auto Builder and disabled by default.
 // It only reads public source data + existing booking-code data and stores its own leaderboard state.
@@ -2685,20 +2513,6 @@ app.post('/api/copy/check-settlements', express.json({ limit: '4kb' }), async (r
   }
 });
 
-app.post('/api/telegram/check-settlements', express.json(), async (req, res) => {
-  try {
-    const secret = process.env.TELEGRAM_JOB_SECRET;
-    if (!secret || req.headers['x-telegram-job-secret'] !== secret) return res.status(401).json({ error: 'unauthorized' });
-    const stats = await runTelegramSettlementCheck();
-    res.json({ ok: true, checkedAt: new Date().toISOString(), ...stats });
-  } catch (err) {
-    console.error('Telegram settlement job error:', err.message);
-    res.status(err.code === 'TELEGRAM_CONFIG_MISSING' ? 503 : 502).json({
-      error: err.code === 'TELEGRAM_CONFIG_MISSING' ? 'Telegram integration is not configured yet' : 'Telegram settlement job failed',
-      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
-    });
-  }
-});
 
 
 
