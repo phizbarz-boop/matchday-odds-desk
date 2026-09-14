@@ -2404,6 +2404,7 @@ function telegramSettlementTicketText(slip, evaluation) {
     `Selections: ${total}`,
     settlementBreakdownText(evaluation, total),
     ...(evaluation?.topStatus && evaluation.topStatus !== 'unknown' ? [`SportyBet ticket status: ${evaluation.topStatus.toUpperCase()}`] : []),
+    ...(evaluation?.rawBookingSettlement != null ? [`Raw bookingSettlement: ${String(evaluation.rawBookingSettlement)}`] : []),
   ].join('\n');
 }
 
@@ -2414,8 +2415,22 @@ async function runTelegramSettlementCheck() {
   }
 
   const slips = await listTrackedSlips(client);
-  const matchday = previousWatDateKey(new Date());
-  const matchdaySlips = slips.filter(x => watDateKey(new Date(x.createdAt)) === matchday);
+  const now = new Date();
+  const matchday = previousWatDateKey(now);
+  const recentCutoff = now.getTime() - Math.max(2, Math.min(14, parseInt(process.env.TELEGRAM_SETTLEMENT_LOOKBACK_DAYS || '3', 10))) * 86400000;
+
+  // Always include the just-ended WAT matchday, plus any still-unresolved recent slip.
+  // This prevents a legitimate winner from being skipped because it was tracked on a
+  // neighboring UTC/WAT date or remained pending during an earlier check.
+  const matchdaySlips = slips.filter(x => {
+    const createdMs = new Date(x.createdAt).getTime();
+    const sameMatchday = watDateKey(new Date(x.createdAt)) === matchday;
+    const unresolvedRecent = Number.isFinite(createdMs) &&
+      createdMs >= recentCutoff &&
+      !['won','lost'].includes(String(x.status || '').toLowerCase());
+    return sameMatchday || unresolvedRecent;
+  });
+
   const stats = {
     matchday,
     tracked: slips.length,
@@ -2432,8 +2447,12 @@ async function runTelegramSettlementCheck() {
     legUnknown: 0,
   };
   const ticketReports = [];
+  const checkedCodes = new Set();
 
   for (const slip of matchdaySlips) {
+    const codeKey=String(slip.shareCode||'').toUpperCase();
+    if (!codeKey || checkedCodes.has(codeKey)) continue;
+    checkedCodes.add(codeKey);
     try {
       const booking = await getBooking(slip.shareCode);
       const evaluation = evaluateBooking(booking);
@@ -2486,7 +2505,7 @@ async function runTelegramSettlementCheck() {
   if (String(process.env.TELEGRAM_SETTLEMENT_SUMMARY || 'true').toLowerCase() !== 'false') {
     const header = [
       `📋 MATCHDAY SETTLEMENT — ${matchday} WAT`,
-      `Daily Auto Pick tickets: ${stats.matchdayTickets}`,
+      `Tickets checked (matchday + unresolved recent): ${stats.matchdayTickets}`,
       `Checked: ${stats.checked}`,
       `💥 BOOMED / full ticket won: ${stats.boomed}`,
       `❌ Tickets lost: ${stats.lost}`,
