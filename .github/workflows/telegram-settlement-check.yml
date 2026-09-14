@@ -3,9 +3,10 @@ name: Matchday Daily Slip Settlement Check
 on:
   workflow_dispatch:
   schedule:
-    # Once daily at 00:00 UTC = 01:00 in Lagos (WAT).
-    # This checks the WAT matchday that ended at midnight.
-    - cron: "0 0 * * *"
+    # Settlement reconciliation at 01:00, 02:00, 03:00 and 05:00 WAT.
+    # GitHub cron is UTC: 00:00, 01:00, 02:00 and 04:00 UTC.
+    # This allows SportyBet/Parse.bot extra time to update late bookingSettlement values.
+    - cron: "0 0,1,2,4 * * *"
 
 concurrency:
   group: matchday-telegram-settlement-check

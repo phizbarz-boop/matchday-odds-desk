@@ -2396,7 +2396,7 @@ function telegramSettlementTicketText(slip, evaluation) {
     ? '💥 BOOMED — ALL WON'
     : finalLost
       ? '❌ TICKET LOST'
-      : '⏳ TICKET NOT FULLY SETTLED';
+      : '⏳ SPORTYBET SETTLEMENT STILL PENDING';
   return [
     `${title} — ${slip.targetOdds || 'Ticket'}`,
     `Code: ${slip.shareCode}`,
@@ -2404,7 +2404,7 @@ function telegramSettlementTicketText(slip, evaluation) {
     `Selections: ${total}`,
     settlementBreakdownText(evaluation, total),
     ...(evaluation?.topStatus && evaluation.topStatus !== 'unknown' ? [`SportyBet ticket status: ${evaluation.topStatus.toUpperCase()}`] : []),
-    ...(evaluation?.rawBookingSettlement != null ? [`Raw bookingSettlement: ${String(evaluation.rawBookingSettlement)}`] : []),
+    ...(evaluation?.rawBookingSettlement != null ? [`Raw bookingSettlement: ${typeof evaluation.rawBookingSettlement === 'object' ? JSON.stringify(evaluation.rawBookingSettlement) : String(evaluation.rawBookingSettlement)}`] : []),
   ].join('\n');
 }
 
@@ -2454,8 +2454,19 @@ async function runTelegramSettlementCheck() {
     if (!codeKey || checkedCodes.has(codeKey)) continue;
     checkedCodes.add(codeKey);
     try {
-      const booking = await getBooking(slip.shareCode);
-      const evaluation = evaluateBooking(booking);
+      let booking = await getBooking(slip.shareCode, { fresh: true });
+      let evaluation = evaluateBooking(booking);
+
+      // If SportyBet/Parse.bot still says PENDING after the matchday has ended,
+      // retry a few times with a fresh request. This treats PENDING as upstream
+      // settlement lag, not as evidence that the games are still live.
+      const retryCount = Math.max(0, Math.min(4, parseInt(process.env.TELEGRAM_SETTLEMENT_RETRIES || '2', 10)));
+      const retryDelayMs = Math.max(1000, Math.min(30000, parseInt(process.env.TELEGRAM_SETTLEMENT_RETRY_DELAY_MS || '5000', 10)));
+      for (let attempt = 0; evaluation.status === 'pending' && attempt < retryCount; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        booking = await getBooking(slip.shareCode, { fresh: true });
+        evaluation = evaluateBooking(booking);
+      }
       stats.checked++;
 
       const counts=evaluation.counts || {};
@@ -2509,7 +2520,7 @@ async function runTelegramSettlementCheck() {
       `Checked: ${stats.checked}`,
       `💥 BOOMED / full ticket won: ${stats.boomed}`,
       `❌ Tickets lost: ${stats.lost}`,
-      `⏳ Tickets pending/unknown: ${stats.pending}`,
+      `⏳ SportyBet settlement still pending: ${stats.pending}`,
       '',
       `TOTAL LEG RESULTS`,
       `✅ Won: ${stats.legWon}`,
