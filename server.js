@@ -2297,12 +2297,12 @@ async function runTelegramDailyPicks() {
   // Telegram-only probability plans.
   // Website Auto Builder behavior is intentionally untouched.
   const plans = [
-    { label: '10000', targetOdds: 10000, minProbability: 80, mixedMarkets: true, allSports: true },
-    { label: '1000', targetOdds: 1000, minProbability: 80, mixedMarkets: true },
-    { label: '100', targetOdds: 100, minProbability: 80 },
-    { label: '50', targetOdds: 50, minProbability: 80 },
-    { label: '20', targetOdds: 20, minProbability: 80 },
-    { label: '10', targetOdds: 10, minProbability: 80 },
+    { label: '10000', targetOdds: 10000, minProbability: 80, mixedMarkets: true, allSports: true, maxSelections: 40 },
+    { label: '1000', targetOdds: 1000, minProbability: 80, mixedMarkets: true, maxSelections: 40 },
+    { label: '100', targetOdds: 100, minProbability: 80, maxSelections: 30 },
+    { label: '50', targetOdds: 50, minProbability: 80, maxSelections: 30 },
+    { label: '20', targetOdds: 20, minProbability: 80, maxSelections: 25 },
+    { label: '10', targetOdds: 10, minProbability: 80, maxSelections: 25 },
     { label: '1.30–5.00 SAFE', targetOdds: 5.00, minProbability: 90, minOdds: 1.30, maxOdds: 5.00 },
   ];
 
@@ -2345,6 +2345,7 @@ async function runTelegramDailyPicks() {
     'Targets: 10000, 1000, 100, 50, 20, 10, 1.30–5.00 SAFE',
     '10x / 20x / 50x / 100x: match winners only | minimum probability 80% per selection',
     '1000x / 10000x: winners FIRST; add other supported markets only when winners cannot reach the target | minimum probability 80%',
+    'Selection ceilings: 10x/20x up to 25; 50x/100x up to 30; 1000x/10000x up to 40 (booking limit)',
     '10000x: scan all six sports regardless of TELEGRAM_SPORT_SCOPE',
     'SAFE: match winners only | priority Tennis + Volleyball + Ice Hockey + Handball + Basketball | minimum probability 90% | combined odds 1.30–5.00',
     '10x / 20x / 50x / 100x priority: Tennis + Volleyball + Ice Hockey + Handball + Basketball first; Football only as fallback',
@@ -2361,6 +2362,8 @@ async function runTelegramDailyPicks() {
 
   const output = [];
   for (const plan of plans) {
+    // Per-target ceiling; the global env setting may only lower it, not bypass it.
+    const planMaxSelections = Math.min(maxSelections, plan.maxSelections || maxSelections);
     const isSafePlan = plan.minOdds != null && plan.maxOdds != null;
     const baseCandidates = isSafePlan ? safeTodayCandidates : (plan.allSports ? globalTodayCandidates : saneCandidates);
     const planCandidates = baseCandidates
@@ -2376,8 +2379,8 @@ async function runTelegramDailyPicks() {
     }
 
     const picked = plan.mixedMarkets
-      ? selectTelegramHighOddsWinnerFirst(plan, planCandidates, maxSelections)
-      : selectTelegramPlanWithPriority(plan, planCandidates, maxSelections);
+      ? selectTelegramHighOddsWinnerFirst(plan, planCandidates, planMaxSelections)
+      : selectTelegramPlanWithPriority(plan, planCandidates, planMaxSelections);
     const result = picked.result;
 
     if (!result.selections.length) {
@@ -2401,7 +2404,7 @@ async function runTelegramDailyPicks() {
     // Final safety check: only high targets may include supplemental markets.
     // No more than one selection per fixture and no more than 40 legs per ticket.
     const uniqueEvents = new Set(result.selections.map(c => String(c.eventId)));
-    if (result.selections.length > maxSelections || uniqueEvents.size !== result.selections.length ||
+    if (result.selections.length > planMaxSelections || uniqueEvents.size !== result.selections.length ||
         result.selections.some(c => Number(c.probability) < plan.minProbability ||
           !(plan.mixedMarkets
             ? TELEGRAM_HIGH_ODDS_BET_TYPE_SET.has(String(c.betType || ''))
@@ -2443,6 +2446,7 @@ async function runTelegramDailyPicks() {
         averageQualityScore: result.averageQualityScore,
         estimatedSlipEVPct: result.estimatedSlipEVPct,
         selections: result.selections.length,
+        maxSelections: planMaxSelections,
         shareCode: booking?.shareCode || null,
         unavailable: Array.isArray(booking?.unavailableOutcomes) ? booking.unavailableOutcomes.length : 0,
         prioritySportsOnly: !!picked.priorityOnly,
@@ -2464,6 +2468,7 @@ async function runTelegramDailyPicks() {
     plans: plans.map(p => ({
       target: p.label,
       minProbability: p.minProbability,
+      maxSelections: Math.min(maxSelections, p.maxSelections || maxSelections),
       ...(p.minOdds != null ? { combinedOddsRange: `${p.minOdds.toFixed(2)}-${p.maxOdds.toFixed(2)}` } : {})
     })),
     positiveEdgeRequired: false,
@@ -3311,8 +3316,8 @@ app.get('/api/telegram/status', (req, res) => {
     targets: [10000, 1000, 100, 50, 20, 10, '1.30-5.00 SAFE'],
     sportScope: normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all'),
     rules: {
-      regular: { minProbability: 80, winnerOnly: true, targets: [10,20,50,100], positiveEdgeRequired: false, redFlagProtection: true },
-      highOdds: { minProbability: 80, targets: [1000,10000], winnerFirst: true, supplementalMarketsIfNeeded: true, allSportsFor10000: true, positiveEdgeRequired: false, redFlagProtection: true },
+      regular: { minProbability: 80, winnerOnly: true, targets: [10,20,50,100], selectionCaps: { '10':25, '20':25, '50':30, '100':30 }, positiveEdgeRequired: false, redFlagProtection: true },
+      highOdds: { minProbability: 80, targets: [1000,10000], selectionCaps: { '1000':40, '10000':40 }, winnerFirst: true, supplementalMarketsIfNeeded: true, allSportsFor10000: true, positiveEdgeRequired: false, redFlagProtection: true },
       safe: { minProbability: 90, winnerOnly: true, combinedOddsMin: 1.30, combinedOddsMax: 5.00, positiveEdgeRequired: false, redFlagProtection: true },
     },
     maxSelections: Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10))),
