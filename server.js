@@ -407,7 +407,7 @@ async function loadTelegramDailyCodes(redis, dateKey) {
 function telegramDailyCodesText(snapshot, plan) {
   const codes = Array.isArray(snapshot?.codes) ? snapshot.codes : [];
   const isFree = plan?.id === 'free';
-  const order = ['1.30–5.00 SAFE','1.30–2.00 SAFE','1.30–1.35 SAFE','10','20','50','100','1000','10000'];
+  const order = ['1.30–5.00 SAFE','1.30–2.00 SAFE','1.30–1.35 SAFE','10','20','1000','10000'];
   const byTarget = new Map(codes.map(x => [String(x.targetOdds), x]));
   const lines = ['🎟 TODAY’S AUTO-PICK CODES', '', `Date: ${snapshot?.date || fixtureDateKeyInTimeZone(new Date(), 'Africa/Lagos')} (WAT)`, ''];
   if (!codes.length) {
@@ -2145,7 +2145,7 @@ function telegramSlipText(target, result, booking, sportScope) {
 }
 
 
-const TELEGRAM_PRIORITY_SPORTS = ['tennis','volleyball','hockey','handball','basketball'];
+const TELEGRAM_PRIORITY_SPORTS = ['hockey','basketball','handball','volleyball','tennis'];
 
 function isTelegramPrioritySport(candidate) {
   const sport = String(candidate?.sport || '').toLowerCase();
@@ -2156,6 +2156,37 @@ function isTelegramPrioritySport(candidate) {
     sport.includes('handball') ||
     sport.includes('basket')
   );
+}
+
+// SAFE can use any currently supported market. Prefer ice hockey and
+// basketball first, then the remaining five preferred sports, then football.
+// The 1.30 minimum is the build target; the SAFE range remains 1.30–5.00.
+function selectTelegramSafeWithPriority(plan, candidates, maxSelections) {
+  const options = {
+    targetOdds: plan.minOdds,
+    maxSelections,
+    trials: Number(process.env.TELEGRAM_PICK_TRIALS || 2200),
+    minQualityScore: 0,
+    requirePositiveEV: false,
+  };
+  const inRange = result => result?.selections?.length &&
+    Number(result.combinedOdds) >= plan.minOdds &&
+    Number(result.combinedOdds) <= plan.maxOdds;
+  const hockeyBasketball = candidates.filter(c => {
+    const sport = String(c?.sport || '').toLowerCase();
+    return sport.includes('hockey') || sport.includes('basket');
+  });
+  const fiveSports = candidates.filter(isTelegramPrioritySport);
+  for (const pool of [hockeyBasketball, fiveSports, candidates]) {
+    if (!pool.length) continue;
+    const result = selectAutoBet(pool, options);
+    if (inRange(result)) {
+      return { result, priorityOnly: pool !== candidates,
+        preferredCount: hockeyBasketball.length };
+    }
+  }
+  return { result: selectAutoBet(candidates, options), priorityOnly: false,
+    preferredCount: hockeyBasketball.length };
 }
 
 function selectTelegramPlanWithPriority(plan, candidates, maxSelections) {
@@ -2177,7 +2208,7 @@ function selectTelegramPlanWithPriority(plan, candidates, maxSelections) {
     return odds >= plan.minOdds && odds <= plan.maxOdds;
   };
 
-  // SAFE / 10x / 20x should stay concentrated on the five preferred sports
+  // SAFE and regular targets stay concentrated on the five preferred sports
   // whenever they can produce a valid ticket. Football is only fallback.
   if (resultInsidePlanRange(preferredResult)) {
     return { result: preferredResult, priorityOnly: true, preferredCount: preferred.length };
@@ -2201,7 +2232,7 @@ function isTelegramWinnerSelection(candidate) {
 }
 
 // Other existing, supported markets may supplement 1000x/10000x ONLY.
-// All candidates retain the same 80% per-selection floor and red-flag checks.
+// Candidates retain each target's probability floor and red-flag checks.
 const TELEGRAM_FALLBACK_BET_TYPES = [
   'dc_1x', 'dc_x2', 'dnb', 'over05', 'over15', 'under45',
   'gg_yes', 'ng_no', 'ah_0', 'ah_plus025', 'ah_minus025',
@@ -2287,6 +2318,22 @@ function selectTelegramHighOddsWinnerFirst(plan, candidates, maxSelections) {
   return best;
 }
 
+// For high-odds plans, try the five preferred sports before opening the
+// football fallback. The original winner-first/mixed-market logic stays intact.
+function selectTelegramHighOddsWithSportPriority(plan, candidates, maxSelections) {
+  const preferred = candidates.filter(isTelegramPrioritySport);
+  if (preferred.length) {
+    const first = selectTelegramHighOddsWinnerFirst(plan, preferred, maxSelections);
+    if (first.result?.selections?.length && first.result.reachedTarget) {
+      return { ...first, priorityOnly: true, preferredCount: preferred.length };
+    }
+  }
+  const fallback = selectTelegramHighOddsWinnerFirst(plan, candidates, maxSelections);
+  return { ...fallback,
+    priorityOnly: !!fallback.result?.selections?.length && fallback.result.selections.every(isTelegramPrioritySport),
+    preferredCount: preferred.length };
+}
+
 async function runTelegramDailyPicks() {
   const sportScope = normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all');
   const maxSelections = Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10)));
@@ -2297,12 +2344,10 @@ async function runTelegramDailyPicks() {
   // Telegram-only probability plans.
   // Website Auto Builder behavior is intentionally untouched.
   const plans = [
-    { label: '10000', targetOdds: 10000, minProbability: 80, mixedMarkets: true, allSports: true, maxSelections: 40 },
-    { label: '1000', targetOdds: 1000, minProbability: 80, mixedMarkets: true, maxSelections: 40 },
-    { label: '100', targetOdds: 100, minProbability: 80, maxSelections: 30 },
-    { label: '50', targetOdds: 50, minProbability: 80, maxSelections: 30 },
-    { label: '20', targetOdds: 20, minProbability: 80, maxSelections: 25 },
-    { label: '10', targetOdds: 10, minProbability: 80, maxSelections: 25 },
+    { label: '10000', targetOdds: 10000, minProbability: 70, mixedMarkets: true, allSports: true, maxSelections: 40 },
+    { label: '1000', targetOdds: 1000, minProbability: 70, mixedMarkets: true, maxSelections: 40 },
+    { label: '20', targetOdds: 20, minProbability: 80, maxSelections: 30 },
+    { label: '10', targetOdds: 10, minProbability: 80, maxSelections: 30 },
     { label: '1.30–5.00 SAFE', targetOdds: 5.00, minProbability: 90, minOdds: 1.30, maxOdds: 5.00 },
   ];
 
@@ -2318,16 +2363,14 @@ async function runTelegramDailyPicks() {
     betTypes: TELEGRAM_HIGH_ODDS_BET_TYPES,
   });
 
-  // SAFE retains its five preferred non-football sports regardless of scope.
-  const safeSourceCandidates = globalCandidates;
+  // SAFE considers all supported markets, with hockey/basketball priority.
   const todayCandidates = allCandidates.filter(c => isCandidateToday(c, { timeZone: 'Africa/Lagos' }));
   const saneCandidates = todayCandidates.filter(passesRedFlagFilter);
   const globalTodayCandidates = globalCandidates
     .filter(c => isCandidateToday(c, { timeZone: 'Africa/Lagos' }))
     .filter(passesRedFlagFilter);
   const safeTodayCandidates = globalTodayCandidates
-    .filter(isTelegramWinnerSelection)
-    .filter(isTelegramPrioritySport);
+    .filter(c => TELEGRAM_HIGH_ODDS_BET_TYPE_SET.has(String(c.betType || '')));
   const dateRejected = allCandidates.length - todayCandidates.length;
   const redFlagRejected = todayCandidates.length - saneCandidates.length;
   if (!saneCandidates.length && !safeTodayCandidates.length && !globalTodayCandidates.length) {
@@ -2339,25 +2382,10 @@ async function runTelegramDailyPicks() {
   const dailyCodes = [];
   await saveTelegramDailyCodes(redis, watToday, { generatedAt: new Date().toISOString(), codes: dailyCodes });
   await sendTelegramMessage([
-    '🤖 MATCHDAY ODDS DESK — AUTO PICKS',
-    `Scope: ${sportScope.toUpperCase()}`,
-    `Fixture date: TODAY ONLY (WAT) — ${watToday}`,
-    'Targets: 10000, 1000, 100, 50, 20, 10, 1.30–5.00 SAFE',
-    '10x / 20x / 50x / 100x: match winners only | minimum probability 80% per selection',
-    '1000x / 10000x: winners FIRST; add other supported markets only when winners cannot reach the target | minimum probability 80%',
-    'Selection ceilings: 10x/20x up to 25; 50x/100x up to 30; 1000x/10000x up to 40 (booking limit)',
-    '10000x: scan all six sports regardless of TELEGRAM_SPORT_SCOPE',
-    'SAFE: match winners only | priority Tennis + Volleyball + Ice Hockey + Handball + Basketball | minimum probability 90% | combined odds 1.30–5.00',
-    '10x / 20x / 50x / 100x priority: Tennis + Volleyball + Ice Hockey + Handball + Basketball first; Football only as fallback',
-    'Positive-edge requirement: OFF',
-    'Red-flag protection: ON',
-    `Non-today/invalid-kickoff selections rejected: ${dateRejected}`,
-    `Red-flag selections rejected: ${redFlagRejected}`,
-    `Candidates scanned: ${allCandidates.length}`,
-    `Same-day candidates: ${todayCandidates.length}`,
-    `Generated: ${new Date().toISOString()}`,
-    '',
-    'Model probabilities are estimates, not guarantees.',
+    '🤖 PLOT207 SPORTS • DAILY PICKS',
+    `📅 ${watToday} (WAT)`,
+    '🎯 SAFE • 10x • 20x • 1000x • 10000x',
+    'Probabilities are estimates, not guarantees.',
   ].join('\n'));
 
   const output = [];
@@ -2368,7 +2396,7 @@ async function runTelegramDailyPicks() {
     const baseCandidates = isSafePlan ? safeTodayCandidates : (plan.allSports ? globalTodayCandidates : saneCandidates);
     const planCandidates = baseCandidates
       .filter(c => Number(c.probability || 0) >= plan.minProbability)
-      .filter(c => plan.mixedMarkets
+      .filter(c => (isSafePlan || plan.mixedMarkets)
         ? TELEGRAM_HIGH_ODDS_BET_TYPE_SET.has(String(c.betType || ''))
         : isTelegramWinnerSelection(c));
 
@@ -2378,9 +2406,11 @@ async function runTelegramDailyPicks() {
       continue;
     }
 
-    const picked = plan.mixedMarkets
-      ? selectTelegramHighOddsWinnerFirst(plan, planCandidates, planMaxSelections)
-      : selectTelegramPlanWithPriority(plan, planCandidates, planMaxSelections);
+    const picked = isSafePlan
+      ? selectTelegramSafeWithPriority(plan, planCandidates, planMaxSelections)
+      : plan.mixedMarkets
+        ? selectTelegramHighOddsWithSportPriority(plan, planCandidates, planMaxSelections)
+        : selectTelegramPlanWithPriority(plan, planCandidates, planMaxSelections);
     const result = picked.result;
 
     if (!result.selections.length) {
@@ -2401,12 +2431,12 @@ async function runTelegramDailyPicks() {
       continue;
     }
 
-    // Final safety check: only high targets may include supplemental markets.
+    // Final safety check: SAFE and high targets may use supported markets.
     // No more than one selection per fixture and no more than 40 legs per ticket.
     const uniqueEvents = new Set(result.selections.map(c => String(c.eventId)));
     if (result.selections.length > planMaxSelections || uniqueEvents.size !== result.selections.length ||
         result.selections.some(c => Number(c.probability) < plan.minProbability ||
-          !(plan.mixedMarkets
+          !((isSafePlan || plan.mixedMarkets)
             ? TELEGRAM_HIGH_ODDS_BET_TYPE_SET.has(String(c.betType || ''))
             : isTelegramWinnerSelection(c)))) {
       output.push({ targetOdds: plan.label, error: 'Market / probability / fixture validation failed' });
@@ -3313,12 +3343,12 @@ app.post('/api/telegram/bot/setup', express.json(), async (req, res) => {
 app.get('/api/telegram/status', (req, res) => {
   res.json({
     configured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID && process.env.TELEGRAM_JOB_SECRET),
-    targets: [10000, 1000, 100, 50, 20, 10, '1.30-5.00 SAFE'],
+    targets: [10000, 1000, 20, 10, '1.30-5.00 SAFE'],
     sportScope: normalizeSportScope(process.env.TELEGRAM_SPORT_SCOPE || 'all'),
     rules: {
-      regular: { minProbability: 80, winnerOnly: true, targets: [10,20,50,100], selectionCaps: { '10':25, '20':25, '50':30, '100':30 }, positiveEdgeRequired: false, redFlagProtection: true },
-      highOdds: { minProbability: 80, targets: [1000,10000], selectionCaps: { '1000':40, '10000':40 }, winnerFirst: true, supplementalMarketsIfNeeded: true, allSportsFor10000: true, positiveEdgeRequired: false, redFlagProtection: true },
-      safe: { minProbability: 90, winnerOnly: true, combinedOddsMin: 1.30, combinedOddsMax: 5.00, positiveEdgeRequired: false, redFlagProtection: true },
+      regular: { minProbabilityByTarget: { '10':80, '20':80 }, winnerOnly: true, targets: [10,20], selectionCaps: { '10':30, '20':30 }, prioritySports: TELEGRAM_PRIORITY_SPORTS, positiveEdgeRequired: false, redFlagProtection: true },
+      highOdds: { minProbability: 70, targets: [1000,10000], selectionCaps: { '1000':40, '10000':40 }, winnerFirst: true, prioritySports: TELEGRAM_PRIORITY_SPORTS, supplementalMarketsIfNeeded: true, allSportsFor10000: true, positiveEdgeRequired: false, redFlagProtection: true },
+      safe: { minProbability: 90, winnerOnly: false, supportedMarkets: TELEGRAM_HIGH_ODDS_BET_TYPES, prioritySports: ['hockey','basketball','handball','volleyball','tennis'], primaryPrioritySports: ['hockey','basketball'], combinedOddsMin: 1.30, combinedOddsMax: 5.00, positiveEdgeRequired: false, redFlagProtection: true },
     },
     maxSelections: Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10))),
     scheduler: 'GitHub Actions',
