@@ -960,8 +960,8 @@ app.get('/api/api-football/diagnostics', async (req, res) => {
 app.get('/api/sportybet/odds', async (req, res) => {
   try {
     const kind = String(req.query.market || '1x2').toLowerCase();
-    if (!['1x2', 'gg', 'dc', 'dnb', 'ou05', 'ou15', 'ou45', 'ah', 'oneup', 'corners', 'first_half_team_corners'].includes(kind)) {
-      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, oneup, corners, first_half_team_corners' });
+    if (!['1x2', 'gg', 'dc', 'dnb', 'ou05', 'home_ou05', 'away_ou05', 'home_ou45', 'away_ou45', 'ou15', 'ou45', 'ah', 'oneup', 'corners', 'first_half_team_corners'].includes(kind)) {
+      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou05, home_ou05, away_ou05, home_ou45, away_ou45, ou15, ou45, ah, oneup, corners, first_half_team_corners' });
     }
     const payload = await loadSportyBetMarket(kind);
     res.set('Cache-Control', 'public, max-age=60');
@@ -1291,7 +1291,7 @@ async function addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorne
 
 
 const AUTO_BET_TYPES_BY_SPORT = {
-  football: ['home_win','draw','away_win','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under'],
+  football: ['home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under'],
   basketball: ['basketball_winner','basketball_over','basketball_under'],
   hockey: ['hockey_winner','hockey_over','hockey_under'],
   handball: ['handball_winner','handball_over','handball_under'],
@@ -1334,6 +1334,10 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
   const needFDc = wantsFootball && wantsAny(['dc_1x','dc_x2']);
   const needFDnb = wantsFootball && wantsAny(['dnb']);
   const needFOu05 = wantsFootball && wantsAny(['over05']);
+  const needFHomeOu05 = wantsFootball && wantsAny(['home_over05']);
+  const needFAwayOu05 = wantsFootball && wantsAny(['away_over05']);
+  const needFHomeOu45 = wantsFootball && wantsAny(['home_under45']);
+  const needFAwayOu45 = wantsFootball && wantsAny(['away_under45']);
   const needFOu15 = wantsFootball && wantsAny(['over15']);
   const needFOu45 = wantsFootball && wantsAny(['under45']);
   const needFAh = wantsFootball && wantsAny(['ah_0','ah_plus025','ah_minus025']);
@@ -1378,13 +1382,17 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     }
   };
 
-  let [predictions, f1x2, fgg, fdc, fdnb, fou05, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals, handballWinner, handballTotals, volleyballWinner, volleyballTotals, volleyballSets, tennisWinner, tennisTotals, tennisHandicap] = await Promise.all([
+  let [predictions, f1x2, fgg, fdc, fdnb, fou05, fhomeou05, fawayou05, fhomeou45, fawayou45, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals, handballWinner, handballTotals, volleyballWinner, volleyballTotals, volleyballSets, tennisWinner, tennisTotals, tennisHandicap] = await Promise.all([
     safeMarket('football predictions', wantsFootball, () => loadPredictions(), { matches: [] }),
     safeMarket('football 1X2', needF1x2, () => loadSportyBetMarket('1x2', 'football', autoMarketOptions)),
     safeMarket('football GG/NG', needFGg, () => loadSportyBetMarket('gg', 'football', autoMarketOptions)),
     safeMarket('football Double Chance', needFDc, () => loadSportyBetMarket('dc', 'football', autoMarketOptions)),
     safeMarket('football Draw No Bet', needFDnb, () => loadSportyBetMarket('dnb', 'football', autoMarketOptions)),
     safeMarket('football Over 0.5', needFOu05, () => loadSportyBetMarket('ou05', 'football', autoMarketOptions)),
+    safeMarket('football Home Over 0.5', needFHomeOu05, () => loadSportyBetMarket('home_ou05', 'football', autoMarketOptions)),
+    safeMarket('football Away Over 0.5', needFAwayOu05, () => loadSportyBetMarket('away_ou05', 'football', autoMarketOptions)),
+    safeMarket('football Home Under 4.5', needFHomeOu45, () => loadSportyBetMarket('home_ou45', 'football', autoMarketOptions)),
+    safeMarket('football Away Under 4.5', needFAwayOu45, () => loadSportyBetMarket('away_ou45', 'football', autoMarketOptions)),
     safeMarket('football Over 1.5', needFOu15, () => loadSportyBetMarket('ou15', 'football', autoMarketOptions)),
     safeMarket('football Under 4.5', needFOu45, () => loadSportyBetMarket('ou45', 'football', autoMarketOptions)),
     safeMarket('football Asian Handicap', needFAh, () => loadSportyBetMarket('ah', 'football', autoMarketOptions)),
@@ -1415,7 +1423,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
 
   return buildCandidates({
     predictions,
-    footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou05: fou05, ou15: fou15, ou45: fou45, ah: fah, corners: fcorners, first_half_team_corners: f1hteamcorners, oneup: foneup },
+    footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou05: fou05, home_ou05: fhomeou05, away_ou05: fawayou05, home_ou45: fhomeou45, away_ou45: fawayou45, ou15: fou15, ou45: fou45, ah: fah, corners: fcorners, first_half_team_corners: f1hteamcorners, oneup: foneup },
     basketballWinner,
     basketballTotals,
     hockeyWinner,
@@ -1555,11 +1563,20 @@ function directSavedFootballAnalyzerCandidate(leg, prediction) {
   let probability=null, betType=null, probabilitySource=null;
 
   if(/over 0 5/.test(text) || /total 0 5/.test(text) && /over/.test(text)){
-    probability=Number(prediction.o05); betType='over05';
+    const market=analyzerNormText(leg.marketDesc||'');
+    const side=/\bhome\b/.test(market)?'home':/\baway\b/.test(market)?'away':null;
+    probability=side==='home'?Number(prediction.homeO05):side==='away'?Number(prediction.awayO05):Number(prediction.o05);
+    betType=side==='home'?'home_over05':side==='away'?'away_over05':'over05';
+    // Do not treat a missing saved team-goals model as a zero/guessed probability.
+    if(side && prediction[side==='home'?'homeO05':'awayO05']==null)return null;
   } else if(/over 1 5/.test(text) || /total 1 5/.test(text) && /over/.test(text)){
     probability=Number(prediction.o15); betType='over15';
   } else if(/under 4 5/.test(text) || /total 4 5/.test(text) && /under/.test(text)){
-    probability=Number(prediction.u45); betType='under45';
+    const market=analyzerNormText(leg.marketDesc||'');
+    const side=/\bhome\b/.test(market)?'home':/\baway\b/.test(market)?'away':null;
+    if(side && prediction[side==='home'?'homeU45':'awayU45']==null)return null;
+    probability=side==='home'?Number(prediction.homeU45):side==='away'?Number(prediction.awayU45):Number(prediction.u45);
+    betType=side==='home'?'home_under45':side==='away'?'away_under45':'under45';
   }
 
   if(!betType || !Number.isFinite(probability) || probability<=0) return null;
@@ -1715,9 +1732,18 @@ function analyzerBetTypesFromBooking(rows, sportScope) {
         if (/1st half|first half|1h/.test(text)) {
           set.add('corners_over'); set.add('corners_under');
         } else { set.add('corners_over'); set.add('corners_under'); }
-      } else if (/over 0 5/.test(text)) set.add('over05');
+      } else if (/over 0 5/.test(text)) {
+        if (/\bhome\b/.test(analyzerNormText(leg.marketDesc))) set.add('home_over05');
+        else if (/\baway\b/.test(analyzerNormText(leg.marketDesc))) set.add('away_over05');
+        else set.add('over05');
+      }
       else if (/over 1 5/.test(text)) set.add('over15');
-      else if (/under 4 5/.test(text)) set.add('under45');
+      else if (/under 4 5/.test(text)) {
+        const market=analyzerNormText(leg.marketDesc);
+        if (/\bhome\b/.test(market)) set.add('home_under45');
+        else if (/\baway\b/.test(market)) set.add('away_under45');
+        else set.add('under45');
+      }
       else if (/both teams to score|btts| gg /.test(` ${text} `)) { set.add('gg_yes'); set.add('ng_no'); }
       else if (/double chance|1x|x2/.test(text)) { set.add('dc_1x'); set.add('dc_x2'); }
       else if (/draw no bet|dnb/.test(text)) set.add('dnb');
@@ -2207,7 +2233,7 @@ function isTelegramWinnerSelection(candidate) {
 // Other existing, supported markets are eligible for 10x, 20x, 1000x and 10000x.
 // Probability floors and red-flag protection still apply to every leg.
 const TELEGRAM_FALLBACK_BET_TYPES = [
-  'draw', 'dc_1x', 'dc_x2', 'dnb', 'over05', 'over15', 'under45',
+  'draw', 'dc_1x', 'dc_x2', 'dnb', 'over05', 'home_over05', 'away_over05', 'home_under45', 'away_under45', 'over15', 'under45',
   'gg_yes', 'ng_no', 'ah_0', 'ah_plus025', 'ah_minus025',
   'corners_over', 'corners_under',
   'basketball_over', 'basketball_under', 'hockey_over', 'hockey_under',
@@ -2615,7 +2641,7 @@ function telegramAiTicketText(result, booking, request, plan) {
 function telegramAiBetTypesForSport(planId, sport) {
   const allowed = new Set(telegramAiAllowedBetIdsForPlan(planId));
   const bySport = {
-    football: ['home_win','draw','away_win','corners_over','corners_under','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
+    football: ['home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','corners_over','corners_under','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
     basketball: ['basketball_winner','basketball_over','basketball_under'],
     hockey: ['hockey_winner','hockey_over','hockey_under'],
     handball: ['handball_winner','handball_over','handball_under'],
@@ -2856,7 +2882,7 @@ Current builder settings: ${JSON.stringify(b)}.
 Valid action values: chat, ticket, builder, plans, account, analyze.
 For ticket actions, only set fields the user clearly requested; the app merges them with current settings.
 Sport values: football, basketball, hockey, all. Do not bypass subscription restrictions.
-Bet IDs: home_win, draw, away_win, oneup, corners_over, corners_under, first_half_home_team_corners, first_half_away_team_corners, dc_1x, dc_x2, dnb, over05, over15, under45, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, hockey_winner, hockey_over, hockey_under.
+Bet IDs: home_win, draw, away_win, oneup, corners_over, corners_under, first_half_home_team_corners, first_half_away_team_corners, dc_1x, dc_x2, dnb, over05, home_over05, away_over05, home_under45, away_under45, over15, under45, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, hockey_winner, hockey_over, hockey_under.
 If the user asks to build/rebuild/replace/remove selections but the requested transformation cannot be safely represented by these parameters, explain what can be changed and ask one concise question instead of pretending it was done.
 If discussing betting, do not promise wins or guaranteed profit.`;
   const input=[
