@@ -1,25 +1,29 @@
-# Daily refresh setup (current)
+# CURRENT: unified daily predictions refresh (all six sports)
 
-All times Nigeria (WAT = UTC+1). GitHub Actions runs schedules on the default branch.
+One GitHub Actions workflow: `.github/workflows/refresh.yml`.
+One daily cron: `20 6 * * *` (06:20 UTC = **07:20 Nigeria/WAT**).
+At that trigger, **four jobs run in parallel**, subject to GitHub runner availability:
 
-- 07:00 WAT — `refresh.yml`: Football, Basketball and Ice Hockey. The action
-  POSTs `/api/refresh` then verifies that `/api/predictions.generatedAt` has
-  moved forward before marking the job successful. The API starts the refresh
-  in the background, so an HTTP 200 alone does not indicate completion.
-- 07:05 WAT — `handball-network-collector-v4.yml`: independent daily Handball job.
-- 07:10 WAT — `volleyball-network-collector-v1.yml`: independent daily Volleyball job.
-- 07:15 WAT — `tennis-network-collector-v4.yml`: independent daily Tennis job.
-- 08:30 WAT — `telegram-picks.yml`: ONE scheduled Telegram Auto Pick run.
+- Football + Basketball + Ice Hockey: POST `/api/refresh`; wait until nonempty predictions with a newer `generatedAt` are saved.
+- Handball: collect SportyBet fixtures and publish the Handball snapshot; verify its website status API has fresh fixtures and outcomes.
+- Volleyball: collect and publish the Volleyball snapshot; verify its website status API has fresh fixtures and outcomes.
+- Tennis: collect and publish the Tennis snapshot; verify its website status API has fresh fixtures and outcomes.
 
-The individual collectors are not duplicated in the core refresh. They
-require the SportySocial credentials and `TELEGRAM_JOB_SECRET` in GitHub
-Actions Secrets to publish their snapshots. Their logs show the publication
-result, or fail with a clear error. Football/Basketball/Hockey refresh needs
-`REFRESH_SECRET`. Telegram Auto Pick needs `TELEGRAM_JOB_SECRET`.
+The three collector-specific workflows are **manual recovery only** (`workflow_dispatch`);
+they have no scheduled cron. This avoids duplicate collection and duplicated API usage.
+Collector failures (including snapshots with zero outcomes) now mark their individual jobs red,
+while other jobs may still succeed. A green core refresh does not imply every other job succeeded.
 
-GitHub schedules are best effort, NOT an exactly-once execution guarantee.
-Check that Actions is enabled and these workflow files are on the repository's
-DEFAULT BRANCH. To catch up after a missed schedule, run the workflows manually
-in time order. Do not manually rerun Telegram if it already posted today,
-since this version does not have a persistent exactly-once send lock.
-`REDIS_URL` on Render is recommended to persist predictions across restarts.
+Telegram Auto Picks remain in a separate workflow with **one daily cron at 08:25 WAT**
+(`25 7 * * *` UTC). The 65-minute separation provides time but is NOT an
+execution-order guarantee if GitHub jobs are delayed. The server's daily
+Telegram Redis lock and schedule window are unchanged.
+
+Requirements: GitHub secrets `REFRESH_SECRET`, `SPORTYSOCIAL_LOGIN_ID`,
+`SPORTYSOCIAL_PASSWORD`, `TELEGRAM_JOB_SECRET`; corresponding Render secrets
+and a configured `REDIS_URL` for persistence across instances/restarts.
+Update the GitHub **default branch**, including `.github/workflows`, and deploy
+updated `server.js` to Render for the Handball status endpoint correction.
+Use the single Daily Predictions Refresh workflow's manual Run workflow button
+for all six sports together; individual manual workflows remain for recovery.
+GitHub scheduled starts are best-effort and can be delayed or occasionally missed.

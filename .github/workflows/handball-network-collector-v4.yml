@@ -1,10 +1,7 @@
 name: Plot207 Handball Collector V4
 
-# 06:05 UTC = 07:05 Nigerian time (WAT).
 on:
-  schedule:
-    - cron: '5 6 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch: {} # Manual recovery only. Automated by refresh.yml at 07:20 WAT.
 
 permissions:
   contents: read
@@ -15,7 +12,7 @@ concurrency:
 
 jobs:
   test-handball-v4:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '5 6 * * *'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

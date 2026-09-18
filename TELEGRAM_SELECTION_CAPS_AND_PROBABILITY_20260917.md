@@ -6,5 +6,5 @@
 - All ticket targets prioritize Ice Hockey, Basketball, Handball, Volleyball, and Tennis; Football is fallback where available.
 - SAFE retains its existing 90% threshold.
 - Global TELEGRAM_MAX_SELECTIONS can reduce these per-target ceilings.
-- Scheduled workflow stays once daily at 07:30 UTC = 08:30 WAT.
+- Scheduled workflow runs once daily at 07:25 UTC = 08:25 WAT.
 - This change does not affect interactive Telegram AI plans or Website Auto Builder.

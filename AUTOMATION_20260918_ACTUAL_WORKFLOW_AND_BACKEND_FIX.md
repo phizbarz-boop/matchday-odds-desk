@@ -1,3 +1,9 @@
+# HISTORICAL CONFIGURATION — SUPERSEDED
+
+The scheduling table below describes a previous revision. The current setup is in `ALL_SPORTS_DAILY_REFRESH.md` and `UNIFIED_REFRESH_0720_WAT.md`: one 07:20 WAT unified six-sport workflow, three manual-only collector workflows, Telegram at 08:25 WAT.
+
+---
+
 # September 18, 2026 — Actual workflow + server timing repair
 
 The ZIP received from the user still had an OLD Telegram cron in the *actual*
@@ -11,11 +17,11 @@ not evidence that those workflow changes had reached GitHub.
 
 | GitHub Actions file | One UTC cron | Nigeria/WAT (UTC+1) |
 |---|---|---|
-| `.github/workflows/refresh.yml` | `0 6 * * *` | 07:00: Football + Basketball + Ice Hockey |
+| `.github/workflows/refresh.yml` | `20 6 * * *` | 07:20: Football + Basketball + Ice Hockey |
 | `.github/workflows/handball-network-collector-v4.yml` | `5 6 * * *` | 07:05: Handball |
 | `.github/workflows/volleyball-network-collector-v1.yml` | `10 6 * * *` | 07:10: Volleyball |
 | `.github/workflows/tennis-network-collector-v4.yml` | `15 6 * * *` | 07:15: Tennis |
-| `.github/workflows/telegram-picks.yml` | `30 7 * * *` | 08:30: Telegram Auto Picks ONLY ONCE |
+| `.github/workflows/telegram-picks.yml` | `25 7 * * *` | 08:25: Telegram Auto Picks ONLY ONCE |
 
 None of these workflows has an America/New_York timezone. Each schedule uses an
 explicit UTC cron, and each job checks that its triggering schedule is the
@@ -27,10 +33,10 @@ background processing is not treated as a completed refresh.
 ## Backend safeguards (must also deploy to Render)
 
 - Automatic `/api/refresh` calls are rejected with HTTP 409 outside
-  **07:00–08:15 WAT**. Explicit authorized manual recovery is permitted using
+  **07:20–08:15 WAT**. Explicit authorized manual recovery is permitted using
   header `x-matchday-run-mode: manual` (set by `workflow_dispatch`).
 - Automatic `/api/telegram/daily-picks` calls are rejected with HTTP 409 outside
-  **08:30–09:30 WAT**. This grace period allows a moderately delayed GitHub job,
+  **08:25–09:25 WAT**. This grace period allows a moderately delayed GitHub job,
   but prevents unintended night/evening posts. Manual recovery is possible
   outside this window only if a daily Telegram run has not already started.
 - Telegram uses a Redis atomic daily lock (`SET NX`) keyed to the **WAT date**.
@@ -52,7 +58,7 @@ background processing is not treated as a completed refresh.
    `TELEGRAM_JOB_SECRET`, with corresponding GitHub Actions secrets. Do not
    place any secret values in the repository.
 3. In GitHub > Actions verify the *real YAML on the default branch* now has
-   `30 7 * * *` for Telegram and `0 6 * * *` for Daily Predictions Refresh.
+   `30 7 * * *` for Telegram and `20 6 * * *` for Daily Predictions Refresh.
    Verify the independent collector schedules and workflows are enabled.
 4. Inspect Render Cron Jobs or other schedulers for OLD tasks that POST to
    `/api/refresh` or `/api/telegram/daily-picks`. Disable redundant tasks.

@@ -1140,7 +1140,6 @@ app.get('/api/handball/status', async (req,res)=>{
       fixtures:Array.isArray(snap?.events)?snap.events.length:0,
       winnerRows:winner.rows.length,
       totalsRows:totals.rows.length,
-      setRows:sets.rows.length,
       apiSportsConfigured:!!handballApiSportsKey(),
       apiSportsMatched:Number(snap?.apiSportsMatched||0),
       apiSportsTotal:Number(snap?.apiSportsTotal||0),
@@ -3270,8 +3269,8 @@ app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
   const today = watDateKey();
   // Unmarked requests (including old Render Cron jobs) are AUTOMATIC, not manual.
   if (!manual && !isScheduledTime('telegram')) {
-    console.error(`[Telegram schedule guard] Rejected automatic trigger outside 08:30-09:30 WAT: ${new Date().toISOString()}`);
-    return res.status(409).json({ error: 'Outside permitted Telegram daily window (08:30-09:30 WAT)', code: 'TELEGRAM_WRONG_TIME', date: today });
+    console.error(`[Telegram schedule guard] Rejected automatic trigger outside 08:25-09:25 WAT: ${new Date().toISOString()}`);
+    return res.status(409).json({ error: 'Outside permitted Telegram daily window (08:25-09:25 WAT)', code: 'TELEGRAM_WRONG_TIME', date: today });
   }
   let redis;
   let token;
@@ -3401,8 +3400,8 @@ app.post('/api/refresh', express.json(), (req, res) => {
   }
   const manual = req.headers['x-matchday-run-mode'] === 'manual';
   if (!manual && !isScheduledTime('refresh')) {
-    console.error(`[Prediction schedule guard] Rejected automatic refresh outside 07:00-08:15 WAT: ${new Date().toISOString()}`);
-    return res.status(409).json({ error: 'Outside permitted daily predictions window (07:00-08:15 WAT)', code: 'REFRESH_WRONG_TIME', date: watDateKey() });
+    console.error(`[Prediction schedule guard] Rejected automatic refresh outside 07:20-08:15 WAT: ${new Date().toISOString()}`);
+    return res.status(409).json({ error: 'Outside permitted daily predictions window (07:20-08:15 WAT)', code: 'REFRESH_WRONG_TIME', date: watDateKey() });
   }
   // Manual requests are explicitly permitted for recovery if scheduled refresh failed.
   const { spawn } = require('child_process');
