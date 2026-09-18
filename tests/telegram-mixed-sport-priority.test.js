@@ -21,17 +21,17 @@ test('tier order: Ice Hockey and Basketball, then Handball, Volleyball, Tennis, 
     assert.equal(telegramSportTier({ sport }), tier);
 });
 
-test('10x/20x allow mixed Over/Under and stop before fallback when hockey/basketball reach target', () => {
-  const primary = Array.from({length: 12}, (_, n) => make(n % 2 ? 'Basketball' : 'Ice Hockey', `${n}`, n % 2 ? 'basketball_under' : 'hockey_over', 1.5, 82));
+test('2x/3x permit SAFE markets with Ice Hockey/Basketball first at 90% probability', () => {
+  const primary = Array.from({length: 12}, (_, n) => make(n % 2 ? 'Basketball' : 'Ice Hockey', `${n}`, n % 2 ? 'basketball_under' : 'hockey_over', 1.5, 91));
   const fallback = [make('Football', 'fb', 'home_win', 20, 99), make('Handball','hb','handball_winner',20,99)];
-  for (const target of [10,20]) {
-    const selected = pick(target, 80, [...primary, ...fallback], 30);
+  for (const target of [2,3]) {
+    const selected = pick(target, 90, [...primary, ...fallback], 40);
     assert.equal(selected.result.reachedTarget, true);
     assert.equal(selected.fallbackTier, 0);
     assert.equal(selected.priorityOnly, true);
     assert.ok(selected.result.selections.every(c => /^(Ice Hockey|Basketball)$/.test(c.sport)));
     assert.ok(selected.result.selections.some(c => /over|under/.test(c.betType)));
-    assert.ok(selected.result.selections.every(c => c.probability >= 80));
+    assert.ok(selected.result.selections.every(c => c.probability >= 90));
   }
 });
 
@@ -65,30 +65,35 @@ test('the first viable fallback is used even if later sports have much higher od
   assert.ok(picked.result.selections.every(c => ['Ice Hockey','Basketball','Handball'].includes(c.sport)));
 });
 
-test('1000x/10000x use 70% floor, maximum 40 legs, and keep closest-available when short', () => {
+test('2x/3x exclude below-90% markets and cap at 40 selections', () => {
   const candidates = Array.from({length: 10}, (_, n) =>
-    make(n % 2 ? 'Basketball' : 'Ice Hockey', `p${n}`, n % 2 ? 'basketball_over' : 'hockey_under', 1.5, 75));
-  candidates.push(make('Football','bad','home_win', 50, 69));
-  for (const target of [1000,10000]) {
-    const selected = pick(target, 70, candidates, 40);
+    make(n % 2 ? 'Basketball' : 'Ice Hockey', `p${n}`, n % 2 ? 'basketball_over' : 'hockey_under', 1.5, 90));
+  candidates.push(make('Football','bad','home_win', 50, 89));
+  for (const target of [2,3]) {
+    const selected = pick(target, 90, candidates, 40);
     assert.ok(selected.result.selections.length > 0);
-    assert.equal(selected.result.reachedTarget, false);
-    assert.equal(selected.fallbackTier, 4);
-    assert.ok(selected.result.selections.every(c => c.probability >= 70));
+    assert.equal(selected.result.reachedTarget, true);
+    assert.ok(selected.result.selections.every(c => c.probability >= 90));
     assert.ok(selected.result.selections.length <= 40);
     assert.ok(!selected.result.selections.some(c => c.eventId === 'bad'));
   }
 });
 
-test('server config enables mixed supported markets for each of four targets and retains SAFE separately', () => {
+test('daily Telegram configuration contains only SAFE, 2x and 3x and preserves mixed markets', () => {
   const source = fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
-  assert.match(source, /label: '10', targetOdds: 10, minProbability: 80, mixedMarkets: true, allSports: true, maxSelections: 30/);
-  assert.match(source, /label: '20', targetOdds: 20, minProbability: 80, mixedMarkets: true, allSports: true, maxSelections: 30/);
-  assert.match(source, /label: '1000', targetOdds: 1000, minProbability: 70, mixedMarkets: true, allSports: true, maxSelections: 40/);
-  assert.match(source, /label: '10000', targetOdds: 10000, minProbability: 70, mixedMarkets: true, allSports: true, maxSelections: 40/);
+  const plans = source.match(/const plans = \[([\s\S]*?)\n  \];/);
+  assert.ok(plans, 'daily ticket plan must be defined');
+  const planText = plans[1];
+  assert.match(planText, /label: '2', targetOdds: 2, minProbability: 90, mixedMarkets: true, allSports: true, maxSelections: 40/);
+  assert.match(planText, /label: '3', targetOdds: 3, minProbability: 90, mixedMarkets: true, allSports: true, maxSelections: 40/);
+  assert.match(planText, /label: '1\.30–5\.00 SAFE', targetOdds: 5\.00, minProbability: 90, minOdds: 1\.30, maxOdds: 5\.00/);
+  assert.doesNotMatch(planText, /label: '(?:10|20|1000|10000)'/);
+  assert.match(source, /'🎯 SAFE • 2x • 3x'/);
+  assert.match(source, /targets: \['1\.30-5\.00 SAFE', 2, 3\]/);
+  assert.match(source, /minProbabilityByTarget: \{ '2':90, '3':90 \}/);
   assert.match(source, /'basketball_over', 'basketball_under', 'hockey_over', 'hockey_under'/);
   assert.match(source, /'corners_over', 'corners_under'/);
-  assert.doesNotMatch(source.match(/const TELEGRAM_FALLBACK_BET_TYPES = \[[\s\S]*?\];/)[0], /\boneup\b|first_half_home_team_corners|first_half_away_team_corners/);
-  assert.match(source, /label: '1\.30–5\.00 SAFE', targetOdds: 5\.00, minProbability: 90, minOdds: 1\.30, maxOdds: 5\.00/);
+  assert.doesNotMatch(source.match(/const TELEGRAM_FALLBACK_BET_TYPES = \[([\s\S]*?)\];/)[0], /\boneup\b|first_half_home_team_corners|first_half_away_team_corners/);
   assert.match(source, /const picked = isSafePlan\s*\? selectTelegramSafeWithPriority\(plan, planCandidates, planMaxSelections\)\s*: selectTelegramMixedWithSportPriority\(plan, planCandidates, planMaxSelections\)/);
+  assert.match(source, /if \(!isSafePlan && \(!result\.reachedTarget \|\|/);
 });
