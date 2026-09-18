@@ -2262,7 +2262,17 @@ function telegramCombinedResult(selections, targetOdds, candidateCount) {
   };
 }
 
-async function runTelegramDailyPicks({ onPostingStart = () => {} } = {}) {
+async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = () => false } = {}) {
+  // A cancelled GitHub Actions curl does not automatically stop this Express
+  // handler. Check before the *first* Telegram send so a cancelled build cannot
+  // publish after its daily Redis lock has been released for a retry.
+  const assertNotCancelled = () => {
+    if (!shouldAbort()) return;
+    const err = new Error('Telegram run cancelled before posting; safe to retry');
+    err.code = 'TELEGRAM_CANCELLED_BEFORE_POST';
+    throw err;
+  };
+  assertNotCancelled();
   // These curated daily targets explicitly use all six sports in priority order.
   const sportScope = 'all';
   const maxSelections = Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10)));
@@ -2287,6 +2297,7 @@ async function runTelegramDailyPicks({ onPostingStart = () => {} } = {}) {
     sportScope: 'all', minProbability: 0, minEdge: -25, leagues,
     betTypes: TELEGRAM_HIGH_ODDS_BET_TYPES,
   });
+  assertNotCancelled();
   const allCandidates = globalCandidates;
 
   // SAFE considers all supported markets, with hockey/basketball priority.
@@ -2306,10 +2317,12 @@ async function runTelegramDailyPicks({ onPostingStart = () => {} } = {}) {
   const watToday = fixtureDateKeyInTimeZone(new Date(), 'Africa/Lagos');
   const redis = await getRedis();
   const dailyCodes = [];
+  assertNotCancelled();
   await saveTelegramDailyCodes(redis, watToday, { generatedAt: new Date().toISOString(), codes: dailyCodes });
+  assertNotCancelled();
   // Once Telegram sending begins, never automatically clear the daily lock:
   // a timed-out request might have delivered the message despite an error.
-  onPostingStart();
+  await onPostingStart();
   await sendTelegramMessage([
     '🤖 PLOT207 SPORTS • DAILY PICKS',
     `📅 ${watToday} (WAT)`,
@@ -3286,6 +3299,28 @@ app.get('/api/telegram/status', (req, res) => {
 
 // Protected endpoint intended for GitHub Actions / Render Cron. It builds all
 // configured target slips, creates SportyBet booking codes, and sends them to Telegram.
+// Read-only diagnosis of today's lock. Does not expose the Redis token and
+// deliberately offers no force-unlock action that might duplicate live picks.
+app.get('/api/telegram/daily-picks/run-status', async (req, res) => {
+  if (!authorizeTelegramJob(req)) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const redis = await getRedis();
+    if (!redis) return res.status(503).json({ error: 'REDIS_URL not configured' });
+    const date = watDateKey();
+    const [locked, raw] = await Promise.all([
+      redis.exists(`telegram:daily-picks:once:${date}`),
+      redis.get(`telegram:daily-picks:status:${date}`),
+    ]);
+    let lastRun = null;
+    try { lastRun = raw ? JSON.parse(raw) : null; } catch (_) {}
+    return res.json({ date, locked: !!locked, lastRun,
+      note: 'If locked, do not reset without verifying that no Telegram message was sent and the original server job has stopped.' });
+  } catch (err) {
+    console.error('Telegram run status check failed:', err.message);
+    return res.status(502).json({ error: 'Telegram run status unavailable' });
+  }
+});
+
 app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
   const secret = process.env.TELEGRAM_JOB_SECRET;
   if (!secret || req.headers['x-telegram-job-secret'] !== secret) {
@@ -3302,6 +3337,38 @@ app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
   let token;
   let lockKey;
   let postingStarted = false;
+  let cancelledBeforePosting = false;
+  let lockAcquired = false;
+  let releasePromise = null;
+  const statusKey = `telegram:daily-picks:status:${today}`;
+  const writeRunStatus = async (status, extra = {}) => {
+    if (!redis) return;
+    await redis.set(statusKey, JSON.stringify({ status, at: new Date().toISOString(), ...extra }), { EX: 3 * 86400 });
+  };
+  const releaseIfUnsent = (status, detail) => {
+    if (!redis || !lockAcquired || postingStarted) return Promise.resolve();
+    if (releasePromise) return releasePromise;
+    releasePromise = (async () => {
+      // Record the reason while the lock is still owned by this run. Never
+      // delete another run's lock, even if a second manual job starts quickly.
+      try { await writeRunStatus(status, { detail }); }
+      catch (statusErr) { console.error('Telegram cancellation status write failed:', statusErr.message); }
+      try {
+        await redis.eval('if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end',
+          { keys: [lockKey], arguments: [token] });
+      } catch (unlockErr) { console.error('Telegram unsent lock release failed:', unlockErr.message); }
+    })();
+    return releasePromise;
+  };
+  // Canceling the GitHub workflow closes its curl connection. The server can
+  // otherwise keep fetching candidates and later publish despite cancellation.
+  // Only abort/unlock if NO Telegram message has been attempted yet.
+  res.once('close', () => {
+    if (res.writableEnded || postingStarted) return;
+    cancelledBeforePosting = true;
+    console.warn(`[Telegram] Client disconnected before posting for ${today}; cancelling unsent run`);
+    void releaseIfUnsent('cancelled_before_post', 'Workflow disconnected before the first Telegram message');
+  });
   try {
     redis = await getRedis();
     // A process-local flag cannot guarantee one Telegram announcement after
@@ -3312,28 +3379,52 @@ app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
     const acquired = await redis.set(lockKey, token, { NX: true, EX: 3 * 86400 });
     if (acquired !== 'OK') {
       console.log(`[Telegram schedule guard] Skipped duplicate request for ${today}`);
-      return res.json({ ok: true, skipped: true, reason: 'already_started_or_sent_today', date: today });
+      const priorStatus = await redis.get(statusKey).catch(() => null);
+      let runStatus = 'unknown_or_in_progress';
+      if (priorStatus) {
+        try { runStatus = JSON.parse(priorStatus).status || runStatus; } catch (_) {}
+      }
+      // A duplicate must NOT look like a successful send in GitHub Actions.
+      return res.status(409).json({ ok: false, skipped: true,
+        code: 'TELEGRAM_ALREADY_STARTED_OR_SENT', reason: 'already_started_or_sent_today',
+        date: today, runStatus,
+        note: 'A cancelled GitHub job may leave the server posting. Check Telegram before any manual lock reset.' });
     }
-    const result = await runTelegramDailyPicks({ onPostingStart: () => { postingStarted = true; } });
+    lockAcquired = true;
+    if (cancelledBeforePosting) {
+      await releaseIfUnsent('cancelled_before_post', 'Workflow disconnected before generating picks');
+      return;
+    }
+    await writeRunStatus('preparing');
+    const result = await runTelegramDailyPicks({
+      shouldAbort: () => cancelledBeforePosting,
+      onPostingStart: async () => {
+        postingStarted = true;
+        // Sending can be ambiguous if the request fails after reaching Telegram.
+        // Preserve the once-per-day lock as soon as the FIRST send is attempted.
+        try { await writeRunStatus('posting'); }
+        catch (statusErr) { console.error('Telegram posting status write failed:', statusErr.message); }
+      },
+    });
     try {
-      await redis.set(`telegram:daily-picks:status:${today}`, JSON.stringify({ status: 'completed', completedAt: new Date().toISOString() }), { EX: 3 * 86400 });
+      await writeRunStatus('completed', { completedAt: new Date().toISOString() });
     } catch (statusError) { console.error('Telegram daily-picks status write failed:', statusError.message); }
-    return res.json({ ok: true, generatedAt: new Date().toISOString(), ...result });
+    if (!res.destroyed) return res.json({ ok: true, generatedAt: new Date().toISOString(), ...result });
   } catch (err) {
     if (redis && lockKey) {
       if (!postingStarted) {
-        // No Telegram message was attempted: unlock this date for a manual retry.
-        try {
-          await redis.eval('if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end', { keys: [lockKey], arguments: [token] });
-        } catch (unlockErr) { console.error('Telegram lock release failed:', unlockErr.message); }
+        // No Telegram message was attempted: a cancelled/failed pre-post run
+        // should NOT block a subsequent manual retry for the entire WAT day.
+        await releaseIfUnsent(err.code === 'TELEGRAM_CANCELLED_BEFORE_POST' ? 'cancelled_before_post' : 'failed_before_post', String(err.message).slice(0, 250));
       } else {
         // Unknown/partial send: keep lock to avoid duplicating messages.
         try {
-          await redis.set(`telegram:daily-picks:status:${today}`, JSON.stringify({ status: 'partial_or_unknown', at: new Date().toISOString(), detail: String(err.message).slice(0, 250) }), { EX: 3 * 86400 });
+          await writeRunStatus('partial_or_unknown', { detail: String(err.message).slice(0, 250) });
         } catch (statusError) { console.error('Telegram partial status write failed:', statusError.message); }
       }
     }
     console.error('Telegram daily picks error:', err.message);
+    if (res.destroyed) return;
     return res.status(err.code === 'TELEGRAM_CONFIG_MISSING' ? 503 : 502).json({
       error: err.code === 'TELEGRAM_CONFIG_MISSING' ? 'Telegram integration is not configured yet' : 'Telegram picks job failed',
       code: err.code || null,
