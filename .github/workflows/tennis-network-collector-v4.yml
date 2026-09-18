@@ -1,13 +1,21 @@
 name: Plot207 Tennis Collector V4
 
+# 06:15 UTC = 07:15 Nigerian time (WAT).
 on:
+  schedule:
+    - cron: '15 6 * * *'
   workflow_dispatch: {}
 
 permissions:
   contents: read
 
+concurrency:
+  group: plot207-tennis-daily-collector
+  cancel-in-progress: false
+
 jobs:
   test-tennis-v4:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '15 6 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

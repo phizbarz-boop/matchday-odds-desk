@@ -1,3 +1,5 @@
+**SUPERSEDED BY `AUTOMATION_20260918_ACTUAL_WORKFLOW_AND_BACKEND_FIX.md`. The September 18 patch changes the actual YAML files and adds a Redis-backed once-per-day Telegram guard.**
+
 # Automation repair — September 17, 2026
 
 The previous ZIP's standalone Handball, Volleyball and Tennis workflows had

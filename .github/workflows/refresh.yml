@@ -1,156 +1,51 @@
 name: Daily Predictions Refresh
 
+# Cron is UTC; Nigeria is UTC+1 year-round. Only ONE automatic refresh at 07:00 WAT.
 on:
   schedule:
-    - cron: '0 6 * * *'   # 06:00 UTC = 07:00 WAT (Africa/Lagos)
-  workflow_dispatch: {}    # allows manually running all sports from Actions
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}
 
 permissions:
   contents: read
 
+concurrency:
+  group: plot207-core-daily-refresh
+  cancel-in-progress: false
+
 jobs:
   core-refresh:
     name: Football + Basketball + Ice Hockey
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * *'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Refresh core prediction feeds
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Start daily refresh (UTC schedule, WAT server guard)
         env:
           REFRESH_SECRET: ${{ secrets.REFRESH_SECRET }}
+          MATCHDAY_BASE_URL: https://matchday-odds-desk.onrender.com
+          GH_EVENT_NAME: ${{ github.event_name }}
         run: |
-          test -n "$REFRESH_SECRET" || (echo "Missing GitHub secret REFRESH_SECRET" && exit 1)
-          curl --fail-with-body --show-error --silent \
-            -X POST "https://matchday-odds-desk.onrender.com/api/refresh" \
+          test -n "$REFRESH_SECRET" || (echo 'Missing GitHub secret REFRESH_SECRET' && exit 1)
+          echo "REFRESH_STARTED_AT=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+          if [ "$GH_EVENT_NAME" = 'workflow_dispatch' ]; then MODE=manual; else MODE=scheduled; fi
+          curl --fail-with-body --show-error --silent --max-time 120 \
+            -X POST "$MATCHDAY_BASE_URL/api/refresh" \
             -H "X-Refresh-Secret: $REFRESH_SECRET" \
-            -w "\nHTTP_STATUS:%{http_code}\n" \
-            --max-time 120
+            -H "x-matchday-run-mode: $MODE" \
+            -H 'Content-Type: application/json' \
+            --data '{}' -w '\nHTTP_STATUS:%{http_code}\n'
 
-  handball-refresh:
-    name: Handball
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - name: Install app dependencies
-        run: npm ci
-
-      - name: Install Playwright Chromium
-        run: |
-          npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
-
-      - name: Refresh Handball fixtures and markets
+      - name: Verify updated predictions were persisted
         env:
-          SPORTYSOCIAL_LOGIN_ID: ${{ secrets.SPORTYSOCIAL_LOGIN_ID }}
-          SPORTYSOCIAL_PASSWORD: ${{ secrets.SPORTYSOCIAL_PASSWORD }}
-          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
           MATCHDAY_BASE_URL: https://matchday-odds-desk.onrender.com
-        run: |
-          test -n "$SPORTYSOCIAL_LOGIN_ID" || (echo "Missing GitHub secret SPORTYSOCIAL_LOGIN_ID" && exit 1)
-          test -n "$SPORTYSOCIAL_PASSWORD" || (echo "Missing GitHub secret SPORTYSOCIAL_PASSWORD" && exit 1)
-          test -n "$TELEGRAM_JOB_SECRET" || (echo "Missing GitHub secret TELEGRAM_JOB_SECRET" && exit 1)
-          node jobs/sporty-handball-network-collector.js
-
-      - name: Upload Handball diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: daily-handball-refresh
-          path: handball-discovery-v2/
-          if-no-files-found: ignore
-          retention-days: 3
-
-  volleyball-refresh:
-    name: Volleyball
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - name: Install app dependencies
-        run: npm ci
-
-      - name: Install Playwright Chromium
-        run: |
-          npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
-
-      - name: Refresh Volleyball fixtures and markets
-        env:
-          SPORTYSOCIAL_LOGIN_ID: ${{ secrets.SPORTYSOCIAL_LOGIN_ID }}
-          SPORTYSOCIAL_PASSWORD: ${{ secrets.SPORTYSOCIAL_PASSWORD }}
-          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
-          MATCHDAY_BASE_URL: https://matchday-odds-desk.onrender.com
-        run: |
-          test -n "$SPORTYSOCIAL_LOGIN_ID" || (echo "Missing GitHub secret SPORTYSOCIAL_LOGIN_ID" && exit 1)
-          test -n "$SPORTYSOCIAL_PASSWORD" || (echo "Missing GitHub secret SPORTYSOCIAL_PASSWORD" && exit 1)
-          test -n "$TELEGRAM_JOB_SECRET" || (echo "Missing GitHub secret TELEGRAM_JOB_SECRET" && exit 1)
-          node jobs/sporty-volleyball-network-collector.js
-
-      - name: Upload Volleyball diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: daily-volleyball-refresh
-          path: volleyball-discovery-v1/
-          if-no-files-found: ignore
-          retention-days: 3
-
-  tennis-refresh:
-    name: Tennis
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - name: Install app dependencies
-        run: npm ci
-
-      - name: Install Playwright Chromium
-        run: |
-          npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
-
-      - name: Refresh Tennis fixtures and markets
-        env:
-          SPORTYSOCIAL_LOGIN_ID: ${{ secrets.SPORTYSOCIAL_LOGIN_ID }}
-          SPORTYSOCIAL_PASSWORD: ${{ secrets.SPORTYSOCIAL_PASSWORD }}
-          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
-          MATCHDAY_BASE_URL: https://matchday-odds-desk.onrender.com
-          SPORTYBET_TENNIS_MAX_SCANS: '80'
-          SPORTYBET_TENNIS_STABLE_SCANS: '5'
-        run: |
-          test -n "$SPORTYSOCIAL_LOGIN_ID" || (echo "Missing GitHub secret SPORTYSOCIAL_LOGIN_ID" && exit 1)
-          test -n "$SPORTYSOCIAL_PASSWORD" || (echo "Missing GitHub secret SPORTYSOCIAL_PASSWORD" && exit 1)
-          test -n "$TELEGRAM_JOB_SECRET" || (echo "Missing GitHub secret TELEGRAM_JOB_SECRET" && exit 1)
-          node jobs/sporty-tennis-network-collector.js
-
-      - name: Upload Tennis diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: daily-tennis-refresh
-          path: tennis-discovery-v1/
-          if-no-files-found: ignore
-          retention-days: 3
+          REFRESH_WAIT_MS: '1320000'
+        run: node jobs/wait-for-predictions.js
