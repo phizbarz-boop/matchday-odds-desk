@@ -12,7 +12,7 @@ const { buildCandidates, selectAutoBet, passesRedFlagFilter, normalMetrics } = r
 const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest, sendTelegramAiMessageTo, telegramAiRequest } = require('./lib/telegram');
 const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, allowedBetIdsForPlan: telegramAiAllowedBetIdsForPlan, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, addExtraTickets: addTelegramAiExtraTickets, hasTicketCredit: telegramAiHasTicketCredit, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, ticketLimitKeyboard: telegramAiTicketLimitKeyboard, mainKeyboard: telegramAiMainKeyboard, builderSummary: telegramAiBuilderSummary, builderKeyboard: telegramAiBuilderKeyboard, sportKeyboard: telegramAiSportKeyboard, targetKeyboard: telegramAiTargetKeyboard, probabilityKeyboard: telegramAiProbabilityKeyboard, maxOddKeyboard: telegramAiMaxOddKeyboard, edgeKeyboard: telegramAiEdgeKeyboard, maxGamesKeyboard: telegramAiMaxGamesKeyboard, marketsKeyboard: telegramAiMarketsKeyboard, analyzerSummary: telegramAiAnalyzerSummary, analyzerKeyboard: telegramAiAnalyzerKeyboard, analyzerAnalysisKeyboard: telegramAiAnalyzerAnalysisKeyboard, analyzerProbKeyboard: telegramAiAnalyzerProbKeyboard, analyzerHorizonKeyboard: telegramAiAnalyzerHorizonKeyboard, resultKeyboard: telegramAiResultKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
 const { trackTelegramSlip, evaluateBooking } = require('./lib/slipTracker');
-const { watDateKey, isScheduledTime } = require('./lib/dailyScheduleGuard');
+const { watDateKey } = require('./lib/dailyScheduleGuard');
 const { SPORT_TIERS: TELEGRAM_SPORT_TIERS, selectTelegramMixedWithSportPriority } = require('./lib/telegramMixedSelector');
 const { apiFetch, enrichSportyFixtures } = require('./lib/apiFootball');
 const { matchSnapshot: matchHandballApiSportsSnapshot, apiKey: handballApiSportsKey } = require('./lib/apiSportsHandball');
@@ -3371,11 +3371,8 @@ app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
   }
   const manual = req.headers['x-matchday-run-mode'] === 'manual';
   const today = watDateKey();
-  // Unmarked requests (including old Render Cron jobs) are AUTOMATIC, not manual.
-  if (!manual && !isScheduledTime('telegram')) {
-    console.error(`[Telegram schedule guard] Rejected automatic trigger outside 08:25-09:25 WAT: ${new Date().toISOString()}`);
-    return res.status(409).json({ error: 'Outside permitted Telegram daily window (08:25-09:25 WAT)', code: 'TELEGRAM_WRONG_TIME', date: today });
-  }
+  // Accept authenticated scheduled requests whenever GitHub starts them.
+  // The per-WAT-date Redis lock below still prevents duplicate Telegram announcements.
   let redis;
   let token;
   let lockKey;
@@ -3559,10 +3556,8 @@ app.post('/api/refresh', express.json(), (req, res) => {
     return res.status(401).json({ error: 'unauthorized' });
   }
   const manual = req.headers['x-matchday-run-mode'] === 'manual';
-  if (!manual && !isScheduledTime('refresh')) {
-    console.error(`[Prediction schedule guard] Rejected automatic refresh outside 07:20-08:15 WAT: ${new Date().toISOString()}`);
-    return res.status(409).json({ error: 'Outside permitted daily predictions window (07:20-08:15 WAT)', code: 'REFRESH_WRONG_TIME', date: watDateKey() });
-  }
+  // Accept authenticated refresh requests even when GitHub starts late.
+  // GitHub cron schedules the requested time; server authentication remains mandatory.
   // Manual requests are explicitly permitted for recovery if scheduled refresh failed.
   const { spawn } = require('child_process');
   const child = spawn('node', [path.join(__dirname, 'jobs', 'refresh.js')], {

@@ -17,7 +17,6 @@ concurrency:
 jobs:
   core-refresh:
     name: Football + Basketball + Ice Hockey
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '20 6 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -52,7 +51,6 @@ jobs:
         run: node jobs/wait-for-predictions.js
 
   handball-refresh:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '20 6 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -103,7 +101,6 @@ jobs:
           retention-days: 3
 
   volleyball-refresh:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '20 6 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -155,7 +152,6 @@ jobs:
           retention-days: 3
 
   tennis-refresh:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '20 6 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
