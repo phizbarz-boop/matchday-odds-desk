@@ -71,8 +71,8 @@ function createHarness(runTelegramDailyPicks) {
   vm.runInNewContext(routeSource, context);
   return {
     redis,
-    start: (res = response()) => {
-      const req = { headers: { 'x-telegram-job-secret': 'test-secret', 'x-matchday-run-mode': 'manual' } };
+    start: (res = response(), mode = 'scheduled') => {
+      const req = { headers: { 'x-telegram-job-secret': 'test-secret', 'x-matchday-run-mode': mode } };
       return { res, done: handler(req, res) };
     },
   };
@@ -126,7 +126,7 @@ test('cancel after posting begins keeps the once-per-day lock', async () => {
   assert.equal(JSON.parse(await h.redis.get(status)).status, 'completed');
 });
 
-test('second request reports HTTP 409 rather than pretending to have sent picks', async () => {
+test('second scheduled request reports HTTP 409 rather than pretending to have sent picks', async () => {
   let calls = 0;
   const h = createHarness(async ({ onPostingStart }) => {
     calls += 1;
@@ -140,6 +140,27 @@ test('second request reports HTTP 409 rather than pretending to have sent picks'
   assert.equal(second.res.body.code, 'TELEGRAM_ALREADY_STARTED_OR_SENT');
   assert.equal(second.res.body.runStatus, 'completed');
   assert.equal(calls, 1, 'a second attempt must not send again');
+});
+
+
+
+test('manual workflow runs bypass the daily lock and can be repeated anytime', async () => {
+  let calls = 0;
+  const h = createHarness(async ({ onPostingStart }) => {
+    calls += 1;
+    await onPostingStart();
+    return { results: [] };
+  });
+  const first = h.start(response(), 'manual');
+  await first.done;
+  const second = h.start(response(), 'manual');
+  await second.done;
+  assert.equal(first.res.statusCode, 200);
+  assert.equal(second.res.statusCode, 200);
+  assert.equal(first.res.body.runMode, 'manual');
+  assert.equal(second.res.body.runMode, 'manual');
+  assert.equal(calls, 2, 'each manual workflow dispatch should generate and send again');
+  assert.equal(await h.redis.exists(lock), 0, 'manual runs must not consume the scheduled daily lock');
 });
 
 test('pre-post failures unlock and allow a fresh manual retry', async () => {

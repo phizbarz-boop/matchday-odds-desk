@@ -3365,8 +3365,8 @@ app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
   }
   const manual = req.headers['x-matchday-run-mode'] === 'manual';
   const today = watDateKey();
-  // Accept authenticated scheduled requests whenever GitHub starts them.
-  // The per-WAT-date Redis lock below still prevents duplicate Telegram announcements.
+  // Scheduled runs remain protected by a per-WAT-date Redis lock. Manual
+  // workflow_dispatch runs intentionally bypass that daily lock and may repeat.
   let redis;
   let token;
   let lockKey;
@@ -3374,19 +3374,20 @@ app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
   let cancelledBeforePosting = false;
   let lockAcquired = false;
   let releasePromise = null;
-  const statusKey = `telegram:daily-picks:status:${today}`;
+  let statusKey = `telegram:daily-picks:status:${today}`;
   const writeRunStatus = async (status, extra = {}) => {
     if (!redis) return;
     await redis.set(statusKey, JSON.stringify({ status, at: new Date().toISOString(), ...extra }), { EX: 3 * 86400 });
   };
   const releaseIfUnsent = (status, detail) => {
-    if (!redis || !lockAcquired || postingStarted) return Promise.resolve();
+    if (!redis || postingStarted) return Promise.resolve();
     if (releasePromise) return releasePromise;
     releasePromise = (async () => {
-      // Record the reason while the lock is still owned by this run. Never
-      // delete another run's lock, even if a second manual job starts quickly.
-      try { await writeRunStatus(status, { detail }); }
+      // Record cancellation/failure for both scheduled and manual runs. Only
+      // scheduled runs own the once-per-day lock, so only they need unlocking.
+      try { await writeRunStatus(status, { detail, mode: manual ? 'manual' : 'scheduled' }); }
       catch (statusErr) { console.error('Telegram cancellation status write failed:', statusErr.message); }
+      if (!lockAcquired || !lockKey) return;
       try {
         await redis.eval('if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end',
           { keys: [lockKey], arguments: [token] });
@@ -3407,45 +3408,53 @@ app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
     redis = await getRedis();
     // A process-local flag cannot guarantee one Telegram announcement after
     // a Render restart or across instances. Do not send without shared Redis.
-    if (!redis) return res.status(503).json({ error: 'REDIS_URL required to guarantee Telegram once per day', code: 'TELEGRAM_REDIS_REQUIRED' });
+    if (!redis) return res.status(503).json({ error: 'REDIS_URL required for Telegram run state and scheduled deduplication', code: 'TELEGRAM_REDIS_REQUIRED' });
     token = crypto.randomUUID();
-    lockKey = `telegram:daily-picks:once:${today}`;
-    const acquired = await redis.set(lockKey, token, { NX: true, EX: 3 * 86400 });
-    if (acquired !== 'OK') {
-      console.log(`[Telegram schedule guard] Skipped duplicate request for ${today}`);
-      const priorStatus = await redis.get(statusKey).catch(() => null);
-      let runStatus = 'unknown_or_in_progress';
-      if (priorStatus) {
-        try { runStatus = JSON.parse(priorStatus).status || runStatus; } catch (_) {}
+    if (manual) {
+      // workflow_dispatch is intentionally repeatable. A manual run never
+      // consumes or checks the scheduled once-per-WAT-date lock.
+      statusKey = `telegram:daily-picks:manual-status:${today}:${token}`;
+      console.log(`[Telegram manual] Bypassing daily send lock for ${today}`);
+    } else {
+      lockKey = `telegram:daily-picks:once:${today}`;
+      const acquired = await redis.set(lockKey, token, { NX: true, EX: 3 * 86400 });
+      if (acquired !== 'OK') {
+        console.log(`[Telegram schedule guard] Skipped duplicate scheduled request for ${today}`);
+        const priorStatus = await redis.get(statusKey).catch(() => null);
+        let runStatus = 'unknown_or_in_progress';
+        if (priorStatus) {
+          try { runStatus = JSON.parse(priorStatus).status || runStatus; } catch (_) {}
+        }
+        // Only scheduled duplicates are blocked. Manual GitHub runs can be
+        // triggered at any time and intentionally bypass this daily lock.
+        return res.status(409).json({ ok: false, skipped: true,
+          code: 'TELEGRAM_ALREADY_STARTED_OR_SENT', reason: 'already_started_or_sent_today',
+          date: today, runStatus,
+          note: 'Scheduled auto-picks already started or sent today. Use the manual GitHub workflow if you intentionally want another run.' });
       }
-      // A duplicate must NOT look like a successful send in GitHub Actions.
-      return res.status(409).json({ ok: false, skipped: true,
-        code: 'TELEGRAM_ALREADY_STARTED_OR_SENT', reason: 'already_started_or_sent_today',
-        date: today, runStatus,
-        note: 'A cancelled GitHub job may leave the server posting. Check Telegram before any manual lock reset.' });
+      lockAcquired = true;
     }
-    lockAcquired = true;
     if (cancelledBeforePosting) {
       await releaseIfUnsent('cancelled_before_post', 'Workflow disconnected before generating picks');
       return;
     }
-    await writeRunStatus('preparing');
+    await writeRunStatus('preparing', { mode: manual ? 'manual' : 'scheduled' });
     const result = await runTelegramDailyPicks({
       shouldAbort: () => cancelledBeforePosting,
       onPostingStart: async () => {
         postingStarted = true;
         // Sending can be ambiguous if the request fails after reaching Telegram.
         // Preserve the once-per-day lock as soon as the FIRST send is attempted.
-        try { await writeRunStatus('posting'); }
+        try { await writeRunStatus('posting', { mode: manual ? 'manual' : 'scheduled' }); }
         catch (statusErr) { console.error('Telegram posting status write failed:', statusErr.message); }
       },
     });
     try {
-      await writeRunStatus('completed', { completedAt: new Date().toISOString() });
+      await writeRunStatus('completed', { completedAt: new Date().toISOString(), mode: manual ? 'manual' : 'scheduled' });
     } catch (statusError) { console.error('Telegram daily-picks status write failed:', statusError.message); }
-    if (!res.destroyed) return res.json({ ok: true, generatedAt: new Date().toISOString(), ...result });
+    if (!res.destroyed) return res.json({ ok: true, runMode: manual ? 'manual' : 'scheduled', generatedAt: new Date().toISOString(), ...result });
   } catch (err) {
-    if (redis && lockKey) {
+    if (redis) {
       if (!postingStarted) {
         // No Telegram message was attempted: a cancelled/failed pre-post run
         // should NOT block a subsequent manual retry for the entire WAT day.

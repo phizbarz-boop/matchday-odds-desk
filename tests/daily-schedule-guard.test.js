@@ -45,8 +45,10 @@ test('Basketball and Hockey daily refresh endpoint is protected and force-refres
   assert.match(server, /const forceRefresh = options\.forceRefresh === true/);
 });
 
-test('Telegram keeps its daily lock', () => {
+test('Telegram keeps the scheduled daily lock but allows manual bypass', () => {
   const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
   assert.match(server, /telegram:daily-picks:once:/);
   assert.match(server, /x-telegram-job-secret/);
+  assert.match(server, /if \(manual\)[\s\S]*Bypassing daily send lock/);
+  assert.match(workflow('telegram-picks.yml'), /x-matchday-run-mode: \$MODE/);
 });
