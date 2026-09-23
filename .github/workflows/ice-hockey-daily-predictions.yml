@@ -1,0 +1,36 @@
+name: Plot207 Ice Hockey Daily Predictions
+
+# 06:15 UTC = 07:15 WAT (Nigeria). Ice Hockey runs independently every day.
+on:
+  schedule:
+    - cron: '15 6 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plot207-ice-hockey-daily-predictions
+  cancel-in-progress: false
+
+jobs:
+  hockey-refresh:
+    name: Refresh Ice Hockey Markets
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Refresh Ice Hockey winner and totals predictions
+        env:
+          REFRESH_SECRET: ${{ secrets.REFRESH_SECRET }}
+          MATCHDAY_BASE_URL: https://matchday-odds-desk.onrender.com
+          GH_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          test -n "$REFRESH_SECRET" || (echo 'Missing GitHub secret REFRESH_SECRET' && exit 1)
+          if [ "$GH_EVENT_NAME" = 'workflow_dispatch' ]; then MODE=manual; else MODE=scheduled; fi
+          echo "Ice Hockey refresh mode: $MODE"
+          curl --fail-with-body --show-error --silent --max-time 1080 \
+            -X POST "$MATCHDAY_BASE_URL/api/refresh/sport/hockey" \
+            -H "X-Refresh-Secret: $REFRESH_SECRET" \
+            -H "x-matchday-run-mode: $MODE" \
+            -H 'Content-Type: application/json' \
+            --data '{}' -w '\nHTTP_STATUS:%{http_code}\n'

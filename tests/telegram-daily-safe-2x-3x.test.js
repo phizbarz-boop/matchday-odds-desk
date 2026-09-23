@@ -8,7 +8,7 @@ const { selectAutoBet } = require('../lib/autoPicker');
 const { selectTelegramMixedWithSportPriority } = require('../lib/telegramMixedSelector');
 
 const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-const start = server.indexOf('const TELEGRAM_PRIORITY_SPORTS =');
+const start = server.indexOf('const TELEGRAM_SAFE_SPORT_TIERS =');
 const end = server.indexOf('// Copy Hub is isolated', start);
 assert.ok(start > -1 && end > start);
 const runnerSource = server.slice(start, end);

@@ -606,6 +606,7 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
     ? Math.max(0, Number(options.maxCacheAgeSeconds))
     : null;
   const kickoffBufferSeconds = Math.max(0, Number(options.kickoffBufferSeconds ?? process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS ?? 60) || 0);
+  const forceRefresh = options.forceRefresh === true;
   // Keep Analyzer's 14/21-day cache completely separate from the normal Auto Builder cache.
   // Versioned cache key: bumping this invalidates stale/empty market caches after parser changes.
   // Team-goal markets changed to the Nigeria full-event endpoint; do not
@@ -619,10 +620,12 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   // Shared daily snapshot is independent of request horizon/page count. A 7/14-day
   // Analyzer request can therefore reuse a 21-day Daily Refresh snapshot instead of
   // purchasing the same SportyBet rows again.
-  const snapshot = await readSportySnapshot(client, sport, kind, hours, nowMs, kickoffBufferSeconds);
-  if (snapshot) {
-    console.log(`[SportyBet snapshot] HIT ${sport}/${kind} requested=${hours}h snapshot=${snapshot.snapshotHours}h rows=${snapshot.rows.length}`);
-    return snapshot;
+  if (!forceRefresh) {
+    const snapshot = await readSportySnapshot(client, sport, kind, hours, nowMs, kickoffBufferSeconds);
+    if (snapshot) {
+      console.log(`[SportyBet snapshot] HIT ${sport}/${kind} requested=${hours}h snapshot=${snapshot.snapshotHours}h rows=${snapshot.rows.length}`);
+      return snapshot;
+    }
   }
 
   let cached = null;
@@ -634,7 +637,7 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
     if (hit && hit.expiresAt > nowMs) cached = hit.payload;
   }
 
-  if (cached && (maxCacheAgeSeconds == null || sportyPayloadAgeSeconds(cached, nowMs) <= maxCacheAgeSeconds)) {
+  if (!forceRefresh && cached && (maxCacheAgeSeconds == null || sportyPayloadAgeSeconds(cached, nowMs) <= maxCacheAgeSeconds)) {
     const filteredCached = filterUpcomingSportyPayload(cached, { nowMs, kickoffBufferSeconds });
     // Never let an empty cache (or a cache whose fixtures have all kicked off)
     // block discovery of newly-added SportyBet fixtures. Refresh immediately.
@@ -659,7 +662,8 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
 
   // Collapse concurrent requests for the same sport/market/window into one upstream call.
   // This is important because the Auto Builder and Analyzer can ask for overlapping markets.
-  let refreshPromise = sportyMarketInFlight.get(cacheKey);
+  const inFlightKey = forceRefresh ? `${cacheKey}:force-refresh` : cacheKey;
+  let refreshPromise = sportyMarketInFlight.get(inFlightKey);
   if (!refreshPromise) {
     refreshPromise = (async () => {
       const payload = sport === 'football'
@@ -682,8 +686,8 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
       }
       return filteredPayload;
     })();
-    sportyMarketInFlight.set(cacheKey, refreshPromise);
-    refreshPromise.finally(() => sportyMarketInFlight.delete(cacheKey)).catch(()=>{});
+    sportyMarketInFlight.set(inFlightKey, refreshPromise);
+    refreshPromise.finally(() => sportyMarketInFlight.delete(inFlightKey)).catch(()=>{});
   }
   return await refreshPromise;
 }
@@ -2209,48 +2213,35 @@ function telegramSlipText(target, result, booking, sportScope) {
 }
 
 
-const TELEGRAM_PRIORITY_SPORTS = ['hockey','basketball','handball','volleyball','tennis'];
+// Scheduled 1.30 ticket: Ice Hockey + Basketball first. If winners from those
+// two sports cannot complete the target, add Tennis, then Handball + Volleyball.
+// Winner markets are always tried before any totals/handicap/other market.
+const TELEGRAM_SAFE_SPORT_TIERS = [
+  ['hockey','basketball'],
+  ['tennis'],
+  ['handball','volleyball'],
+];
 
-function isTelegramPrioritySport(candidate) {
-  const sport = String(candidate?.sport || '').toLowerCase();
-  return (
-    sport.includes('tennis') ||
-    sport.includes('volley') ||
-    sport.includes('hockey') ||
-    sport.includes('handball') ||
-    sport.includes('basket')
-  );
-}
+// Scheduled 2x/3x tickets: Ice Hockey + Basketball + Tennis first; only add
+// Handball + Volleyball if the preferred group cannot complete the target.
+const TELEGRAM_2X3X_SPORT_TIERS = [
+  ['hockey','basketball','tennis'],
+  ['handball','volleyball'],
+];
 
-// SAFE can use any currently supported market. Prefer ice hockey and
-// basketball first, then the remaining five preferred sports, then football.
-// The 1.30 minimum is the build target; the SAFE range remains 1.30–5.00.
 function selectTelegramSafeWithPriority(plan, candidates, maxSelections) {
-  const options = {
-    targetOdds: plan.minOdds,
-    maxSelections,
+  const targetPlan = { ...plan, targetOdds: plan.minOdds };
+  const picked = selectTelegramMixedWithSportPriority(targetPlan, candidates, maxSelections, {
     trials: Number(process.env.TELEGRAM_PICK_TRIALS || 2200),
-    minQualityScore: 0,
-    requirePositiveEV: false,
-  };
-  const inRange = result => result?.selections?.length &&
+    sportTiers: TELEGRAM_SAFE_SPORT_TIERS,
+    isWinner: isTelegramWinnerSelection,
+  });
+  const result = picked.result;
+  const inRange = result?.selections?.length &&
     Number(result.combinedOdds) >= plan.minOdds &&
     Number(result.combinedOdds) <= plan.maxOdds;
-  const hockeyBasketball = candidates.filter(c => {
-    const sport = String(c?.sport || '').toLowerCase();
-    return sport.includes('hockey') || sport.includes('basket');
-  });
-  const fiveSports = candidates.filter(isTelegramPrioritySport);
-  for (const pool of [hockeyBasketball, fiveSports, candidates]) {
-    if (!pool.length) continue;
-    const result = selectAutoBet(pool, options);
-    if (inRange(result)) {
-      return { result, priorityOnly: pool !== candidates,
-        preferredCount: hockeyBasketball.length };
-    }
-  }
-  return { result: selectAutoBet(candidates, options), priorityOnly: false,
-    preferredCount: hockeyBasketball.length };
+  if (inRange) return picked;
+  return picked;
 }
 
 // Match-winner classification is retained for diagnostics. SAFE, 2x and 3x
@@ -2320,9 +2311,9 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
   // Scheduled Telegram plans only. Interactive AI Builder and website retain
   // their independent, user-selected odds choices. All plans use 90% per leg.
   const plans = [
-    { label: '1.30–5.00 SAFE', targetOdds: 5.00, minProbability: 90, minOdds: 1.30, maxOdds: 5.00 },
-    { label: '2', targetOdds: 2, minProbability: 90, mixedMarkets: true, allSports: true, maxSelections: 40 },
-    { label: '3', targetOdds: 3, minProbability: 90, mixedMarkets: true, allSports: true, maxSelections: 40 },
+    { label: '1.30–5.00 SAFE', targetOdds: 1.30, minProbability: 90, minOdds: 1.30, maxOdds: 5.00, maxSelections: 15 },
+    { label: '2', targetOdds: 2, minProbability: 90, mixedMarkets: true, allSports: true, maxSelections: 20 },
+    { label: '3', targetOdds: 3, minProbability: 90, mixedMarkets: true, allSports: true, maxSelections: 20 },
   ];
 
   // One market fetch covers all six sports for every target. Saved market caching
@@ -2383,7 +2374,10 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
 
     const picked = isSafePlan
       ? selectTelegramSafeWithPriority(plan, planCandidates, planMaxSelections)
-      : selectTelegramMixedWithSportPriority(plan, planCandidates, planMaxSelections);
+      : selectTelegramMixedWithSportPriority(plan, planCandidates, planMaxSelections, {
+          sportTiers: TELEGRAM_2X3X_SPORT_TIERS,
+          isWinner: isTelegramWinnerSelection,
+        });
     const result = picked.result;
 
     if (!result.selections.length) {
@@ -3551,6 +3545,59 @@ app.post('/api/sportybet/book', express.json(), async (req, res) => {
 // Pulling every league while respecting football-data.org's rate limit can take
 // a couple of minutes, so this kicks the job off in the background and returns
 // immediately rather than holding the HTTP request open the whole time.
+app.post('/api/refresh/sport/:sport', express.json(), async (req, res) => {
+  if (!process.env.REFRESH_SECRET || req.headers['x-refresh-secret'] !== process.env.REFRESH_SECRET) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+
+  const sport = String(req.params.sport || '').trim().toLowerCase().replace(/\s+/g, '');
+  if (!['basketball', 'hockey'].includes(sport)) {
+    return res.status(400).json({ error: 'sport must be one of: basketball, hockey' });
+  }
+
+  const manual = req.headers['x-matchday-run-mode'] === 'manual';
+  const days = Math.max(7, Math.min(21, parseInt(process.env.PREDICTION_DAYS_AHEAD || '21', 10) || 21));
+  const hours = days * 24;
+  const maxPages = Math.max(1, Math.min(20, parseInt(process.env.DAILY_SPORT_REFRESH_MAX_PAGES || process.env.ANALYZER_MAX_PAGES || '12', 10) || 12));
+  const markets = ['winner', 'totals'];
+  const results = {};
+
+  try {
+    for (const market of markets) {
+      const payload = await loadSportyBetMarket(market, sport, {
+        hours,
+        maxPages,
+        forceRefresh: true,
+      });
+      results[market] = {
+        rows: Array.isArray(payload?.rows) ? payload.rows.length : 0,
+        fetchedAt: payload?.fetchedAt || null,
+      };
+    }
+
+    const totalRows = Object.values(results).reduce((sum, row) => sum + Number(row.rows || 0), 0);
+    return res.json({
+      ok: true,
+      sport,
+      mode: manual ? 'manual' : 'scheduled',
+      refreshedAt: new Date().toISOString(),
+      horizonHours: hours,
+      maxPages,
+      totalRows,
+      markets: results,
+      warning: totalRows === 0 ? 'No upcoming SportyBet rows were returned for this sport.' : null,
+      probabilityModel: 'No-vig/de-margined SportyBet market probability',
+    });
+  } catch (err) {
+    console.error(`[Daily ${sport} refresh] failed:`, err.message);
+    const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
+    return res.status(status).json({
+      error: `Failed to refresh ${sport} daily markets`,
+      detail: process.env.NODE_ENV === 'production' ? undefined : String(err.message || err),
+    });
+  }
+});
+
 app.post('/api/refresh', express.json(), (req, res) => {
   if (!process.env.REFRESH_SECRET || req.headers['x-refresh-secret'] !== process.env.REFRESH_SECRET) {
     return res.status(401).json({ error: 'unauthorized' });

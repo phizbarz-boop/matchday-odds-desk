@@ -1,20 +1,23 @@
-name: Plot207 Volleyball Collector V1
+name: Plot207 Volleyball Daily Predictions
 
+# 06:25 UTC = 07:25 WAT (Nigeria). Volleyball runs independently every day.
 on:
-  workflow_dispatch: {} # Manual recovery only. Automated by refresh.yml at 07:20 WAT.
+  schedule:
+    - cron: '25 6 * * *'
+  workflow_dispatch: {}
 
 permissions:
   contents: read
 
 concurrency:
-  group: plot207-volleyball-daily-collector
+  group: plot207-volleyball-daily-predictions
   cancel-in-progress: false
 
 jobs:
-  test-volleyball-v1:
-    if: github.event_name == 'workflow_dispatch'
+  volleyball-refresh:
+    name: Refresh Volleyball Predictions
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,7 +25,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install app dependencies
@@ -33,6 +36,9 @@ jobs:
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
 
+      - name: Record Volleyball refresh start
+        run: echo "SPORT_REFRESH_STARTED_AT=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+
       - name: Capture Volleyball fixtures and publish snapshot
         env:
           SPORTYSOCIAL_LOGIN_ID: ${{ secrets.SPORTYSOCIAL_LOGIN_ID }}
@@ -40,10 +46,16 @@ jobs:
           TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
           MATCHDAY_BASE_URL: https://matchday-odds-desk.onrender.com
         run: |
-          test -n "$SPORTYSOCIAL_LOGIN_ID" || (echo "Missing GitHub secret SPORTYSOCIAL_LOGIN_ID" && exit 1)
-          test -n "$SPORTYSOCIAL_PASSWORD" || (echo "Missing GitHub secret SPORTYSOCIAL_PASSWORD" && exit 1)
-          test -n "$TELEGRAM_JOB_SECRET" || (echo "Missing GitHub secret TELEGRAM_JOB_SECRET" && exit 1)
+          test -n "$SPORTYSOCIAL_LOGIN_ID" || (echo 'Missing GitHub secret SPORTYSOCIAL_LOGIN_ID' && exit 1)
+          test -n "$SPORTYSOCIAL_PASSWORD" || (echo 'Missing GitHub secret SPORTYSOCIAL_PASSWORD' && exit 1)
+          test -n "$TELEGRAM_JOB_SECRET" || (echo 'Missing GitHub secret TELEGRAM_JOB_SECRET' && exit 1)
           node jobs/sporty-volleyball-network-collector.js
+
+      - name: Verify fresh Volleyball snapshot
+        env:
+          SPORT_NAME: volleyball
+          MATCHDAY_BASE_URL: https://matchday-odds-desk.onrender.com
+        run: node jobs/verify-sport-snapshot.js
 
       - name: Upload Volleyball diagnostics
         if: always()

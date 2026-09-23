@@ -1,20 +1,23 @@
-name: Plot207 Tennis Collector V4
+name: Plot207 Tennis Daily Predictions
 
+# 06:30 UTC = 07:30 WAT (Nigeria). Tennis runs independently every day.
 on:
-  workflow_dispatch: {} # Manual recovery only. Automated by refresh.yml at 07:20 WAT.
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch: {}
 
 permissions:
   contents: read
 
 concurrency:
-  group: plot207-tennis-daily-collector
+  group: plot207-tennis-daily-predictions
   cancel-in-progress: false
 
 jobs:
-  test-tennis-v4:
-    if: github.event_name == 'workflow_dispatch'
+  tennis-refresh:
+    name: Refresh Tennis Predictions
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,7 +25,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install app dependencies
@@ -33,6 +36,9 @@ jobs:
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
 
+      - name: Record Tennis refresh start
+        run: echo "SPORT_REFRESH_STARTED_AT=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+
       - name: Capture Tennis fixtures and publish snapshot
         env:
           SPORTYSOCIAL_LOGIN_ID: ${{ secrets.SPORTYSOCIAL_LOGIN_ID }}
@@ -40,10 +46,16 @@ jobs:
           TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
           MATCHDAY_BASE_URL: https://matchday-odds-desk.onrender.com
         run: |
-          test -n "$SPORTYSOCIAL_LOGIN_ID" || (echo "Missing GitHub secret SPORTYSOCIAL_LOGIN_ID" && exit 1)
-          test -n "$SPORTYSOCIAL_PASSWORD" || (echo "Missing GitHub secret SPORTYSOCIAL_PASSWORD" && exit 1)
-          test -n "$TELEGRAM_JOB_SECRET" || (echo "Missing GitHub secret TELEGRAM_JOB_SECRET" && exit 1)
+          test -n "$SPORTYSOCIAL_LOGIN_ID" || (echo 'Missing GitHub secret SPORTYSOCIAL_LOGIN_ID' && exit 1)
+          test -n "$SPORTYSOCIAL_PASSWORD" || (echo 'Missing GitHub secret SPORTYSOCIAL_PASSWORD' && exit 1)
+          test -n "$TELEGRAM_JOB_SECRET" || (echo 'Missing GitHub secret TELEGRAM_JOB_SECRET' && exit 1)
           SPORTYBET_TENNIS_MAX_SCANS=80 SPORTYBET_TENNIS_STABLE_SCANS=5 node jobs/sporty-tennis-network-collector.js
+
+      - name: Verify fresh Tennis snapshot
+        env:
+          SPORT_NAME: tennis
+          MATCHDAY_BASE_URL: https://matchday-odds-desk.onrender.com
+        run: node jobs/verify-sport-snapshot.js
 
       - name: Upload Tennis diagnostics
         if: always()
