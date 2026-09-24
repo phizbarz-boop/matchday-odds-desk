@@ -1,11 +1,7 @@
 name: Plot207 Basketball Daily Predictions
 
-# 06:10 UTC = 07:10 WAT (Nigeria). Basketball runs independently every day.
 on:
-  schedule:
-    - cron: '10 6 * * *'
   workflow_dispatch: {}
-
 permissions:
   contents: read
 

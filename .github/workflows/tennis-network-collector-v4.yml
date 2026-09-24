@@ -1,11 +1,7 @@
 name: Plot207 Tennis Daily Predictions
 
-# 06:30 UTC = 07:30 WAT (Nigeria). Tennis runs independently every day.
 on:
-  schedule:
-    - cron: '30 6 * * *'
   workflow_dispatch: {}
-
 permissions:
   contents: read
 

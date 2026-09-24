@@ -1,11 +1,7 @@
 name: Plot207 Volleyball Daily Predictions
 
-# 06:25 UTC = 07:25 WAT (Nigeria). Volleyball runs independently every day.
 on:
-  schedule:
-    - cron: '25 6 * * *'
   workflow_dispatch: {}
-
 permissions:
   contents: read
 

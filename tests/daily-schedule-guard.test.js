@@ -15,21 +15,37 @@ test('WAT calendar date remains timezone-correct for daily deduplication', () =>
   assert.equal(watMinuteOfDay(new Date('2026-09-18T07:25:00Z')), 505);
 });
 
-test('all six sports have independent automatic daily workflows', () => {
-  const schedules = [
-    ['refresh.yml', /cron: ['"]5 6 \* \* \*['"]/, 'Football'],
-    ['basketball-daily-predictions.yml', /cron: ['"]10 6 \* \* \*['"]/, 'Basketball'],
-    ['ice-hockey-daily-predictions.yml', /cron: ['"]15 6 \* \* \*['"]/, 'Ice Hockey'],
-    ['handball-network-collector-v4.yml', /cron: ['"]20 6 \* \* \*['"]/, 'Handball'],
-    ['volleyball-network-collector-v1.yml', /cron: ['"]25 6 \* \* \*['"]/, 'Volleyball'],
-    ['tennis-network-collector-v4.yml', /cron: ['"]30 6 \* \* \*['"]/, 'Tennis'],
-  ];
+test('one CopyHub-style daily workflow refreshes all six sports; old sport workflows are manual-only', () => {
+  const daily = workflow('refresh.yml');
+  assert.match(daily, /Plot207 All Sports Daily Predictions/);
+  assert.match(daily, /cron: ['"]20 6 \* \* \*['"]/);
+  assert.match(daily, /workflow_dispatch/);
+  assert.match(daily, /cancel-in-progress:\s*false/);
+  assert.match(daily, /node-version:\s*['"]20['"]/);
+  assert.match(daily, /playwright@1\.55\.0/);
+  assert.match(daily, /node jobs\/all-sports-daily-refresh\.js/);
 
-  for (const [file, cron, sport] of schedules) {
+  const orchestrator = fs.readFileSync(path.join(root, 'jobs/all-sports-daily-refresh.js'), 'utf8');
+  for (const required of [
+    '/api/refresh',
+    '/api/refresh/sport/basketball',
+    '/api/refresh/sport/hockey',
+    'sporty-handball-network-collector.js',
+    'sporty-volleyball-network-collector.js',
+    'sporty-tennis-network-collector.js',
+    'wait-for-predictions.js',
+  ]) assert.match(orchestrator, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+  for (const file of [
+    'basketball-daily-predictions.yml',
+    'ice-hockey-daily-predictions.yml',
+    'handball-network-collector-v4.yml',
+    'volleyball-network-collector-v1.yml',
+    'tennis-network-collector-v4.yml',
+  ]) {
     const text = workflow(file);
-    assert.match(text, cron, `${sport} should have its own daily cron`);
-    assert.match(text, /workflow_dispatch/, `${sport} should also support manual recovery`);
-    assert.match(text, new RegExp(sport.replace(' ', '\\s+'), 'i'));
+    assert.match(text, /workflow_dispatch/, `${file} should remain available for manual recovery`);
+    assert.doesNotMatch(text, /cron:/, `${file} must not run on an automatic schedule`);
   }
 
   const telegram = workflow('telegram-picks.yml');

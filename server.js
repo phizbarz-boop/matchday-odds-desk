@@ -2259,7 +2259,7 @@ function isTelegramWinnerSelection(candidate) {
 }
 
 // Existing supported markets are eligible for SAFE, 2x and 3x.
-// All three require 90% model probability per selection and red-flag protection.
+// Scheduled thresholds: 1.30 SAFE >=85%; 2x/3x >=80%. Red-flag protection remains enabled.
 const TELEGRAM_FALLBACK_BET_TYPES = [
   'draw', 'dc_1x', 'dc_x2', 'dnb', 'over05', 'home_over05', 'away_over05', 'home_under45', 'away_under45', 'over15', 'under45',
   'gg_yes', 'ng_no', 'ah_0', 'ah_plus025', 'ah_minus025',
@@ -2309,11 +2309,12 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
     : null;
 
   // Scheduled Telegram plans only. Interactive AI Builder and website retain
-  // their independent, user-selected odds choices. All plans use 90% per leg.
+  // their independent, user-selected odds choices. Scheduled probability floors are
+  // 85% for 1.30 SAFE and 80% for 2x/3x.
   const plans = [
-    { label: '1.30–5.00 SAFE', targetOdds: 1.30, minProbability: 90, minOdds: 1.30, maxOdds: 5.00, maxSelections: 15 },
-    { label: '2', targetOdds: 2, minProbability: 90, mixedMarkets: true, allSports: true, maxSelections: 20 },
-    { label: '3', targetOdds: 3, minProbability: 90, mixedMarkets: true, allSports: true, maxSelections: 20 },
+    { label: '1.30–5.00 SAFE', targetOdds: 1.30, minProbability: 85, minOdds: 1.30, maxOdds: 5.00, maxSelections: 15 },
+    { label: '2', targetOdds: 2, minProbability: 80, mixedMarkets: true, allSports: true, maxSelections: 20 },
+    { label: '3', targetOdds: 3, minProbability: 80, mixedMarkets: true, allSports: true, maxSelections: 20 },
   ];
 
   // One market fetch covers all six sports for every target. Saved market caching
@@ -3320,8 +3321,8 @@ app.get('/api/telegram/status', (req, res) => {
     targets: ['1.30-5.00 SAFE', 2, 3],
     sportScope: 'all',
     rules: {
-      regular: { minProbabilityByTarget: { '2':90, '3':90 }, winnerOnly: false, targets: [2,3], selectionCaps: { '2':40, '3':40 }, supportedMarkets: TELEGRAM_HIGH_ODDS_BET_TYPES, prioritySports: TELEGRAM_SPORT_TIERS, primaryPrioritySports: ['hockey','basketball'], allSixSports: true, positiveEdgeRequired: false, redFlagProtection: true },
-      safe: { minProbability: 90, winnerOnly: false, supportedMarkets: TELEGRAM_HIGH_ODDS_BET_TYPES, prioritySports: ['hockey','basketball','handball','volleyball','tennis'], primaryPrioritySports: ['hockey','basketball'], combinedOddsMin: 1.30, combinedOddsMax: 5.00, positiveEdgeRequired: false, redFlagProtection: true },
+      regular: { minProbabilityByTarget: { '2':80, '3':80 }, winnerOnly: false, targets: [2,3], selectionCaps: { '2':40, '3':40 }, supportedMarkets: TELEGRAM_HIGH_ODDS_BET_TYPES, prioritySports: TELEGRAM_SPORT_TIERS, primaryPrioritySports: ['hockey','basketball'], allSixSports: true, positiveEdgeRequired: false, redFlagProtection: true },
+      safe: { minProbability: 85, winnerOnly: false, supportedMarkets: TELEGRAM_HIGH_ODDS_BET_TYPES, prioritySports: ['hockey','basketball','handball','volleyball','tennis'], primaryPrioritySports: ['hockey','basketball'], combinedOddsMin: 1.30, combinedOddsMax: 5.00, positiveEdgeRequired: false, redFlagProtection: true },
     },
     maxSelections: Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10))),
     scheduler: 'GitHub Actions',

@@ -1,11 +1,7 @@
 name: Plot207 Ice Hockey Daily Predictions
 
-# 06:15 UTC = 07:15 WAT (Nigeria). Ice Hockey runs independently every day.
 on:
-  schedule:
-    - cron: '15 6 * * *'
   workflow_dispatch: {}
-
 permissions:
   contents: read
 

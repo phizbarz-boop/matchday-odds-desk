@@ -86,9 +86,9 @@ test('daily Telegram configuration uses 15 selections for 1.30 and 20 for 2x/3x'
   const plans = source.match(/const plans = \[([\s\S]*?)\n  \];/);
   assert.ok(plans, 'daily ticket plan must be defined');
   const planText = plans[1];
-  assert.match(planText, /label: '1\.30–5\.00 SAFE', targetOdds: 1\.30, minProbability: 90, minOdds: 1\.30, maxOdds: 5\.00, maxSelections: 15/);
-  assert.match(planText, /label: '2', targetOdds: 2, minProbability: 90, mixedMarkets: true, allSports: true, maxSelections: 20/);
-  assert.match(planText, /label: '3', targetOdds: 3, minProbability: 90, mixedMarkets: true, allSports: true, maxSelections: 20/);
+  assert.match(planText, /label: '1\.30–5\.00 SAFE', targetOdds: 1\.30, minProbability: 85, minOdds: 1\.30, maxOdds: 5\.00, maxSelections: 15/);
+  assert.match(planText, /label: '2', targetOdds: 2, minProbability: 80, mixedMarkets: true, allSports: true, maxSelections: 20/);
+  assert.match(planText, /label: '3', targetOdds: 3, minProbability: 80, mixedMarkets: true, allSports: true, maxSelections: 20/);
   assert.match(source, /const TELEGRAM_SAFE_SPORT_TIERS = \[\s*\['hockey','basketball'\],\s*\['tennis'\],\s*\['handball','volleyball'\],/);
   assert.match(source, /const TELEGRAM_2X3X_SPORT_TIERS = \[\s*\['hockey','basketball','tennis'\],\s*\['handball','volleyball'\],/);
   assert.match(source, /isWinner: isTelegramWinnerSelection/);
