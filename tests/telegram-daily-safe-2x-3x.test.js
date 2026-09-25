@@ -45,44 +45,68 @@ function mockRunner(candidates) {
   return {run:ctx.runTelegramDailyPicks, messages, bookings, stored, tracked};
 }
 
-test('the actual daily runner uses 85% for SAFE and 80% for 2x/3x', async () => {
+test('daily runner keeps SAFE at 85% and adds three flexible 1000 sport tickets at 80%', async () => {
   const runner = mockRunner(testCandidates());
   let started = 0;
   const result = await runner.run({onPostingStart: () => {started++;}});
   assert.equal(started, 1);
-  assert.deepEqual(Array.from(result.plans, p => p.target), ['1.30–5.00 SAFE','2','3']);
-  assert.deepEqual(Array.from(result.plans, p => p.minProbability), [85,80,80]);
-  assert.equal(runner.bookings.length, 3);
-  assert.equal(runner.tracked.length, 3);
-  assert.equal(runner.stored.at(-1).codes.length, 3);
+  const targets = ['1.30–5.00 SAFE','2','3','1000 ICE HOCKEY','1000 BASKETBALL','1000 HANDBALL + VOLLEYBALL'];
+  assert.deepEqual(Array.from(result.plans, p => p.target), targets);
+  assert.deepEqual(Array.from(result.plans, p => p.minProbability), [85,80,80,80,80,80]);
+  assert.deepEqual(Array.from(result.plans, p => p.maxSelections), [15,20,20,15,15,15]);
+  assert.equal(runner.bookings.length, 6);
+  assert.equal(runner.tracked.length, 6);
+  assert.equal(runner.stored.at(-1).codes.length, 6);
   assert.match(runner.messages[0], /SAFE • 2x • 3x/);
-  assert.doesNotMatch(runner.messages[0], /10x|20x|1000x|10000x/);
+  assert.match(runner.messages[0], /1000 target.*Ice Hockey.*Basketball.*Handball \+ Volleyball/);
+
   for (const ticket of result.results) {
     assert.ok(ticket.shareCode);
     const floor = ticket.targetOdds === '1.30–5.00 SAFE' ? 85 : 80;
     assert.ok(ticket.minimumProbability === undefined || ticket.minimumProbability >= floor);
-    assert.ok(ticket.combinedOdds >= (ticket.targetOdds === '2' ? 2 : ticket.targetOdds === '3' ? 3 : 1.3));
+    if (ticket.targetOdds === '2') assert.ok(ticket.combinedOdds >= 2);
+    if (ticket.targetOdds === '3') assert.ok(ticket.combinedOdds >= 3);
+    if (ticket.targetOdds === '1.30–5.00 SAFE') assert.ok(ticket.combinedOdds >= 1.3 && ticket.combinedOdds <= 5);
+    if (String(ticket.targetOdds).startsWith('1000 ')) {
+      assert.equal(ticket.flexibleTarget, true);
+      assert.ok(ticket.selections <= 15);
+      // Test pool intentionally cannot reach 1000; it must still publish.
+      assert.ok(ticket.combinedOdds < 1000);
+    }
   }
+
+  const hockey = runner.tracked.find(x => x.targetOdds === '1000 ICE HOCKEY');
+  const basketball = runner.tracked.find(x => x.targetOdds === '1000 BASKETBALL');
+  const handVolley = runner.tracked.find(x => x.targetOdds === '1000 HANDBALL + VOLLEYBALL');
+  assert.ok(hockey.selections.every(x => x.sport === 'Ice Hockey'));
+  assert.ok(basketball.selections.every(x => x.sport === 'Basketball'));
+  assert.ok(handVolley.selections.every(x => ['Handball','Volleyball'].includes(x.sport)));
 });
 
-test('84% candidates skip SAFE but can still build 2x and 3x', async () => {
+test('84% candidates skip SAFE but can build 2x/3x and all three 1000 sport tickets', async () => {
   const runner = mockRunner(testCandidates(84));
   const result = await runner.run();
-  assert.deepEqual(Array.from(result.results, p => p.targetOdds), ['1.30–5.00 SAFE','2','3']);
+  assert.deepEqual(Array.from(result.results, p => p.targetOdds), [
+    '1.30–5.00 SAFE','2','3','1000 ICE HOCKEY','1000 BASKETBALL','1000 HANDBALL + VOLLEYBALL'
+  ]);
   assert.match(result.results[0].error, /No selections met the 85%/);
   assert.equal(result.results[1].shareCode, 'TEST1');
   assert.equal(result.results[2].shareCode, 'TEST2');
-  assert.equal(runner.bookings.length, 2);
+  assert.equal(result.results[3].shareCode, 'TEST3');
+  assert.equal(result.results[4].shareCode, 'TEST4');
+  assert.equal(result.results[5].shareCode, 'TEST5');
+  assert.equal(runner.bookings.length, 5);
 });
 
-test('the daily runner rejects an entirely below-80% candidate pool', async () => {
+test('the daily runner rejects an entirely below-80% candidate pool for every ticket', async () => {
   const runner = mockRunner(testCandidates(79));
   const result = await runner.run();
   assert.equal(runner.bookings.length, 0);
-  assert.deepEqual(Array.from(result.results, p => p.targetOdds), ['1.30–5.00 SAFE','2','3']);
+  assert.deepEqual(Array.from(result.results, p => p.targetOdds), [
+    '1.30–5.00 SAFE','2','3','1000 ICE HOCKEY','1000 BASKETBALL','1000 HANDBALL + VOLLEYBALL'
+  ]);
   assert.match(result.results[0].error, /No selections met the 85%/);
-  assert.match(result.results[1].error, /No selections met the 80%/);
-  assert.match(result.results[2].error, /No selections met the 80%/);
+  for (const ticket of result.results.slice(1)) assert.match(ticket.error, /No selections met the 80%/);
 });
 
 test('Today’s Codes shows SAFE and 2x to Free, with 3x restricted', () => {
