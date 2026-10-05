@@ -91,7 +91,7 @@ Defaults and their overrides:
 SPORTYBET_BASE_URL=https://www.sportybet.com/api/ng
 SPORTYBET_ENDPOINT_PREMATCH=/factsCenter/pcUpcomingEvents
 SPORTYBET_ENDPOINT_EVENT=/factsCenter/eventDetail
-SPORTYBET_ENDPOINT_LIVE=/factsCenter/pcLiveEvents
+SPORTYBET_ENDPOINT_LIVE=/factsCenter/liveOrPrematchEvents
 SPORTYBET_ENDPOINT_LOGIN=/users/login (default first probe; self-heals)
 SPORTYBET_ENDPOINT_USERINFO=/patron/account/info
 SPORTYBET_ENDPOINT_BOOK=/orders/share
@@ -125,7 +125,7 @@ SPORTYBET_MARKET_IDS_FOOTBALL=1,29,10,11,18,16,3,26
 SPORTYBET_MARKET_IDS_BASKETBALL=219,223,225
 SPORTYBET_MARKET_IDS_TENNIS=        (empty = omit the marketId param)
 SPORTYBET_ENDPOINT_PREMATCH_CANDIDATES=/factsCenter/pcUpcomingEvents,/factsCenter/upcomingEvents,...
-SPORTYBET_ENDPOINT_LIVE_CANDIDATES=/factsCenter/pcLiveEvents,/factsCenter/liveEvents,...
+SPORTYBET_ENDPOINT_LIVE_CANDIDATES=/factsCenter/liveOrPrematchEvents,/factsCenter/pcLiveEvents,...
 SPORTYBET_ENDPOINT_EVENT_CANDIDATES=/factsCenter/eventDetail,/factsCenter/event,...
 SPORTYBET_ENDPOINT_EVENT_METHOD=GET (set to POST if the capture shows a POST "Outcomes" detail call)
 ```
@@ -211,10 +211,23 @@ POST /api/sportybet/live/book     { "selections": [...] }
 Live tuning:
 
 ```text
-SPORTYBET_ENDPOINT_LIVE=/factsCenter/pcLiveEvents
+SPORTYBET_ENDPOINT_LIVE=/factsCenter/liveOrPrematchEvents
 SPORTYBET_LIVE_MAX_PAGES=5
 SPORTYBET_LIVE_CACHE_SECONDS=15
+SPORTYBET_LIVE_FILTER=1
 ```
+
+The live board path the site actually calls is
+`/api/ng/factsCenter/liveOrPrematchEvents?sportId=sr:sport:1` (observed in a
+Nigerian browser, Oct 2026); the older `pcLiveEvents` guesses never answered.
+As the name says, that feed can mix in-play and upcoming prematch events, so
+every event passes a live filter before it becomes a `live:true` row:
+explicit live flags and status text first ("1st half", "in play", …), then
+kickoff time (started within the last 12 hours = live; future start =
+prematch; "Not started"/"Ended" statuses are dropped regardless of kickoff).
+The same filter runs again during pre-booking validation, so a prematch match
+can never slip into a live-only coupon. Set `SPORTYBET_LIVE_FILTER=0` only if
+a future endpoint change makes the filter hide genuinely live matches.
 
 ## API routes (unchanged interface)
 
