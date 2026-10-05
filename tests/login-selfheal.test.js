@@ -9,11 +9,17 @@ const path = require('path');
 
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sportybetDirect.js'), 'utf8');
 
-test('login candidates include patron variants and env override', () => {
+test('login candidates include the observed patron accessToken path', () => {
   assert.match(SRC, /SPORTYBET_ENDPOINT_LOGIN_CANDIDATES/);
+  assert.match(SRC, /'\/patron\/accessToken'/);
   assert.match(SRC, /'\/patron\/login'/);
-  assert.match(SRC, /'\/patron\/account\/login'/);
   assert.match(SRC, /'\/users\/v2\/login'/);
+});
+
+test('login sends the web client headers observed on the site', () => {
+  assert.match(SRC, /'clientid': String\(process\.env\.SPORTYBET_CLIENT_ID \|\| 'web'\)/);
+  assert.match(SRC, /'operid': String\(process\.env\.SPORTYBET_OPER_ID \|\| '2'\)/);
+  assert.match(SRC, /'platform': String\(process\.env\.SPORTYBET_PLATFORM \|\| 'web'\)/);
 });
 
 test('userInfo defaults to the observed patron account-info path', () => {
@@ -39,4 +45,28 @@ test('keep-alive pings userInfo through the self-healing resolver', () => {
 
 test('geo or bot blocks still abort login probing immediately', () => {
   assert.match(SRC, /if \(isHtml\) throw classifyHtmlBlock\(url, text\)/);
+});
+
+test('patron cipher + encrypted accessToken login flow is implemented', () => {
+  assert.match(SRC, /SPORTYBET_ENDPOINT_CIPHER \|\| '\/patron\/cipher'/);
+  assert.match(SRC, /encryptLoginPayload/);
+  assert.match(SRC, /createCipheriv\('aes-128-cbc'/);
+  assert.match(SRC, /\/\\\/accessToken\$\/\.test\(candidatePath\)/);
+});
+
+test('refresh token rotation via patron/refresh is available', () => {
+  assert.match(SRC, /SPORTYBET_ENDPOINT_REFRESH \|\| '\/patron\/refresh'/);
+  assert.match(SRC, /async function refreshSession\(\)/);
+  assert.match(SRC, /Access token rotated via patron\/refresh/);
+  assert.match(SRC, /trying token refresh/);
+});
+
+test('browser cookie bootstrap via SPORTYBET_BOOTSTRAP_COOKIES', () => {
+  assert.match(SRC, /function bootstrapCookiesFromEnv\(\)/);
+  assert.match(SRC, /process\.env\.SPORTYBET_BOOTSTRAP_COOKIES/);
+  assert.match(SRC, /Bootstrapped \$\{added\} cookies/);
+});
+
+test('keep-alive can run on bootstrap cookies without a password', () => {
+  assert.match(SRC, /!credentialsConfigured\(\) && !process\.env\.SPORTYBET_BOOTSTRAP_COOKIES/);
 });

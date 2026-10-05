@@ -101,7 +101,8 @@ SPORTYBET_ENDPOINT_BOOKING_LOOKUP=/orders/share
 Login self-heals too: SportyBet moved its account service under `/patron`
 (the site's own account-info call is `/api/ng/patron/account/info`), so on
 each login the app probes a small candidate list
-(`/users/login`, `/patron/login`, `/patron/account/login`, … — extend with
+(`/users/login`, `/patron/accessToken` (observed on the site Oct 2026),
+`/patron/login`, … — extend with
 `SPORTYBET_ENDPOINT_LOGIN_CANDIDATES`) and adopts the first path that answers
 with anything other than the gateway's 404. The adopted path is persisted
 with the session. If every candidate 404s, login backs off for
@@ -133,6 +134,32 @@ Login probing is conservative by design (repeated failed logins could lock
 the dummy account): candidates are tried only when an actual login is needed,
 each candidate is POSTed once, geo/bot blocks abort probing immediately, and
 a fully-failed probe round backs off for 10 minutes.
+
+### The patron login flow (observed Oct 2026)
+
+The site's login is: `POST /api/ng/patron/cipher` (empty body) returns a
+one-time AES-128 key (`data.password`) plus a `ursId`; the app then encrypts
+`{"phone","password","ursId"}` with that key and POSTs the single base64 blob
+to `/api/ng/patron/accessToken`. Success sets `accessToken` / `refreshToken`
+cookies. Crypto variants can be tuned with `SPORTYBET_LOGIN_CIPHER_MODE`
+(`cbc` default, or `ecb`) and `SPORTYBET_LOGIN_IV` (`zero` default, or `key`).
+
+### Cookie bootstrap (simplest reliable session)
+
+If the encrypted login ever gives trouble, hand the server a browser session
+directly: in Firefox/Chrome DevTools → Storage/Application → Cookies →
+`www.sportybet.com`, copy `accessToken`, `refreshToken` and `deviceId`, and
+set one env var:
+
+```text
+SPORTYBET_BOOTSTRAP_COOKIES=accessToken=...; refreshToken=...; deviceId=...
+```
+
+The keep-alive rotates the access token via `POST /api/ng/patron/refresh`
+(the refresh token lives 30 days and renews on every use), so a bootstrapped
+session stays alive indefinitely while the server runs. Bootstrap is only
+used when no persisted session exists; password login remains the fallback.
+`SPORTYBET_PHONE`/`SPORTYBET_PASSWORD` are optional in this mode.
 
 To find the current paths: open sportybet.com/ng in a browser, open DevTools →
 Network (check "Disable Cache"), log in / load a booking code / open a match,
