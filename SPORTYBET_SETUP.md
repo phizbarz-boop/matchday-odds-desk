@@ -23,16 +23,16 @@ Required for the probability model (unchanged):
 FOOTBALL_DATA_TOKEN=your_football_data_token
 ```
 
-Strongly recommended — SportyBet geo-blocks non-allowed server IPs (Render
-US/EU included). Point this at an HTTP or SOCKS5 proxy with a Nigerian exit:
+Optional — only needed if diagnostics ever shows `SPORTYBET_GEO_BLOCKED`.
+SportyBet geo-blocks some server IPs; Render's were verified reachable (real
+JSON responses, no 451 page), so no proxy is needed on Render today:
 
 ```text
 SPORTYBET_PROXY_URL=http://user:pass@your-nigeria-proxy:8080
 ```
 
-If SportyBet answers this server's IP directly you can omit the proxy; check
-`/api/sportybet/diagnostics` after deploy — a geo-block shows up there as
-`SPORTYBET_GEO_BLOCKED`.
+Check `/api/sportybet/diagnostics` after deploy — a geo-block would show up
+there as `SPORTYBET_GEO_BLOCKED`; only then set the proxy.
 
 Recommended tuning (all optional):
 
@@ -77,23 +77,53 @@ Both are guarded by the website access cookie when `WEBSITE_ACCESS_CODE` is set.
 
 ## Endpoint overrides
 
-SportyBet can rename its internal routes. Every path is an environment
-variable, so a route change never needs a code deploy:
+SportyBet has renamed its internal routes before (the prematch list moved to
+`pcUpcomingEvents`). The client therefore keeps a **candidate list per route
+and probes it automatically**: the first path that answers with JSON is adopted
+and remembered (in the persisted session), and a later 404 on that path drops
+it and re-probes — route renames self-heal without a deploy. The diagnostics
+endpoint shows `resolvedEndpoints` (what is in use) and `endpointCandidates`
+(the probe order).
+
+Defaults and their overrides:
 
 ```text
 SPORTYBET_BASE_URL=https://www.sportybet.com/api/ng
-SPORTYBET_ENDPOINT_PREMATCH=/factsCenter/prematchSportEvents
-SPORTYBET_ENDPOINT_EVENT=/factsCenter/event
+SPORTYBET_ENDPOINT_PREMATCH=/factsCenter/pcUpcomingEvents
+SPORTYBET_ENDPOINT_EVENT=/factsCenter/eventDetail
+SPORTYBET_ENDPOINT_LIVE=/factsCenter/pcLiveEvents
 SPORTYBET_ENDPOINT_LOGIN=/users/login
 SPORTYBET_ENDPOINT_USERINFO=/users/info
 SPORTYBET_ENDPOINT_BOOK=/orders/share
 SPORTYBET_ENDPOINT_BOOKING_LOOKUP=/orders/share
-SPORTYBET_ENDPOINT_LIVE=/factsCenter/liveSportEvents
 ```
 
+List requests use the parameter naming observed on the site's own calls
+(`sportId=sr:sport:1&marketId=1,18,10,29,...`). Override the names or the
+market-ID CSVs only if a fresh browser capture shows they changed:
+
+```text
+SPORTYBET_PARAM_SPORT=sportId
+SPORTYBET_PARAM_MARKET=marketId
+SPORTYBET_PARAM_PAGE=pageNum
+SPORTYBET_PARAM_PAGE_SIZE=pageSize
+SPORTYBET_PARAM_EVENT_ID=eventId
+SPORTYBET_MARKET_IDS_FOOTBALL=1,29,10,11,18,16,3,26
+SPORTYBET_MARKET_IDS_BASKETBALL=219,223,225
+SPORTYBET_MARKET_IDS_TENNIS=        (empty = omit the marketId param)
+SPORTYBET_ENDPOINT_PREMATCH_CANDIDATES=/factsCenter/pcUpcomingEvents,/factsCenter/upcomingEvents,...
+SPORTYBET_ENDPOINT_LIVE_CANDIDATES=/factsCenter/pcLiveEvents,/factsCenter/liveEvents,...
+SPORTYBET_ENDPOINT_EVENT_CANDIDATES=/factsCenter/eventDetail,/factsCenter/event,...
+SPORTYBET_ENDPOINT_EVENT_METHOD=GET (set to POST if the capture shows a POST "Outcomes" detail call)
+```
+
+Login is never auto-probed (repeated failed logins could lock the dummy
+account): if the login route moves, diagnostics/relogin shows a 404 hint and
+you pin the new path with `SPORTYBET_ENDPOINT_LOGIN`.
+
 To find the current paths: open sportybet.com/ng in a browser, open DevTools →
-Network, log in / load a booking code / open a match, and copy the request
-paths into these variables.
+Network (check "Disable Cache"), log in / load a booking code / open a match,
+and copy the request paths into these variables.
 
 ## Sports and markets (unchanged)
 
@@ -141,7 +171,7 @@ POST /api/sportybet/live/book     { "selections": [...] }
 Live tuning:
 
 ```text
-SPORTYBET_ENDPOINT_LIVE=/factsCenter/liveSportEvents
+SPORTYBET_ENDPOINT_LIVE=/factsCenter/pcLiveEvents
 SPORTYBET_LIVE_MAX_PAGES=5
 SPORTYBET_LIVE_CACHE_SECONDS=15
 ```

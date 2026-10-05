@@ -25,8 +25,10 @@ test('tennis prematch rows are scraped directly from SportyBet pages', async () 
   const future = Date.now() + 86400000;
   direct.setFetchForTesting(async url => {
     const u = new URL(url);
-    assert.ok(u.pathname.endsWith('/factsCenter/prematchSportEvents'));
-    assert.equal(u.searchParams.get('sport'), SPORT_IDS.tennis);
+    // First prematch candidate is pcUpcomingEvents; any factsCenter path the
+    // resolver picks is acceptable, but the params must use sportId naming.
+    assert.ok(u.pathname.includes('/factsCenter/'));
+    assert.equal(u.searchParams.get('sportId'), SPORT_IDS.tennis);
     return jsonResponse([
       {eventId:'sr:match:t1',homeTeamName:'Player A',awayTeamName:'Player B',estimateStartTime:future,
        tournament:'ATP Test Open',
@@ -44,9 +46,11 @@ test('tennis prematch rows are scraped directly from SportyBet pages', async () 
 });
 
 test('live board scrape returns all bet types with live flag and real ids', async () => {
+  const livePaths = ['/factsCenter/pcLiveEvents','/factsCenter/liveEvents','/factsCenter/liveSportEvents','/factsCenter/inplayEvents','/factsCenter/inPlayEvents','/factsCenter/pcLiveSportEvents'];
   direct.setFetchForTesting(async url => {
     const u = new URL(url);
-    assert.ok(u.pathname.endsWith('/factsCenter/liveSportEvents'));
+    assert.ok(livePaths.some(p => u.pathname.endsWith(p)), `unexpected live path ${u.pathname}`);
+    assert.equal(u.searchParams.get('sportId'), SPORT_IDS.football);
     return jsonResponse([
       {eventId:'sr:match:live1',homeTeamName:'Live FC',awayTeamName:'Real Test',estimateStartTime:Date.now()-1800000,
        tournament:'Live League',
@@ -66,9 +70,10 @@ test('live board scrape returns all bet types with live flag and real ids', asyn
 });
 
 test('live booking validation drops suspended legs and keeps offered ones with fresh odds', async () => {
+  const livePaths = ['/factsCenter/pcLiveEvents','/factsCenter/liveEvents','/factsCenter/liveSportEvents','/factsCenter/inplayEvents','/factsCenter/inPlayEvents','/factsCenter/pcLiveSportEvents'];
   direct.setFetchForTesting(async url => {
     const u = new URL(url);
-    assert.ok(u.pathname.endsWith('/factsCenter/liveSportEvents'));
+    assert.ok(livePaths.some(p => u.pathname.endsWith(p)), `unexpected live path ${u.pathname}`);
     return jsonResponse([
       {eventId:'sr:match:live1',homeTeamName:'Live FC',awayTeamName:'Real Test',
        markets:[market('1','1X2',[outcome('1','Home',null,2.35)])]}, // away outcome suspended; odds moved 2.10 -> 2.35

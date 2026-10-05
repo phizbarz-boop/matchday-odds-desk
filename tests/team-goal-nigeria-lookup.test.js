@@ -25,7 +25,9 @@ test('all four team-total markets reuse ONE event call and preserve exact bookma
   direct.setFetchForTesting(async url => {
     urls.push(String(url));
     const u=new URL(url);
-    assert.ok(u.pathname.endsWith('/factsCenter/event'));
+    // First event-detail candidate is /factsCenter/eventDetail; the resolver may
+    // pick any factsCenter path, but the event id param name must be eventId.
+    assert.ok(u.pathname.includes('/factsCenter/'));
     assert.equal(u.searchParams.get('eventId'),id);
     return jsonResponse({eventId:id,markets:[
       market('701','Home Team Total Goals',[outcome('12','Over','total=0.5'),outcome('13','Under','total=4.5')]),
@@ -90,7 +92,10 @@ test('football 1X2 rows are flattened from prematch pages embedded markets',asyn
   let pages=0;
   direct.setFetchForTesting(async url=>{
     const u=new URL(url);
-    assert.ok(u.pathname.endsWith('/factsCenter/prematchSportEvents'));
+    // Prematch list default is pcUpcomingEvents with sportId + marketId params.
+    assert.ok(u.pathname.endsWith('/factsCenter/pcUpcomingEvents'));
+    assert.equal(u.searchParams.get('sportId'),'sr:sport:1');
+    assert.ok((u.searchParams.get('marketId')||'').split(',').includes('1'),'marketId CSV must include 1X2 id');
     pages++;
     return jsonResponse([
       {eventId:'sr:match:1',homeTeamName:'Alpha FC',awayTeamName:'Beta FC',estimateStartTime:Date.parse(future),
