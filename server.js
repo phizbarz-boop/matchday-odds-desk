@@ -571,6 +571,32 @@ function sportySnapshotKey(sport, kind) {
   return `sportybet:snapshot:v${v}:${sport}:${kind}`;
 }
 
+// Without Redis the daily refresh runs as a separate process, so the shared
+// market snapshots must live on disk to be visible to the web process.
+const SPORTY_SNAPSHOT_DIR = path.join(__dirname, 'data', 'sporty-snapshots');
+function sportySnapshotFile(key) {
+  return path.join(SPORTY_SNAPSHOT_DIR, key.replace(/[^a-zA-Z0-9]+/g, '_') + '.json');
+}
+function readSportySnapshotFile(key, nowMs) {
+  try {
+    const file = sportySnapshotFile(key);
+    if (!fs.existsSync(file)) return null;
+    const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const ttl = Math.max(3600, parseInt(process.env.SPORTYBET_DAILY_SNAPSHOT_SECONDS || '93600', 10));
+    const savedMs = Date.parse(snapshot?.snapshotSavedAt || '');
+    if (Number.isFinite(savedMs) && savedMs + ttl * 1000 <= nowMs) return null;
+    return snapshot;
+  } catch { return null; }
+}
+function writeSportySnapshotFile(key, snapshot) {
+  try {
+    fs.mkdirSync(SPORTY_SNAPSHOT_DIR, { recursive: true });
+    fs.writeFileSync(sportySnapshotFile(key), JSON.stringify(snapshot));
+  } catch (err) {
+    console.warn(`[SportyBet snapshot] could not write file for ${key}: ${err.message}`);
+  }
+}
+
 async function readSportySnapshot(client, sport, kind, hours, nowMs, kickoffBufferSeconds) {
   const key = sportySnapshotKey(sport, kind);
   let snapshot = null;
@@ -579,6 +605,7 @@ async function readSportySnapshot(client, sport, kind, hours, nowMs, kickoffBuff
   } else {
     const hit = sportyMemoryCache.get(key);
     if (hit && hit.expiresAt > nowMs) snapshot = hit.payload;
+    if (!snapshot) snapshot = readSportySnapshotFile(key, nowMs);
   }
   if (!snapshot || Number(snapshot.snapshotHours || 0) < Number(hours || 0)) return null;
   const maxAge = Math.max(300, parseInt(process.env.SPORTYBET_DAILY_SNAPSHOT_MAX_AGE_SECONDS || '90000', 10));
@@ -594,7 +621,10 @@ async function writeSportySnapshot(client, sport, kind, payload, hours) {
   const ttl = Math.max(3600, parseInt(process.env.SPORTYBET_DAILY_SNAPSHOT_SECONDS || '93600', 10));
   const snapshot = { ...payload, snapshotHours: Number(hours) || 0, snapshotSavedAt: new Date().toISOString() };
   if (client) await client.set(key, JSON.stringify(snapshot), { EX: ttl }).catch(()=>{});
-  else sportyMemoryCache.set(key, { expiresAt: Date.now() + ttl * 1000, payload: snapshot });
+  else {
+    sportyMemoryCache.set(key, { expiresAt: Date.now() + ttl * 1000, payload: snapshot });
+    writeSportySnapshotFile(key, snapshot);
+  }
 }
 
 async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
@@ -1349,6 +1379,17 @@ function normalizeSportScope(value) {
   return ['all', 'football', 'basketball', 'hockey', 'handball', 'volleyball', 'tennis'].includes(v) ? v : 'all';
 }
 
+// Auto Builder match-status option: prematch (default), live only, or both.
+// Live rows come from the in-play board, are tagged live:true, and are scored by
+// the same probability/value engine (football Poisson + H2H from the daily
+// predictions; other sports no-vig market probability).
+function normalizeLiveMode(value) {
+  const v = String(value || 'prematch').toLowerCase().replace(/[\s_-]+/g, '');
+  if (['live', 'liveonly', 'inplay'].includes(v)) return 'live';
+  if (['both', 'liveprematch', 'prematchlive', 'all'].includes(v)) return 'both';
+  return 'prematch';
+}
+
 function normalizeSportScopes(value) {
   const raw = Array.isArray(value) ? value : [value];
   const out = [];
@@ -1452,7 +1493,10 @@ function normalizeAutoBetTypesForSports(sports, betTypes) {
   return [...compatible];
 }
 
-async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, marketCacheOnly = false } = {}) {
+async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, marketCacheOnly = false, liveMode = 'prematch' } = {}) {
+  const liveModeNorm = normalizeLiveMode(liveMode);
+  const wantsPrematch = liveModeNorm !== 'live';
+  const wantsLive = liveModeNorm !== 'prematch';
   const selectedSports = normalizeSportScopes(Array.isArray(sports) && sports.length ? sports : sportScope);
   const selectedSet = new Set(selectedSports);
   const wantsFootball = selectedSet.has('football');
@@ -1525,36 +1569,92 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
   let predictions = await safeMarket('football predictions', wantsFootball, () => loadPredictions(), { matches: [] });
   autoMarketOptions.fixtures = Array.isArray(predictions?.matches) ? predictions.matches : [];
   let [f1x2, fgg, fdc, fdnb, fou05, fhomeou05, fawayou05, fhomeou45, fawayou45, fou15, fou45, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, hockeyWinner, hockeyTotals, handballWinner, handballTotals, volleyballWinner, volleyballTotals, volleyballSets, tennisWinner, tennisTotals, tennisHandicap] = await Promise.all([
-    safeMarket('football 1X2', needF1x2, () => loadSportyBetMarket('1x2', 'football', autoMarketOptions)),
-    safeMarket('football GG/NG', needFGg, () => loadSportyBetMarket('gg', 'football', autoMarketOptions)),
-    safeMarket('football Double Chance', needFDc, () => loadSportyBetMarket('dc', 'football', autoMarketOptions)),
-    safeMarket('football Draw No Bet', needFDnb, () => loadSportyBetMarket('dnb', 'football', autoMarketOptions)),
-    safeMarket('football Over 0.5', needFOu05, () => loadSportyBetMarket('ou05', 'football', autoMarketOptions)),
-    safeMarket('football Home Over 0.5', needFHomeOu05, () => loadSportyBetMarket('home_ou05', 'football', autoMarketOptions)),
-    safeMarket('football Away Over 0.5', needFAwayOu05, () => loadSportyBetMarket('away_ou05', 'football', autoMarketOptions)),
-    safeMarket('football Home Under 4.5', needFHomeOu45, () => loadSportyBetMarket('home_ou45', 'football', autoMarketOptions)),
-    safeMarket('football Away Under 4.5', needFAwayOu45, () => loadSportyBetMarket('away_ou45', 'football', autoMarketOptions)),
-    safeMarket('football Over 1.5', needFOu15, () => loadSportyBetMarket('ou15', 'football', autoMarketOptions)),
-    safeMarket('football Under 4.5', needFOu45, () => loadSportyBetMarket('ou45', 'football', autoMarketOptions)),
-    safeMarket('football Asian Handicap', needFAh, () => loadSportyBetMarket('ah', 'football', autoMarketOptions)),
-    safeMarket('football Corners', needFCorners, () => loadSportyBetMarket('corners', 'football', autoMarketOptions)),
-    safeMarket('football 1H team corners', needF1hCorners, () => loadSportyBetMarket('first_half_team_corners', 'football', autoMarketOptions)),
-    safeMarket('football 1UP', needFOneup, () => loadSportyBetMarket('oneup', 'football', autoMarketOptions)),
-    safeMarket('basketball winner', needBasketballWinner, () => loadSportyBetMarket('winner', 'basketball', autoMarketOptions)),
-    safeMarket('basketball totals', needBasketballTotals, () => loadSportyBetMarket('totals', 'basketball', autoMarketOptions)),
-    safeMarket('hockey winner', needHockeyWinner, () => loadSportyBetMarket('winner', 'hockey', autoMarketOptions)),
-    safeMarket('hockey totals', needHockeyTotals, () => loadSportyBetMarket('totals', 'hockey', autoMarketOptions)),
-    safeMarket('handball winner', needHandballWinner, () => loadHandballMarket('winner')),
-    safeMarket('handball totals', needHandballTotals, () => loadHandballMarket('totals')),
-    safeMarket('volleyball winner', needVolleyballWinner, () => loadVolleyballMarket('winner')),
-    safeMarket('volleyball totals', needVolleyballTotals, () => loadVolleyballMarket('totals')),
-    safeMarket('volleyball total sets', needVolleyballSets, () => loadVolleyballMarket('sets')),
-    safeMarket('tennis winner', needTennisWinner, () => loadTennisMarket('winner')),
-    safeMarket('tennis totals', needTennisTotals, () => loadTennisMarket('totals')),
-    safeMarket('tennis handicap', needTennisHandicap, () => loadTennisMarket('handicap')),
+    safeMarket('football 1X2', needF1x2 && wantsPrematch, () => loadSportyBetMarket('1x2', 'football', autoMarketOptions)),
+    safeMarket('football GG/NG', needFGg && wantsPrematch, () => loadSportyBetMarket('gg', 'football', autoMarketOptions)),
+    safeMarket('football Double Chance', needFDc && wantsPrematch, () => loadSportyBetMarket('dc', 'football', autoMarketOptions)),
+    safeMarket('football Draw No Bet', needFDnb && wantsPrematch, () => loadSportyBetMarket('dnb', 'football', autoMarketOptions)),
+    safeMarket('football Over 0.5', needFOu05 && wantsPrematch, () => loadSportyBetMarket('ou05', 'football', autoMarketOptions)),
+    safeMarket('football Home Over 0.5', needFHomeOu05 && wantsPrematch, () => loadSportyBetMarket('home_ou05', 'football', autoMarketOptions)),
+    safeMarket('football Away Over 0.5', needFAwayOu05 && wantsPrematch, () => loadSportyBetMarket('away_ou05', 'football', autoMarketOptions)),
+    safeMarket('football Home Under 4.5', needFHomeOu45 && wantsPrematch, () => loadSportyBetMarket('home_ou45', 'football', autoMarketOptions)),
+    safeMarket('football Away Under 4.5', needFAwayOu45 && wantsPrematch, () => loadSportyBetMarket('away_ou45', 'football', autoMarketOptions)),
+    safeMarket('football Over 1.5', needFOu15 && wantsPrematch, () => loadSportyBetMarket('ou15', 'football', autoMarketOptions)),
+    safeMarket('football Under 4.5', needFOu45 && wantsPrematch, () => loadSportyBetMarket('ou45', 'football', autoMarketOptions)),
+    safeMarket('football Asian Handicap', needFAh && wantsPrematch, () => loadSportyBetMarket('ah', 'football', autoMarketOptions)),
+    safeMarket('football Corners', needFCorners && wantsPrematch, () => loadSportyBetMarket('corners', 'football', autoMarketOptions)),
+    safeMarket('football 1H team corners', needF1hCorners && wantsPrematch, () => loadSportyBetMarket('first_half_team_corners', 'football', autoMarketOptions)),
+    safeMarket('football 1UP', needFOneup && wantsPrematch, () => loadSportyBetMarket('oneup', 'football', autoMarketOptions)),
+    safeMarket('basketball winner', needBasketballWinner && wantsPrematch, () => loadSportyBetMarket('winner', 'basketball', autoMarketOptions)),
+    safeMarket('basketball totals', needBasketballTotals && wantsPrematch, () => loadSportyBetMarket('totals', 'basketball', autoMarketOptions)),
+    safeMarket('hockey winner', needHockeyWinner && wantsPrematch, () => loadSportyBetMarket('winner', 'hockey', autoMarketOptions)),
+    safeMarket('hockey totals', needHockeyTotals && wantsPrematch, () => loadSportyBetMarket('totals', 'hockey', autoMarketOptions)),
+    safeMarket('handball winner', needHandballWinner && wantsPrematch, () => loadHandballMarket('winner')),
+    safeMarket('handball totals', needHandballTotals && wantsPrematch, () => loadHandballMarket('totals')),
+    safeMarket('volleyball winner', needVolleyballWinner && wantsPrematch, () => loadVolleyballMarket('winner')),
+    safeMarket('volleyball totals', needVolleyballTotals && wantsPrematch, () => loadVolleyballMarket('totals')),
+    safeMarket('volleyball total sets', needVolleyballSets && wantsPrematch, () => loadVolleyballMarket('sets')),
+    safeMarket('tennis winner', needTennisWinner && wantsPrematch, () => loadTennisMarket('winner')),
+    safeMarket('tennis totals', needTennisTotals && wantsPrematch, () => loadTennisMarket('totals')),
+    safeMarket('tennis handicap', needTennisHandicap && wantsPrematch, () => loadTennisMarket('handicap')),
   ]);
 
-  if (wantsFootball && cornerBetRequested(betTypes)) {
+  // Live in-play option: scrape the SportyBet live board for exactly the market
+  // families the request needs, tag the rows live:true, and merge them into the
+  // same payloads the probability engine already consumes. Football legs are
+  // still scored by the saved Poisson + H2H predictions (daily refresh runs
+  // before kickoff, so today's ongoing matches keep their model rows);
+  // other sports use the same no-vig market probability as prematch.
+  if (wantsLive) {
+    const liveMaxPages = Math.max(1, Math.min(20, parseInt(process.env.SPORTYBET_LIVE_MAX_PAGES || '5', 10)));
+    const liveOnly = liveModeNorm === 'live';
+    const mergeLiveRows = (payload, liveRows) => {
+      const base = liveOnly ? [] : (Array.isArray(payload?.rows) ? payload.rows : []);
+      const rows = [...base, ...liveRows];
+      return { ...(payload || {}), rows, totalReturned: rows.length, live: true, liveRows: liveRows.length };
+    };
+    const liveFetch = async (sport, kind, enabled) => {
+      if (!enabled) return [];
+      try {
+        const payload = await getLiveSportMarket(sport, kind, { maxPages: liveMaxPages });
+        return (payload.rows || []).map(r => ({ ...r, live: true }));
+      } catch (err) {
+        console.warn(`[Auto candidates] live ${sport}/${kind} unavailable: ${err.message}`);
+        return [];
+      }
+    };
+    const liveJobs = [
+      ['football', '1x2', needF1x2, v => { f1x2 = mergeLiveRows(f1x2, v); }],
+      ['football', 'gg', needFGg, v => { fgg = mergeLiveRows(fgg, v); }],
+      ['football', 'dc', needFDc, v => { fdc = mergeLiveRows(fdc, v); }],
+      ['football', 'dnb', needFDnb, v => { fdnb = mergeLiveRows(fdnb, v); }],
+      ['football', 'ou05', needFOu05, v => { fou05 = mergeLiveRows(fou05, v); }],
+      ['football', 'home_ou05', needFHomeOu05, v => { fhomeou05 = mergeLiveRows(fhomeou05, v); }],
+      ['football', 'away_ou05', needFAwayOu05, v => { fawayou05 = mergeLiveRows(fawayou05, v); }],
+      ['football', 'home_ou45', needFHomeOu45, v => { fhomeou45 = mergeLiveRows(fhomeou45, v); }],
+      ['football', 'away_ou45', needFAwayOu45, v => { fawayou45 = mergeLiveRows(fawayou45, v); }],
+      ['football', 'ou15', needFOu15, v => { fou15 = mergeLiveRows(fou15, v); }],
+      ['football', 'ou45', needFOu45, v => { fou45 = mergeLiveRows(fou45, v); }],
+      ['football', 'ah', needFAh, v => { fah = mergeLiveRows(fah, v); }],
+      ['football', 'corners', needFCorners, v => { fcorners = mergeLiveRows(fcorners, v); }],
+      ['basketball', 'winner', needBasketballWinner, v => { basketballWinner = mergeLiveRows(basketballWinner, v); }],
+      ['basketball', 'totals', needBasketballTotals, v => { basketballTotals = mergeLiveRows(basketballTotals, v); }],
+      ['hockey', 'winner', needHockeyWinner, v => { hockeyWinner = mergeLiveRows(hockeyWinner, v); }],
+      ['hockey', 'totals', needHockeyTotals, v => { hockeyTotals = mergeLiveRows(hockeyTotals, v); }],
+      ['handball', 'winner', needHandballWinner, v => { handballWinner = mergeLiveRows(handballWinner, v); }],
+      ['handball', 'totals', needHandballTotals, v => { handballTotals = mergeLiveRows(handballTotals, v); }],
+      ['volleyball', 'winner', needVolleyballWinner, v => { volleyballWinner = mergeLiveRows(volleyballWinner, v); }],
+      ['volleyball', 'totals', needVolleyballTotals, v => { volleyballTotals = mergeLiveRows(volleyballTotals, v); }],
+      ['volleyball', 'sets', needVolleyballSets, v => { volleyballSets = mergeLiveRows(volleyballSets, v); }],
+      ['tennis', 'winner', needTennisWinner, v => { tennisWinner = mergeLiveRows(tennisWinner, v); }],
+      ['tennis', 'totals', needTennisTotals, v => { tennisTotals = mergeLiveRows(tennisTotals, v); }],
+      ['tennis', 'handicap', needTennisHandicap, v => { tennisHandicap = mergeLiveRows(tennisHandicap, v); }],
+    ];
+    await Promise.all(liveJobs.map(async ([sport, kind, enabled, apply]) => {
+      apply(await liveFetch(sport, kind, enabled));
+    }));
+  }
+
+  if (wantsFootball && liveModeNorm !== 'live' && cornerBetRequested(betTypes)) {
     try {
       predictions = await addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorners, marketHours);
     } catch (err) {
@@ -1644,12 +1744,14 @@ async function prepareAutoCandidatePool({
   marketHours=null,
   marketMaxPages=null,
   todayOnly=false,
+  liveMode='prematch',
 } = {}) {
   // Single source of truth for Website + Telegram AI candidate eligibility.
   // Keeping the complete filtering path here prevents one surface from finding
   // selections while another reports zero for the same settings.
   const selectedSports = normalizeSportScopes(sportScope);
   const sport = selectedSports.length === 6 ? 'all' : (selectedSports.length === 1 ? selectedSports[0] : 'multi');
+  const liveModeNorm = normalizeLiveMode(liveMode);
   const probabilityFloor = Math.min(95, Math.max(0, Number(minProbability) || 0));
   const edgeFloor = Math.min(50, Math.max(-25, Number(minEdge) || 0));
 
@@ -1662,6 +1764,7 @@ async function prepareAutoCandidatePool({
     betTypes,
     marketHours,
     marketMaxPages,
+    liveMode: liveModeNorm,
   });
 
   const todayFiltered = todayOnly
@@ -1676,9 +1779,12 @@ async function prepareAutoCandidatePool({
   return {
     sport,
     sports: selectedSports,
+    liveMode: liveModeNorm,
     candidates: oddsSafe,
     diagnostics: {
       sports: selectedSports,
+      liveMode: liveModeNorm,
+      liveCandidates: oddsSafe.filter(c => c.live === true).length,
       rawCandidates: rawCandidates.length,
       afterTodayFilter: todayFiltered.length,
       todayOnly: !!todayOnly,
@@ -2235,8 +2341,9 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const sportScope = selectedSports.length === 6 ? 'all' : (selectedSports.length === 1 ? selectedSports[0] : 'multi');
     const betTypes = normalizeAutoBetTypesForSports(selectedSports, Array.isArray(body.betTypes) ? body.betTypes.map(String) : null);
     const todayOnly = body.todayOnly === true || String(body.todayOnly || '').toLowerCase() === 'true';
+    const liveMode = normalizeLiveMode(body.liveMode);
 
-    const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly });
+    const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly, liveMode });
     const oddsFilteredCandidates = prepared.candidates;
     const redFlagSafeCandidatesCount = prepared.diagnostics.afterRedFlag;
     const rawCandidatesCount = prepared.diagnostics.rawCandidates;
@@ -2811,13 +2918,15 @@ function telegramAiAccountText(user) {
   ].join('\n');
 }
 
-function telegramAiTicketText(result, booking, request, plan) {
+function telegramAiTicketText(result, booking, request, plan, droppedLive = []) {
+  const liveCount = result.selections.filter(x => x.live === true).length;
+  const modeLabel = request.liveMode === 'live' ? '🔴 LIVE ONLY' : request.liveMode === 'both' ? 'PREMATCH + 🔴 LIVE' : 'PREMATCH';
   const lines = [
     `🤖 MATCHDAY AI — ${request.safe ? 'SAFE' : `${Number(request.targetOdds).toFixed(request.targetOdds < 2 ? 2 : 0)}x`} TICKET`,
-    `${result.reachedTarget ? '✅ TARGET REACHED' : '🟡 CLOSEST AVAILABLE'} | ${String(request.sport || 'all').toUpperCase()}`,
+    `${result.reachedTarget ? '✅ TARGET REACHED' : '🟡 CLOSEST AVAILABLE'} | ${String(request.sport || 'all').toUpperCase()} | ${modeLabel}`,
     `Plan: ${plan.name}`,
     `Actual odds: ${Number(result.combinedOdds || 1).toFixed(2)}`,
-    `Selections: ${result.selections.length}`,
+    `Selections: ${result.selections.length}${liveCount ? ` (${liveCount} 🔴 live)` : ''}`,
     `Average leg probability: ${Number(result.averageProbability || 0).toFixed(1)}%`,
     `Minimum leg probability: ${Number(result.minimumProbability || 0).toFixed(1)}%`,
     `Average quality: ${Number(result.averageQualityScore || 0).toFixed(1)}/100`,
@@ -2825,9 +2934,12 @@ function telegramAiTicketText(result, booking, request, plan) {
     ''
   ];
   result.selections.forEach((x, i) => {
-    lines.push(`${i+1}. [${x.sport}] ${x.home} vs ${x.away}`);
+    lines.push(`${i+1}. ${x.live === true ? '🔴 LIVE ' : ''}[${x.sport}] ${x.home} vs ${x.away}`);
     lines.push(`   ${x.outcomeDesc || x.marketDesc} @ ${Number(x.odds).toFixed(2)} | ${Number(x.probability||0).toFixed(1)}% | Q ${Number(x.qualityScore||0).toFixed(1)}`);
   });
+  if (droppedLive.length) {
+    lines.push('', `⚠️ ${droppedLive.length} live selection(s) were suspended or settled before booking and were removed from this ticket.`);
+  }
   if (booking?.shareURL) lines.push('', `SportyBet link: ${booking.shareURL}`);
   lines.push('', 'Probabilities are model estimates, not guarantees.');
   return lines.join('\n');
@@ -2914,6 +3026,7 @@ async function buildTelegramAiTicket(user, request) {
   if (!betTypes.length) {
     return { error: `None of the selected bet types are compatible with ${sport === 'hockey' ? 'Ice Hockey' : sport}. Choose a compatible market or ask for the sport without specifying a bet type.` };
   }
+  const liveMode = normalizeLiveMode(merged.liveMode);
   const prepared = await prepareAutoCandidatePool({
     sportScope: sports,
     minProbability,
@@ -2922,6 +3035,7 @@ async function buildTelegramAiTicket(user, request) {
     betTypes,
     maxMatchOdds: merged.maxMatchOdds,
     todayOnly: !!merged.todayOnly,
+    liveMode,
   });
   const pool = prepared.candidates;
   if (!pool.length) {
@@ -2941,8 +3055,43 @@ async function buildTelegramAiTicket(user, request) {
   if (merged.safe && (Number(result.combinedOdds) < 1.30 || Number(result.combinedOdds) > 5.00)) {
     return { error: 'No SAFE combination currently lands inside 1.30–5.00 while keeping every leg at 90%+.' };
   }
+  // Live legs: re-validate against the current live board right before booking.
+  // Suspended legs are dropped and the slip stats are recomputed on the survivors.
+  let droppedLive = [];
+  const liveLegs = result.selections.filter(x => x.live === true);
+  if (liveLegs.length) {
+    try {
+      const check = await validateLiveSelections(liveLegs.map(x => ({
+        eventId: x.eventId, marketId: x.marketId, outcomeId: x.outcomeId,
+        specifier: x.specifier || null, sport: x.sport,
+      })));
+      droppedLive = check.dropped;
+      if (check.valid.length !== liveLegs.length) {
+        const validKeys = new Set(check.valid.map(v => [String(v.eventId), String(v.marketId), String(v.outcomeId), String(v.specifier || '')].join('|')));
+        result.selections = result.selections.filter(x => x.live !== true || validKeys.has([String(x.eventId), String(x.marketId), String(x.outcomeId), String(x.specifier || '')].join('|')));
+        if (!result.selections.length) {
+          return { error: 'Every live selection was suspended or settled while I was building the ticket. Run the builder again for the latest live odds.', droppedLive };
+        }
+        result.combinedOdds = result.selections.reduce((acc, x) => acc * Number(x.odds || 1), 1);
+        result.averageProbability = result.selections.reduce((acc, x) => acc + Number(x.probability || 0), 0) / result.selections.length;
+        result.minimumProbability = Math.min(...result.selections.map(x => Number(x.probability || 0)));
+        result.averageQualityScore = result.selections.reduce((acc, x) => acc + Number(x.qualityScore || 0), 0) / result.selections.length;
+      }
+    } catch (liveErr) {
+      // Never book live legs we could not re-check.
+      result.selections = result.selections.filter(x => x.live !== true);
+      droppedLive = liveLegs.map(x => ({ ...x, dropReason: `live re-validation failed: ${liveErr.message}` }));
+      if (!result.selections.length) {
+        return { error: 'Live odds could not be re-validated right now. Try again in a few seconds.', droppedLive };
+      }
+      result.combinedOdds = result.selections.reduce((acc, x) => acc * Number(x.odds || 1), 1);
+      result.averageProbability = result.selections.reduce((acc, x) => acc + Number(x.probability || 0), 0) / result.selections.length;
+      result.minimumProbability = Math.min(...result.selections.map(x => Number(x.probability || 0)));
+      result.averageQualityScore = result.selections.reduce((acc, x) => acc + Number(x.qualityScore || 0), 0) / result.selections.length;
+    }
+  }
   const booking = await bookBet(result.selections.map(x => ({ eventId:x.eventId, marketId:x.marketId, outcomeId:x.outcomeId, ...(x.specifier ? {specifier:x.specifier}: {}) })));
-  return { result, booking, plan, request: { ...merged, sport, sports, targetOdds, minProbability, minEdge, maxSelections, betTypes } };
+  return { result, booking, plan, droppedLive, request: { ...merged, sport, sports, targetOdds, minProbability, minEdge, maxSelections, betTypes, liveMode } };
 }
 
 function telegramAnalyzerSameFixture(leg, c) {
@@ -2965,7 +3114,7 @@ function telegramAnalyzerReplacementFor(leg, candidates, minProbability) {
     })[0] || null;
 }
 
-async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDays = 14, replaceUnsupported = false) {
+async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDays = 14, replaceUnsupported = false, includeLive = false) {
   horizonDays = Math.min(21, Math.max(7, Number(horizonDays) || 14));
   const analyzerHours = horizonDays * 24;
   const booking = await getBooking(bookingCode);
@@ -2988,9 +3137,12 @@ async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDa
   // Load the full supported market universe for the booking's sport from cache only.
   // This lets an unsupported imported market be replaced by another supported saved
   // market on the exact same fixture without fetching fresh SportyBet market pages.
+  // includeLive is an explicit analyzer opt-in: ongoing in-play games are fetched
+  // fresh (never from the cache-only prematch path) and scored with the same model.
   const candidates = await loadAutoCandidates({
     sportScope, minProbability:0, minEdge:-25, leagues:null, betTypes:null,
-    marketHours:analyzerHours, marketMaxPages:2, marketCacheOnly:true
+    marketHours:analyzerHours, marketMaxPages:2, marketCacheOnly:true,
+    liveMode: includeLive ? 'both' : 'prematch'
   });
 
   const analyzed = sourceRows.map((leg, index) => {
@@ -3018,14 +3170,14 @@ async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDa
     }
     return { index, ...leg, supported:true, qualified:Number(best.probability||0)>=minProbability, replaced:false, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:best.outcomeDesc, marketDesc:best.marketDesc, odds:Number(best.odds||leg.odds||0) };
   });
-  return { bookingCode, analyzed, supported: analyzed.filter(x=>x.supported).length, qualified: analyzed.filter(x=>x.qualified).length, replaced: analyzed.filter(x=>x.replaced).length, unsupported: analyzed.filter(x=>!x.supported).length, total: analyzed.length, minProbability, replaceUnsupported:!!replaceUnsupported, cacheOnlyMarkets:true };
+  return { bookingCode, analyzed, supported: analyzed.filter(x=>x.supported).length, qualified: analyzed.filter(x=>x.qualified).length, replaced: analyzed.filter(x=>x.replaced).length, unsupported: analyzed.filter(x=>!x.supported).length, total: analyzed.length, minProbability, replaceUnsupported:!!replaceUnsupported, cacheOnlyMarkets:true, includeLive:!!includeLive };
 }
 
 function telegramAiAnalysisText(a) {
-  const lines=[`🔎 MATCHDAY AI CODE ANALYSIS — ${a.bookingCode}`, `Scored: ${a.supported}/${a.total}`, `Qualified ≥ ${a.minProbability}%: ${a.qualified}/${a.total}`, ...(a.replaceUnsupported?[`Replaced from saved data: ${a.replaced||0}`]:[]), ''];
+  const lines=[`🔎 MATCHDAY AI CODE ANALYSIS — ${a.bookingCode}`, `Scored: ${a.supported}/${a.total}`, `Qualified ≥ ${a.minProbability}%: ${a.qualified}/${a.total}`, ...(a.includeLive?['🔴 Live opt-in: ongoing in-play games were included'] : []), ...(a.replaceUnsupported?[`Replaced from saved data: ${a.replaced||0}`]:[]), ''];
   a.analyzed.forEach((x,i)=>{
     const icon=x.replaced?'♻️':!x.supported?'⚪':x.qualified?'✅':'❌';
-    lines.push(`${icon} ${i+1}. ${x.home||'Unknown'} vs ${x.away||'Unknown'}`);
+    lines.push(`${icon} ${i+1}. ${x.live===true?'🔴 LIVE ':''}${x.home||'Unknown'} vs ${x.away||'Unknown'}`);
     if (x.replaced) {
       lines.push(`   ORIGINAL: ${x.originalOutcomeDesc||x.originalMarketDesc||'Unsupported selection'}${x.originalOdds?` @ ${Number(x.originalOdds).toFixed(2)}`:''}`);
       lines.push(`   REPLACED → ${x.outcomeDesc||x.marketDesc||'Selection'}${x.odds?` @ ${Number(x.odds).toFixed(2)}`:''} | ${Number(x.probability).toFixed(1)}% | Q ${Number(x.qualityScore||0).toFixed(1)}`);
@@ -3077,6 +3229,7 @@ Current builder settings: ${JSON.stringify(b)}.
 Valid action values: chat, ticket, builder, plans, account, analyze.
 For ticket actions, only set fields the user clearly requested; the app merges them with current settings.
 Sport values: football, basketball, hockey, all. Do not bypass subscription restrictions.
+liveMode: set 'live' only when the user clearly asks for live/in-play/ongoing matches, 'both' when they ask for live plus prematch together; otherwise null (keep the user's current setting).
 Bet IDs: home_win, draw, away_win, oneup, corners_over, corners_under, first_half_home_team_corners, first_half_away_team_corners, dc_1x, dc_x2, dnb, over05, home_over05, away_over05, home_under45, away_under45, over15, under45, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, hockey_winner, hockey_over, hockey_under.
 If the user asks to build/rebuild/replace/remove selections but the requested transformation cannot be safely represented by these parameters, explain what can be changed and ask one concise question instead of pretending it was done.
 If discussing betting, do not promise wins or guaranteed profit.`;
@@ -3108,10 +3261,11 @@ If discussing betting, do not promise wins or guaranteed profit.`;
           maxSelections:{type:['integer','null']},
           safe:{type:['boolean','null']},
           todayOnly:{type:['boolean','null']},
+          liveMode:{type:['string','null'],enum:['prematch','live','both',null]},
           betTypes:{type:['array','null'],items:{type:'string'}},
           bookingCode:{type:['string','null']}
         },
-        required:['action','reply','targetOdds','sport','minProbability','maxMatchOdds','minEdge','maxSelections','safe','todayOnly','betTypes','bookingCode']
+        required:['action','reply','targetOdds','sport','minProbability','maxMatchOdds','minEdge','maxSelections','safe','todayOnly','liveMode','betTypes','bookingCode']
       }
     }}
   };
@@ -3139,7 +3293,7 @@ If discussing betting, do not promise wins or guaranteed profit.`;
 
 function llmTicketIntent(x){
   const out={intent:'ticket'};
-  for(const k of ['targetOdds','sport','sports','minProbability','maxMatchOdds','minEdge','maxSelections','safe','betTypes','todayOnly']){
+  for(const k of ['targetOdds','sport','sports','minProbability','maxMatchOdds','minEdge','maxSelections','safe','betTypes','todayOnly','liveMode']){
     if(x[k]!==null&&x[k]!==undefined) out[k]=x[k];
   }
   return out;
@@ -3171,6 +3325,19 @@ async function handleTelegramAiUpdate(update) {
     else if (d === 'builder:edge') return sendTelegramAiMessageTo(chatId, '📊 Select the minimum football probability edge. Negative values allow more candidates; positive values demand model value over price:', { reply_markup: telegramAiEdgeKeyboard() });
     else if (d === 'builder:maxgames') return sendTelegramAiMessageTo(chatId, '🔢 Select the maximum number of games the builder can use:', { reply_markup: telegramAiMaxGamesKeyboard(user) });
     else if (d === 'builder:today') { user.preferences.builder.todayOnly=!user.preferences.builder.todayOnly; await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)}); }
+    else if (d === 'builder:live') {
+      const order=['prematch','live','both'];
+      const cur=normalizeLiveMode(user.preferences.builder.liveMode);
+      user.preferences.builder.liveMode=order[(order.indexOf(cur)+1)%order.length];
+      await saveTelegramAiUser(redis,user);
+      const mode=user.preferences.builder.liveMode;
+      const note=mode==='live'
+        ?'🔴 LIVE ONLY: tickets are built exclusively from matches being played right now. Live odds are re-checked just before the code is created.'
+        :mode==='both'
+          ?'🔴+🟢 LIVE + PREMATCH: the builder may mix ongoing live matches with upcoming fixtures. Live legs are re-checked before booking.'
+          :'🟢 PREMATCH ONLY: tickets use upcoming fixtures from the daily cached snapshot (fastest).';
+      return sendTelegramAiMessageTo(chatId,`${note}\n\n${telegramAiBuilderSummary(user)}`,{reply_markup:telegramAiBuilderKeyboard(user)});
+    }
     else if (d === 'builder:markets') return sendTelegramAiMessageTo(chatId, '🎲 Select the exact bet types the Auto Builder may use. Tap a market to toggle it:', { reply_markup: telegramAiMarketsKeyboard(user) });
     else if (d === 'builder:build') callbackAction = 'build';
     else if (d === 'builder:safe' || d === 'ticket:safe') callbackAction = 'safe';
@@ -3193,18 +3360,24 @@ async function handleTelegramAiUpdate(update) {
       return sendTelegramAiMessageTo(chatId, telegramAiAnalyzerSummary(user), { reply_markup: telegramAiAnalyzerKeyboard(user) });
     }
     else if (d === 'analyzer:prob') return sendTelegramAiMessageTo(chatId, '📈 Choose the probability threshold used to KEEP selections:', { reply_markup: telegramAiAnalyzerProbKeyboard() });
+    else if (d === 'analyzer:live') {
+      user.preferences.analyzer.includeLive=!user.preferences.analyzer.includeLive;
+      await saveTelegramAiUser(redis,user);
+      const on=user.preferences.analyzer.includeLive;
+      return sendTelegramAiMessageTo(chatId,`${on?'🔴 Live opt-in ON: ongoing in-play games are also scored when analyzing a code.':'🟢 Live opt-in OFF: only upcoming fixtures are used for analysis.'}\n\n${telegramAiAnalyzerSummary(user)}`,{reply_markup:telegramAiAnalyzerKeyboard(user)});
+    }
     else if (d === 'analyzer:horizon') return sendTelegramAiMessageTo(chatId, '📅 How far ahead should Matchday search for fixtures in the imported code?', { reply_markup: telegramAiAnalyzerHorizonKeyboard() });
     else if (d === 'analyzer:replace:last') {
       const last=user.lastAnalyzerRequest;
       if(!last?.bookingCode)return sendTelegramAiMessageTo(chatId,'There is no recent analysis to repair. Analyze a booking code first.',{reply_markup:telegramAiAnalyzerKeyboard(user)});
       await sendTelegramAiMessageTo(chatId,`♻️ Checking saved markets for safe same-fixture replacements in ${last.bookingCode}…`);
       try{
-        const repaired=await analyzeTelegramAiCode(last.bookingCode,last.minProbability,last.horizonDays,true);
+        const repaired=await analyzeTelegramAiCode(last.bookingCode,last.minProbability,last.horizonDays,true,!!last.includeLive);
         user.lastAnalyzerRequest={...last,repairedAt:new Date().toISOString()};await saveTelegramAiUser(redis,user);
         return sendTelegramAiLongMessage(chatId,telegramAiAnalysisText(repaired),{reply_markup:telegramAiAnalyzerAnalysisKeyboard(false)});
       }catch(e){return sendTelegramAiMessageTo(chatId,`⚠️ I could not replace the unsupported selections: ${e.message}`,{reply_markup:telegramAiAnalyzerKeyboard(user)})}
     }
-    else if (d === 'analyzer:enter') return sendTelegramAiMessageTo(chatId, `⌨️ Send the SportyBet booking code now.\n\nCurrent analyzer: ≥ ${user.preferences.analyzer.minProbability}% · ${user.preferences.analyzer.horizonDays} days\n\nUnsupported selections will be shown first. Nothing is replaced unless you tap ♻️ Replace Unsupported after the analysis.\nExample: RKT1JT`);
+    else if (d === 'analyzer:enter') return sendTelegramAiMessageTo(chatId, `⌨️ Send the SportyBet booking code now.\n\nCurrent analyzer: ≥ ${user.preferences.analyzer.minProbability}% · ${user.preferences.analyzer.horizonDays} days · ${user.preferences.analyzer.includeLive ? '🔴 live games included' : 'prematch only'}\n\nUnsupported selections will be shown first. Nothing is replaced unless you tap ♻️ Replace Unsupported after the analysis.\nExample: RKT1JT`);
     else if (d.startsWith('sporttoggle:')) {
       const id=d.split(':')[1];
       const plan=getTelegramAiPlan(user);
@@ -3355,12 +3528,12 @@ async function handleTelegramAiUpdate(update) {
     if(!Array.isArray(req.betTypes)||!req.betTypes.length)return sendTelegramAiMessageTo(chatId,'⚠️ Select at least one Bet Type before building.',{reply_markup:telegramAiBuilderKeyboard(user)});
     if(callbackAction==='safe'||callbackAction==='safer'){req.safe=true;req.targetOdds=5.00;req.minProbability=Math.max(90,Number(req.minProbability||0));req.maxMatchOdds=null;}
     if(callbackAction==='rebuild'&&user.lastBuilderRequest)req={...user.lastBuilderRequest,safe:false};
-    await sendTelegramAiMessageTo(chatId,`⏳ Scanning current SportyBet fixtures and applying your settings…\n${req.sport||'all'} · target ${req.safe?'SAFE 1.30–5.00':req.targetOdds+'x'} · ≥${req.minProbability}% · max ${req.maxMatchOdds||'no limit'} per match`);
+    await sendTelegramAiMessageTo(chatId,`⏳ Scanning current SportyBet fixtures and applying your settings…\n${req.sport||'all'} · target ${req.safe?'SAFE 1.30–5.00':req.targetOdds+'x'} · ≥${req.minProbability}% · max ${req.maxMatchOdds||'no limit'} per match · ${normalizeLiveMode(req.liveMode)==='live'?'🔴 live only':normalizeLiveMode(req.liveMode)==='both'?'prematch + 🔴 live':'prematch only'}`);
     const built=await buildTelegramAiTicket(user,req).catch(e=>({error:e.message}));
     if(built.locked)return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});
     if(built.error)return sendTelegramAiMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiBuilderKeyboard(user)});
     const use=await consumeTelegramAiUsage(redis,user,'ticket');user=use.user;user.lastBuilderRequest=built.request;user.lastBookingCode=built.booking?.shareCode||null;await saveTelegramAiUser(redis,user);
-    return sendTelegramAiLongMessage(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan),{reply_markup:telegramAiResultKeyboard()});
+    return sendTelegramAiLongMessage(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan,built.droppedLive||[]),{reply_markup:telegramAiResultKeyboard()});
   }
 
   const intent=parseTelegramAiRequest(text);
@@ -3392,13 +3565,13 @@ async function handleTelegramAiUpdate(update) {
     const plan=getTelegramAiPlan(user);if(plan.dailyAnalyzes<=0)return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(plan,'SportyBet code analysis'),{reply_markup:telegramAiPlanKeyboard()});
     if(user.analyzesUsed>=plan.dailyAnalyzes)return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${plan.dailyAnalyzes} code analyses. Your daily allowance resets tomorrow.`,{reply_markup:telegramAiPlanKeyboard()});
     const cfg=user.preferences.analyzer||{minProbability:70,horizonDays:14};await sendTelegramAiMessageTo(chatId,`🔎 Analyzing ${intent.bookingCode} · keep ≥${cfg.minProbability}% · search ${cfg.horizonDays} days…`);
-    try{const analysis=await analyzeTelegramAiCode(intent.bookingCode,cfg.minProbability,cfg.horizonDays,false);const use=await consumeTelegramAiUsage(redis,user,'analyze');user=use.user;user.lastAnalyzerRequest={bookingCode:intent.bookingCode,minProbability:cfg.minProbability,horizonDays:cfg.horizonDays,analyzedAt:new Date().toISOString()};await saveTelegramAiUser(redis,user);return sendTelegramAiLongMessage(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiAnalyzerAnalysisKeyboard(Number(analysis.unsupported||0)>0)})}catch(e){return sendTelegramAiMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`,{reply_markup:telegramAiAnalyzerKeyboard(user)})}
+    try{const analysis=await analyzeTelegramAiCode(intent.bookingCode,cfg.minProbability,cfg.horizonDays,false,!!cfg.includeLive);const use=await consumeTelegramAiUsage(redis,user,'analyze');user=use.user;user.lastAnalyzerRequest={bookingCode:intent.bookingCode,minProbability:cfg.minProbability,horizonDays:cfg.horizonDays,includeLive:!!cfg.includeLive,analyzedAt:new Date().toISOString()};await saveTelegramAiUser(redis,user);return sendTelegramAiLongMessage(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiAnalyzerAnalysisKeyboard(Number(analysis.unsupported||0)>0)})}catch(e){return sendTelegramAiMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`,{reply_markup:telegramAiAnalyzerKeyboard(user)})}
   }
   if(intent.intent==='ticket'){
     const plan=getTelegramAiPlan(user);if(!telegramAiHasTicketCredit(user))return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${plan.dailyTickets} AI tickets and have no extra tickets left. Your daily allowance resets tomorrow, or you can buy an extra pack now.`,{reply_markup:telegramAiTicketLimitKeyboard(user)});
     const req=telegramAiMergeTicketRequest(user,intent);
     const built=await buildTelegramAiTicket(user,req).catch(e=>({error:e.message}));if(built.locked)return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});if(built.error)return sendTelegramAiMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiMainKeyboard()});
-    const use=await consumeTelegramAiUsage(redis,user,'ticket');user=use.user;user.lastBuilderRequest=built.request;user.lastBookingCode=built.booking?.shareCode||null;await saveTelegramAiUser(redis,user);return sendTelegramAiLongMessage(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan),{reply_markup:telegramAiResultKeyboard()});
+    const use=await consumeTelegramAiUsage(redis,user,'ticket');user=use.user;user.lastBuilderRequest=built.request;user.lastBookingCode=built.booking?.shareCode||null;await saveTelegramAiUser(redis,user);return sendTelegramAiLongMessage(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan,built.droppedLive||[]),{reply_markup:telegramAiResultKeyboard()});
   }
   const llm=await matchdayLlmInterpret(user,text);
   if(llm?.quotaExceeded){
@@ -3415,7 +3588,7 @@ async function handleTelegramAiUpdate(update) {
       if(p.dailyAnalyzes<=0)return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(p,'SportyBet code analysis'),{reply_markup:telegramAiPlanKeyboard()});
       if(user.analyzesUsed>=p.dailyAnalyzes)return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${p.dailyAnalyzes} code analyses.`,{reply_markup:telegramAiPlanKeyboard()});
       const cfg=user.preferences.analyzer||{minProbability:70,horizonDays:14};
-      try{const analysis=await analyzeTelegramAiCode(llm.bookingCode,cfg.minProbability,cfg.horizonDays,false);const use=await consumeTelegramAiUsage(redis,user,'analyze');user=use.user;user.lastAnalyzerRequest={bookingCode:llm.bookingCode,minProbability:cfg.minProbability,horizonDays:cfg.horizonDays,analyzedAt:new Date().toISOString()};await saveTelegramAiUser(redis,user);return sendTelegramAiLongMessage(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiAnalyzerAnalysisKeyboard(Number(analysis.unsupported||0)>0)})}catch(e){return sendTelegramAiMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`,{reply_markup:telegramAiAnalyzerKeyboard(user)})}
+      try{const analysis=await analyzeTelegramAiCode(llm.bookingCode,cfg.minProbability,cfg.horizonDays,false,!!cfg.includeLive);const use=await consumeTelegramAiUsage(redis,user,'analyze');user=use.user;user.lastAnalyzerRequest={bookingCode:llm.bookingCode,minProbability:cfg.minProbability,horizonDays:cfg.horizonDays,includeLive:!!cfg.includeLive,analyzedAt:new Date().toISOString()};await saveTelegramAiUser(redis,user);return sendTelegramAiLongMessage(chatId,telegramAiAnalysisText(analysis),{reply_markup:telegramAiAnalyzerAnalysisKeyboard(Number(analysis.unsupported||0)>0)})}catch(e){return sendTelegramAiMessageTo(chatId,`⚠️ I could not analyze that code: ${e.message}`,{reply_markup:telegramAiAnalyzerKeyboard(user)})}
     }
     if(llm.action==='ticket'){
       const p=getTelegramAiPlan(user);
@@ -3425,7 +3598,7 @@ async function handleTelegramAiUpdate(update) {
       if(built.locked)return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});
       if(built.error)return sendTelegramAiMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiMainKeyboard()});
       const use=await consumeTelegramAiUsage(redis,user,'ticket');user=use.user;user.lastBuilderRequest=built.request;user.lastBookingCode=built.booking?.shareCode||null;await saveTelegramAiUser(redis,user);
-      return sendTelegramAiLongMessage(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan),{reply_markup:telegramAiResultKeyboard()});
+      return sendTelegramAiLongMessage(chatId,telegramAiTicketText(built.result,built.booking,built.request,built.plan,built.droppedLive||[]),{reply_markup:telegramAiResultKeyboard()});
     }
     return sendTelegramAiMessageTo(chatId,llm.reply||'How can I help with your Matchday ticket?',{reply_markup:telegramAiMainKeyboard()});
   }
@@ -3671,7 +3844,43 @@ app.post('/api/sportybet/book', express.json(), async (req, res) => {
       const text = `${x?.marketDesc || ''} ${x?.outcomeDesc || ''} ${x?.betType || ''}`.toLowerCase();
       return text.includes('corner') || text.includes('1up') || text.includes('1 up') || text.includes('1-up');
     });
-    const result = await bookBet(selections, { preferFullMarket });
+    // Live legs move fast: re-validate them against the CURRENT live board
+    // (fresh, uncached) right before booking. Suspended/settled legs are dropped
+    // and reported; prematch legs are left untouched.
+    const liveLegs = selections.filter(s => s && s.live === true);
+    let bookable = selections;
+    let droppedLive = [];
+    if (liveLegs.length) {
+      const prematchLegs = selections.filter(s => !(s && s.live === true));
+      try {
+        const check = await validateLiveSelections(liveLegs.map(s => ({
+          eventId: s.eventId, marketId: s.marketId, outcomeId: s.outcomeId,
+          specifier: s.specifier || null, sport: s.sport || 'football',
+        })));
+        droppedLive = check.dropped;
+        bookable = [...prematchLegs, ...check.valid];
+      } catch (liveErr) {
+        // If the live board cannot be checked at all, refuse to book live legs
+        // blindly — stale live odds are the main cause of rejected shares.
+        if (!prematchLegs.length) {
+          return res.status(409).json({
+            error: 'Live odds could not be re-validated right now. Try again in a few seconds.',
+            code: 'LIVE_VALIDATION_UNAVAILABLE',
+            droppedLive: liveLegs.map(s => ({ ...s, dropReason: liveErr.message })),
+          });
+        }
+        droppedLive = liveLegs.map(s => ({ ...s, dropReason: `live re-validation failed: ${liveErr.message}` }));
+        bookable = prematchLegs;
+      }
+      if (!bookable.length) {
+        return res.status(409).json({
+          error: 'All live selections were suspended, settled or removed while building the code. Rebuild the slip for the latest live odds.',
+          code: 'LIVE_LEGS_DROPPED',
+          droppedLive,
+        });
+      }
+    }
+    const result = await bookBet(bookable, { preferFullMarket });
     const slip = sanitizeTelegramSlip(req.body && req.body.telegramContext);
     const telegramSendToken = await createTelegramSendToken({
       shareCode: result?.shareCode || null,
@@ -3679,7 +3888,7 @@ app.post('/api/sportybet/book', express.json(), async (req, res) => {
       slip,
       createdAt: new Date().toISOString(),
     });
-    res.json({ ...result, telegramSendToken });
+    res.json({ ...result, telegramSendToken, ...(droppedLive.length ? { droppedLive } : {}) });
   } catch (err) {
     console.error('SportyBet booking error:', err.message);
     const status = err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : 502;

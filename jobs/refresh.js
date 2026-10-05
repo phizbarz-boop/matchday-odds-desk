@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { LEAGUES, getStandings, getUpcomingMatches, getFinishedMatches } = require('../lib/footballData');
 const { teamStrength, predictMatch, summarizeH2H, blendPredictionWithH2H } = require('../lib/model');
-const { getFootballMarket } = require('../lib/sportybet');
+const { getFootballMarket, getSportMarket } = require('../lib/sportybet');
 const { enrichSportyFixtures } = require('../lib/apiFootball');
 
 const TOKEN = process.env.FOOTBALL_DATA_TOKEN;
@@ -18,6 +18,68 @@ const H2H_PREVIOUS_SEASONS = Math.max(0, Math.min(3, parseInt(process.env.H2H_PR
 const H2H_MAX_WEIGHT = Math.max(0, Math.min(0.35, parseFloat(process.env.H2H_MAX_WEIGHT || '0.18')));
 const H2H_MAX_MEETINGS = Math.max(1, Math.min(20, parseInt(process.env.H2H_MAX_MEETINGS || '8', 10)));
 const DATA_FILE = path.join(__dirname, '..', 'data', 'predictions.json');
+
+// Snapshot keys/files must match server.js exactly: the web process reads what
+// this job writes. File snapshots matter when REDIS_URL is not set — the refresh
+// job runs as a separate process and would otherwise be invisible to the server.
+const SNAPSHOT_DIR = path.join(__dirname, '..', 'data', 'sporty-snapshots');
+
+function sportySnapshotKey(sport, kind) {
+  const teamGoal = sport === 'football' && ['home_ou05','away_ou05','home_ou45','away_ou45'].includes(kind);
+  const v = String(process.env.SPORTYBET_CACHE_VERSION || '9') + (teamGoal ? '-ng-team-v2' : '');
+  return `sportybet:snapshot:v${v}:${sport}:${kind}`;
+}
+
+function writeSnapshotFile(key, snapshot) {
+  try {
+    fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+    fs.writeFileSync(path.join(SNAPSHOT_DIR, key.replace(/[^a-zA-Z0-9]+/g, '_') + '.json'), JSON.stringify(snapshot));
+  } catch (err) {
+    console.warn(`Snapshot file write failed for ${key}: ${err.message}`);
+  }
+}
+
+// Fetch every Auto Builder market for all six sports once per daily refresh and
+// store the payloads as shared snapshots. The prematch list request embeds every
+// configured market (marketId CSV), so all football kinds reuse the same cached
+// pages — seeding a whole sport costs about maxPages list requests, not one
+// request per market. This is what keeps Auto Builder/Telegram builds fast during
+// the day: they read these snapshots instead of calling SportyBet again.
+async function collectSportySnapshots({ hours, maxPages, fixtures }) {
+  const snapshots = [];
+  const add = (sport, kind, payload) => {
+    if (payload && Array.isArray(payload.rows) && payload.rows.length) {
+      snapshots.push({ sport, kind, hours, payload });
+      console.log(`Snapshot collected ${sport}/${kind}: ${payload.rows.length} rows`);
+    } else {
+      console.warn(`Snapshot skipped ${sport}/${kind}: no rows returned`);
+    }
+  };
+  const footballKinds = ['1x2','gg','dc','dnb','ou05','ou15','ou45','ah','corners','first_half_team_corners'];
+  for (const kind of footballKinds) {
+    try { add('football', kind, await getFootballMarket(kind, { hours, maxPages })); }
+    catch (err) { console.warn(`Snapshot seed football/${kind} failed: ${err.message}`); }
+  }
+  // Team-goal markets use bounded per-event detail scans against the saved fixtures.
+  for (const kind of ['home_ou05','away_ou05','home_ou45','away_ou45']) {
+    try { add('football', kind, await getFootballMarket(kind, { hours, maxPages, fixtures })); }
+    catch (err) { console.warn(`Snapshot seed football/${kind} failed: ${err.message}`); }
+  }
+  const otherSports = {
+    basketball: ['winner','totals'],
+    hockey: ['winner','totals'],
+    handball: ['winner','totals'],
+    volleyball: ['winner','totals','sets'],
+    tennis: ['winner','totals','handicap'],
+  };
+  for (const [sport, kinds] of Object.entries(otherSports)) {
+    for (const kind of kinds) {
+      try { add(sport, kind, await getSportMarket(sport, kind, { hours, maxPages })); }
+      catch (err) { console.warn(`Snapshot seed ${sport}/${kind} failed: ${err.message}`); }
+    }
+  }
+  return snapshots;
+}
 
 function fmtDate(d) {
   return d.toISOString().slice(0, 10);
@@ -275,13 +337,14 @@ async function storeResult(payload, marketSnapshots = []) {
     // Seed the shared SportyBet daily snapshot cache from data already paid for by
     // this refresh. These keys deliberately do not include horizon/page count, so
     // Analyzer/Auto Builder requests can reuse a broader refresh snapshot.
-    const cacheVersion = String(process.env.SPORTYBET_CACHE_VERSION || '9');
     const snapshotTtl = Math.max(3600, parseInt(process.env.SPORTYBET_DAILY_SNAPSHOT_SECONDS || '93600', 10));
     for (const snap of marketSnapshots) {
       if (!snap?.payload || !Array.isArray(snap.payload.rows) || !snap.payload.rows.length) continue;
-      const key = `sportybet:snapshot:v${cacheVersion}:${snap.sport}:${snap.kind}`;
+      const key = sportySnapshotKey(snap.sport, snap.kind);
       const value = { ...snap.payload, snapshotHours:Number(snap.hours)||0, snapshotSavedAt:new Date().toISOString() };
       await client.set(key, JSON.stringify(value), { EX: snapshotTtl });
+      // Disk copy too: harmless with Redis, and covers a web process without it.
+      writeSnapshotFile(key, value);
       console.log(`Seeded daily SportyBet snapshot ${snap.sport}/${snap.kind}: ${snap.payload.rows.length} rows`);
     }
 
@@ -299,6 +362,14 @@ async function storeResult(payload, marketSnapshots = []) {
       console.warn(`Local prediction cache merge skipped: ${err.message}`);
     }
     fs.writeFileSync(DATA_FILE, JSON.stringify(finalPayload, null, 2));
+    // No Redis: file snapshots are the only channel from this job process to the
+    // web process, so they are mandatory here, not optional.
+    for (const snap of marketSnapshots) {
+      if (!snap?.payload || !Array.isArray(snap.payload.rows) || !snap.payload.rows.length) continue;
+      const key = sportySnapshotKey(snap.sport, snap.kind);
+      writeSnapshotFile(key, { ...snap.payload, snapshotHours:Number(snap.hours)||0, snapshotSavedAt:new Date().toISOString() });
+      console.log(`Seeded daily SportyBet snapshot file ${snap.sport}/${snap.kind}: ${snap.payload.rows.length} rows`);
+    }
     console.log(`Wrote predictions to ${DATA_FILE} (no REDIS_URL set)`);
   }
 }
@@ -331,18 +402,15 @@ async function main() {
       const hours = Math.min(24 * 21, Math.max(24, DAYS_AHEAD * 24));
       const maxPages = Math.max(1, Math.min(20, parseInt(process.env.API_FOOTBALL_SPORTY_MAX_PAGES || process.env.ANALYZER_MAX_PAGES || '12', 10)));
       const oneXtwo = await getFootballMarket('1x2', { hours, maxPages });
-      marketSnapshots.push({ sport:'football', kind:'1x2', hours, payload:oneXtwo });
       let cornerRows = [], firstHalfTeamCornerRows = [];
       try {
         const cornerPayload = await getFootballMarket('corners', { hours, maxPages });
         cornerRows = cornerPayload.rows || [];
-        if (cornerRows.length) marketSnapshots.push({ sport:'football', kind:'corners', hours, payload:cornerPayload });
       }
       catch (err) { console.warn(`SportyBet corners market unavailable during refresh: ${err.message}`); }
       try {
         const firstHalfPayload = await getFootballMarket('first_half_team_corners', { hours, maxPages });
         firstHalfTeamCornerRows = firstHalfPayload.rows || [];
-        if (firstHalfTeamCornerRows.length) marketSnapshots.push({ sport:'football', kind:'first_half_team_corners', hours, payload:firstHalfPayload });
       }
       catch (err) { console.warn(`SportyBet 1H team corners market unavailable during refresh: ${err.message}`); }
       const cornerEventIds = new Set([...cornerRows, ...firstHalfTeamCornerRows].map(x => String(x.eventId)));
@@ -374,6 +442,22 @@ async function main() {
   }
 
   all.sort((x, y) => y.pickProb - x.pickProb);
+
+  // Seed the daily SportyBet snapshots for EVERY Auto Builder market on all six
+  // sports — independent of API-Football. After this, Auto Builder, Analyzer and
+  // Telegram builds read the snapshots and stop hammering SportyBet all day.
+  if (String(process.env.SPORTYBET_SNAPSHOT_SEED || '1') !== '0') {
+    try {
+      const hours = Math.min(24 * 21, Math.max(24, DAYS_AHEAD * 24));
+      const maxPages = Math.max(1, Math.min(20, parseInt(process.env.DAILY_SPORT_REFRESH_MAX_PAGES || process.env.ANALYZER_MAX_PAGES || '12', 10)));
+      const seeded = await collectSportySnapshots({ hours, maxPages, fixtures: all });
+      marketSnapshots.push(...seeded);
+      console.log(`SportyBet daily snapshots collected: ${seeded.length} market feeds across all sports`);
+    } catch (err) {
+      console.error(`SportyBet snapshot collection failed: ${err.message}`);
+    }
+  }
+
   await storeResult({
     generatedAt: new Date().toISOString(),
     model: {

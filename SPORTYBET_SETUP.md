@@ -213,3 +213,55 @@ variables above, redeploy, then open `/api/sportybet/diagnostics` and confirm
 
 Bump `SPORTYBET_CACHE_VERSION` (e.g. to `10`) on first deploy so no stale
 Parse-era cache entries are reused.
+
+## Live matches as an Auto Builder option
+
+Live (in-play) matches are an option inside the Auto Builder — there is no
+separate live page. Both surfaces expose it:
+
+- **Web** — Auto Builder has a *Match status* selector:
+  `Prematch only (daily cache)` (default), `🔴 Live only (ongoing games)`, or
+  `Prematch + 🔴 Live`. The choice is sent as `liveMode` in the
+  `/api/sportybet/auto-pick` request body.
+- **Telegram bot** — the Auto Builder keyboard has a *Matches* button that
+  cycles `PREMATCH → LIVE ONLY → LIVE + PREMATCH`, and natural-language or
+  LLM ticket requests understand phrases like "live 5x", "in-play", "ongoing
+  games", or "live and prematch" (schema field `liveMode`).
+
+Live legs are scored by the same untouched probability model: football live
+rows reuse the saved daily predictions (which persist until the next 07:20
+WAT refresh even after kickoff), and the other sports use no-vig market
+probabilities — no model changes.
+
+**Booking safety:** every live leg is re-validated against a fresh, uncached
+live board immediately before a booking code is created (both the website
+"Generate Code" button and the Telegram bot). Suspended or settled legs are
+dropped and reported as `droppedLive`; if the live board cannot be checked,
+live legs are never booked blindly. Ticket output marks live legs with
+`🔴 LIVE` and lists any dropped selections.
+
+The Booking Code Analyzer has its own opt-in: a *Live Games: ON/OFF* button
+(`includeLive`) that additionally scores ongoing in-play games when replacing
+unsupported legs.
+
+## Daily snapshot seeding (speed)
+
+The `Daily Predictions Refresh` job now also writes SportyBet market
+snapshots for every market the Auto Builder uses, for all six sports
+(football `1x2/gg/dc/dnb/ou05/ou15/ou45/ah/corners/first_half_team_corners/
+home/away team goals`; basketball, hockey, handball, volleyball, tennis
+winner/totals/handicap/sets). Snapshots are written to Redis when configured
+and **always to `data/sporty-snapshots/*.json`**, because the refresh job
+runs as a separate process from the web server and the files are the shared
+fallback.
+
+After the daily refresh has run, Auto Builder / Analyzer / Telegram builds
+are served from these snapshots instead of hammering SportyBet, so first
+builds of the day are fast and the server stops repeatedly calling SportyBet.
+Live legs always bypass this cache (in-play odds change by the second).
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SPORTYBET_SNAPSHOT_SEED` | `1` | Set `0` to disable snapshot seeding in the refresh job. |
+| `SPORTYBET_SNAPSHOT_DIR` | `data/sporty-snapshots` | Where snapshot JSON files are written. |
+| `DAILY_SPORT_REFRESH_MAX_PAGES` | `12` | Pages fetched per market during seeding. |
