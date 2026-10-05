@@ -92,11 +92,23 @@ SPORTYBET_BASE_URL=https://www.sportybet.com/api/ng
 SPORTYBET_ENDPOINT_PREMATCH=/factsCenter/pcUpcomingEvents
 SPORTYBET_ENDPOINT_EVENT=/factsCenter/eventDetail
 SPORTYBET_ENDPOINT_LIVE=/factsCenter/pcLiveEvents
-SPORTYBET_ENDPOINT_LOGIN=/users/login
-SPORTYBET_ENDPOINT_USERINFO=/users/info
+SPORTYBET_ENDPOINT_LOGIN=/users/login (default first probe; self-heals)
+SPORTYBET_ENDPOINT_USERINFO=/patron/account/info
 SPORTYBET_ENDPOINT_BOOK=/orders/share
 SPORTYBET_ENDPOINT_BOOKING_LOOKUP=/orders/share
 ```
+
+Login self-heals too: SportyBet moved its account service under `/patron`
+(the site's own account-info call is `/api/ng/patron/account/info`), so on
+each login the app probes a small candidate list
+(`/users/login`, `/patron/login`, `/patron/account/login`, … — extend with
+`SPORTYBET_ENDPOINT_LOGIN_CANDIDATES`) and adopts the first path that answers
+with anything other than the gateway's 404. The adopted path is persisted
+with the session. If every candidate 404s, login backs off for
+`SPORTYBET_RESOLUTION_RETRY_MS` (default 10 minutes) instead of retrying on
+every keep-alive tick; pin the real path with `SPORTYBET_ENDPOINT_LOGIN` to
+skip probing entirely. The keep-alive ping (`SPORTYBET_ENDPOINT_USERINFO`)
+resolves the same way via `SPORTYBET_ENDPOINT_USERINFO_CANDIDATES`.
 
 List requests use the parameter naming observed on the site's own calls
 (`sportId=sr:sport:1&marketId=1,18,10,29,...`). Override the names or the
@@ -117,9 +129,10 @@ SPORTYBET_ENDPOINT_EVENT_CANDIDATES=/factsCenter/eventDetail,/factsCenter/event,
 SPORTYBET_ENDPOINT_EVENT_METHOD=GET (set to POST if the capture shows a POST "Outcomes" detail call)
 ```
 
-Login is never auto-probed (repeated failed logins could lock the dummy
-account): if the login route moves, diagnostics/relogin shows a 404 hint and
-you pin the new path with `SPORTYBET_ENDPOINT_LOGIN`.
+Login probing is conservative by design (repeated failed logins could lock
+the dummy account): candidates are tried only when an actual login is needed,
+each candidate is POSTed once, geo/bot blocks abort probing immediately, and
+a fully-failed probe round backs off for 10 minutes.
 
 To find the current paths: open sportybet.com/ng in a browser, open DevTools →
 Network (check "Disable Cache"), log in / load a booking code / open a match,
