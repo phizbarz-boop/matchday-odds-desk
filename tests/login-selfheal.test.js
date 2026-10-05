@@ -16,10 +16,12 @@ test('login candidates include the observed patron accessToken path', () => {
   assert.match(SRC, /'\/users\/v2\/login'/);
 });
 
-test('login sends the web client headers observed on the site', () => {
+test('all API requests carry the web client headers and a deviceId cookie', () => {
+  assert.match(SRC, /function ensureDeviceId\(\)/);
   assert.match(SRC, /'clientid': String\(process\.env\.SPORTYBET_CLIENT_ID \|\| 'web'\)/);
-  assert.match(SRC, /'operid': String\(process\.env\.SPORTYBET_OPER_ID \|\| '2'\)/);
   assert.match(SRC, /'platform': String\(process\.env\.SPORTYBET_PLATFORM \|\| 'web'\)/);
+  assert.match(SRC, /'Cookie': cookieHeader\(\)/);
+  assert.match(SRC, /session\.cookies\.set\('deviceId'/);
 });
 
 test('userInfo defaults to the observed patron account-info path', () => {
