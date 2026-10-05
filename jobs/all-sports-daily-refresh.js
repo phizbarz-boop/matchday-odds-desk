@@ -141,7 +141,7 @@ async function runCollector(sport, script, timeoutMinutes) {
   );
 
   // Basketball and Hockey use the same de-margined/no-vig SportyBet market model.
-  // Run them sequentially to avoid unnecessary Parse.bot concurrency/rate pressure.
+  // Run them sequentially to avoid unnecessary SportyBet concurrency/rate pressure.
   await attempt('Basketball: winner + totals market refresh', () =>
     requestJson('/api/refresh/sport/basketball', { label: 'Basketball market refresh', timeoutMs: 650000, attempts: 3 })
   );

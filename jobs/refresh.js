@@ -325,7 +325,8 @@ async function main() {
   // then match those fixtures to API-Football. This adds many leagues without ever
   // creating a bet that does not exist on SportyBet. Corner profiles are only built
   // for events where SportyBet returned a corners market, which saves API quota.
-  if (hasApiFootball && process.env.PARSE_API_KEY) {
+  // SportyBet data is scraped directly now, so no API key is needed for this gate.
+  if (hasApiFootball) {
     try {
       const hours = Math.min(24 * 21, Math.max(24, DAYS_AHEAD * 24));
       const maxPages = Math.max(1, Math.min(20, parseInt(process.env.API_FOOTBALL_SPORTY_MAX_PAGES || process.env.ANALYZER_MAX_PAGES || '12', 10)));
@@ -370,8 +371,6 @@ async function main() {
     } catch (err) {
       console.error(`API-Football expansion failed: ${err.message}`);
     }
-  } else if (hasApiFootball && !process.env.PARSE_API_KEY) {
-    console.warn('API_FOOTBALL_KEY is configured but PARSE_API_KEY is missing, so SportyBet-compatible fixture expansion was skipped.');
   }
 
   all.sort((x, y) => y.pickProb - x.pickProb);

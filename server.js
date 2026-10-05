@@ -7,7 +7,7 @@ const app = express();
 app.set('trust proxy', 1); // Render forwards the real client IP.
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
-const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG } = require('./lib/sportybet');
+const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG, direct: sportyDirect } = require('./lib/sportybet');
 const { buildCandidates, selectAutoBet, passesRedFlagFilter, normalMetrics } = require('./lib/autoPicker');
 const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest, sendTelegramAiMessageTo, telegramAiRequest } = require('./lib/telegram');
 const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, allowedBetIdsForPlan: telegramAiAllowedBetIdsForPlan, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, addExtraTickets: addTelegramAiExtraTickets, hasTicketCredit: telegramAiHasTicketCredit, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, ticketLimitKeyboard: telegramAiTicketLimitKeyboard, mainKeyboard: telegramAiMainKeyboard, builderSummary: telegramAiBuilderSummary, builderKeyboard: telegramAiBuilderKeyboard, sportKeyboard: telegramAiSportKeyboard, targetKeyboard: telegramAiTargetKeyboard, probabilityKeyboard: telegramAiProbabilityKeyboard, maxOddKeyboard: telegramAiMaxOddKeyboard, edgeKeyboard: telegramAiEdgeKeyboard, maxGamesKeyboard: telegramAiMaxGamesKeyboard, marketsKeyboard: telegramAiMarketsKeyboard, analyzerSummary: telegramAiAnalyzerSummary, analyzerKeyboard: telegramAiAnalyzerKeyboard, analyzerAnalysisKeyboard: telegramAiAnalyzerAnalysisKeyboard, analyzerProbKeyboard: telegramAiAnalyzerProbKeyboard, analyzerHorizonKeyboard: telegramAiAnalyzerHorizonKeyboard, resultKeyboard: telegramAiResultKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
@@ -654,7 +654,7 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   }
 
   // Analyzer replacement can be configured to use only data already saved by the Daily Refresh.
-  // When cacheOnly is true, never purchase a fresh Parse.bot market call here.
+  // When cacheOnly is true, never fetch fresh SportyBet market pages here.
   if (options.cacheOnly) {
     console.log(`[SportyBet cache-only] MISS ${sport}/${kind} requested=${hours}h`);
     return { rows: [], cacheOnly: true, fetchedAt: null };
@@ -676,7 +676,7 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
         else sportyMemoryCache.set(cacheKey, { expiresAt: Date.now() + ttlSeconds * 1000, payload });
         await writeSportySnapshot(client, sport, kind, payload, hours);
       } else {
-        // Short negative cache: prevents every page click from making another slow Parse call,
+        // Short negative cache: prevents every page click from making another slow SportyBet fetch,
         // while still retrying quickly enough to discover newly-added SportyBet fixtures.
         const emptyTtl = Math.max(15, Math.min(300, parseInt(process.env.SPORTYBET_EMPTY_CACHE_SECONDS || '60', 10)));
         const emptyPayload = { ...(payload || {}), rows: [], fetchedAt: new Date().toISOString() };
@@ -963,7 +963,8 @@ app.get('/api/api-football/diagnostics', async (req, res) => {
 });
 
 
-// Live-ish SportyBet price layer. The Parse API key never reaches the browser.
+// Live-ish SportyBet price layer, scraped directly from SportyBet (no Parse.bot).
+// Session credentials never reach the browser.
 // Supported football values: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, oneup. O/U 2.5 is intentionally not used by the Auto Builder.
 app.get('/api/sportybet/odds', async (req, res) => {
   try {
@@ -981,11 +982,13 @@ app.get('/api/sportybet/odds', async (req, res) => {
     res.json(payload);
   } catch (err) {
     console.error('SportyBet odds error:', err.message);
-    const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : (err.code === 'SPORTYBET_BOOKING_TIMEOUT' ? 504 : 502);
+    const status = err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : (err.code === 'SPORTYBET_BOOKING_TIMEOUT' || err.code === 'SPORTYBET_TIMEOUT' ? 504 : 502);
     res.status(status).json({
-      error: err.code === 'PARSE_API_KEY_MISSING'
+      error: err.code === 'SPORTYBET_NOT_CONFIGURED'
         ? 'SportyBet integration is not configured yet'
-        : 'Failed to load SportyBet odds',
+        : err.code === 'SPORTYBET_GEO_BLOCKED'
+          ? 'SportyBet geo-blocked this server IP — set SPORTYBET_PROXY_URL to a Nigeria-exit proxy'
+          : 'Failed to load SportyBet odds',
       detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
     });
   }
@@ -1161,8 +1164,8 @@ app.get('/api/handball/status', async (req,res)=>{
   }catch(err){res.status(500).json({error:'handball status failed',detail:String(err.message||err)});}
 });
 
-// Basketball and ice hockey odds. Parse currently exposes pre-match data for these
-// sports; this route is generic so more supported sports can be added later.
+// Basketball and ice hockey odds, scraped directly from SportyBet pre-match
+// data; this route is generic so more supported sports can be added later.
 app.get('/api/sportybet/sport/:sport', async (req, res) => {
   try {
     const sport = String(req.params.sport || '').toLowerCase();
@@ -1206,15 +1209,65 @@ app.get('/api/sportybet/sport/:sport', async (req, res) => {
     res.json(payload);
   } catch (err) {
     console.error('SportyBet sport odds error:', err.message);
-    const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
+    const status = err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : 502;
     res.status(status).json({
-      error: err.code === 'PARSE_API_KEY_MISSING'
+      error: err.code === 'SPORTYBET_NOT_CONFIGURED'
         ? 'SportyBet integration is not configured yet'
         : 'Failed to load SportyBet sport odds',
       detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
     });
   }
 });
+
+// Direct-SportyBet session diagnostics. Shows dummy-account login state, cookie
+// expiry times, keep-alive health and proxy/geo-block status. Guarded by the
+// website access cookie when WEBSITE_ACCESS_CODE is configured.
+app.get('/api/sportybet/diagnostics', async (req, res) => {
+  if (websiteAccessCode() && !hasWebsiteAccess(req)) {
+    return res.status(401).json({ error: 'Website access required' });
+  }
+  const status = sportyDirect.sessionStatus();
+  let probe = null;
+  try {
+    await getSportMarketProbe();
+    probe = { ok: true };
+  } catch (err) {
+    probe = { ok: false, code: err.code || null, error: String(err.message || err).slice(0, 300) };
+  }
+  res.json({
+    integration: 'sportybet-direct',
+    parseBotRemoved: true,
+    session: status,
+    publicDataProbe: probe,
+    checkedAt: new Date().toISOString(),
+  });
+});
+
+async function getSportMarketProbe() {
+  // One tiny public prematch page proves the server can reach SportyBet data
+  // (geo/IP check) without touching the logged-in account.
+  const { getFootballMarket: probeFootball } = require('./lib/sportybet');
+  return probeFootball('1x2', { hours: 24, maxPages: 1 });
+}
+
+// Force a fresh dummy-account login (for example after changing the account
+// password). Guarded the same way as diagnostics.
+app.post('/api/sportybet/session/relogin', express.json(), async (req, res) => {
+  if (websiteAccessCode() && !hasWebsiteAccess(req)) {
+    return res.status(401).json({ error: 'Website access required' });
+  }
+  try {
+    const result = await sportyDirect.login({ force: true });
+    res.json({ ok: true, result, session: sportyDirect.sessionStatus() });
+  } catch (err) {
+    res.status(err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : 502).json({
+      ok: false,
+      code: err.code || 'SPORTYBET_AUTH_FAILED',
+      error: String(err.message || err).slice(0, 300),
+    });
+  }
+});
+
 
 // Automatic slip builder. It can scan one sport only or all supported sports.
 // Football uses Poisson + H2H probability; basketball/hockey use no-vig market probability.
@@ -1381,10 +1434,9 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     cacheOnly: !!marketCacheOnly,
   };
 
-  // Do not let one unavailable Parse.bot market family kill the complete Auto/Telegram pool.
-  // This is particularly important for corners: the managed NG API may return zero corner rows
-  // and older code then falls back to full-market endpoints that may not exist on the current
-  // single Parse API subscription.
+  // Do not let one unavailable SportyBet market family kill the complete Auto/Telegram pool.
+  // This is particularly important for corners: the prematch list may embed zero corner
+  // rows, and the per-event detail fallback can also come back empty for some fixtures.
   const safeMarket = async (label, enabled, fn, emptyValue = { rows: [] }) => {
     if (!enabled) return emptyValue;
     try {
@@ -1813,7 +1865,7 @@ app.post('/api/sportybet/replace-unsupported', express.json(), async (req, res) 
     else if (decodedSports.length && decodedSports.every(x => x.includes('basket'))) sportScope = 'basketball';
     else if (decodedSports.length && decodedSports.every(x => x.includes('hockey') || x.includes('ice hockey'))) sportScope = 'hockey';
 
-    // IMPORTANT: replacement is cache-only. It must never buy fresh Parse.bot market pages.
+    // IMPORTANT: replacement is cache-only. It must never fetch fresh SportyBet market pages.
     // We need real cached SportyBet market/outcome IDs so a replacement can later be booked.
     const candidates = await loadAutoCandidates({
       sportScope,
@@ -2052,16 +2104,16 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
   } catch (err) {
     console.error('SportyBet analyzer error:', err.code || '', err.message);
     const status = err.code === 'INVALID_BOOKING_CODE' ? 400
-      : err.code === 'PARSE_API_KEY_MISSING' ? 503
-      : (err.code === 'PARSE_TIMEOUT' || err.name === 'AbortError') ? 504
+      : err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503
+      : (err.code === 'SPORTYBET_TIMEOUT' || err.name === 'AbortError') ? 504
       : 502;
-    const publicReason = err.code === 'PARSE_TIMEOUT'
-      ? 'SportyBet/Parse timed out while loading the booking or its markets'
+    const publicReason = err.code === 'SPORTYBET_TIMEOUT'
+      ? 'SportyBet timed out while loading the booking or its markets'
       : err.status
-        ? `SportyBet/Parse returned HTTP ${err.status}`
+        ? `SportyBet returned HTTP ${err.status}`
         : 'The analyzer could not finish loading the required SportyBet markets';
     res.status(status).json({
-      error: err.code === 'PARSE_API_KEY_MISSING' ? 'SportyBet integration is not configured yet' : 'Could not analyze this booking code',
+      error: err.code === 'SPORTYBET_NOT_CONFIGURED' ? 'SportyBet integration is not configured yet' : 'Could not analyze this booking code',
       reason: publicReason,
       code: err.code || 'ANALYZER_UPSTREAM_FAILURE',
       detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
@@ -2139,7 +2191,7 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
         teamGoalAvailability: prepared.diagnostics.teamGoalAvailability,
         cornerDiagnostics,
         hint: Object.keys(prepared.diagnostics.teamGoalAvailability || {}).length
-          ? 'Team totals: check teamGoalAvailability. An unavailable bookmaker line or missing saved team model cannot be turned into a valid selection; increase SPORTYBET_TEAM_GOAL_MAX_EVENTS only if you accept more Parse credits.'
+          ? 'Team totals: check teamGoalAvailability. An unavailable bookmaker line or missing saved team model cannot be turned into a valid selection; increase SPORTYBET_TEAM_GOAL_MAX_EVENTS only if you accept more SportyBet requests.'
           : cornerDiagnostics
             ? 'Corner diagnostics included. matchesWithCornerModel must be > 0 and SportyBet corner rows must be > 0.'
             : undefined,
@@ -2165,9 +2217,9 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     });
   } catch (err) {
     console.error('SportyBet auto-pick error:', err.message);
-    const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
+    const status = err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : 502;
     res.status(status).json({
-      error: err.code === 'PARSE_API_KEY_MISSING'
+      error: err.code === 'SPORTYBET_NOT_CONFIGURED'
         ? 'SportyBet integration is not configured yet'
         : 'Failed to build automatic SportyBet slip',
       detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
@@ -2863,7 +2915,7 @@ async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDa
 
   // Load the full supported market universe for the booking's sport from cache only.
   // This lets an unsupported imported market be replaced by another supported saved
-  // market on the exact same fixture without spending new Parse.bot market credits.
+  // market on the exact same fixture without fetching fresh SportyBet market pages.
   const candidates = await loadAutoCandidates({
     sportScope, minProbability:0, minEdge:-25, leagues:null, betTypes:null,
     marketHours:analyzerHours, marketMaxPages:2, marketCacheOnly:true
@@ -2910,7 +2962,7 @@ function telegramAiAnalysisText(a) {
     }
   });
   lines.push('', '✅ = keep · ❌ = below threshold · ♻️ = same-fixture cached replacement · ⚪ = unsupported/unresolved');
-  lines.push('Cached replacement never switches to a different fixture and does not make a fresh Parse market call.');
+  lines.push('Cached replacement never switches to a different fixture and does not make a fresh SportyBet market fetch.');
   return lines.join('\n');
 }
 
@@ -3558,9 +3610,9 @@ app.post('/api/sportybet/book', express.json(), async (req, res) => {
     res.json({ ...result, telegramSendToken });
   } catch (err) {
     console.error('SportyBet booking error:', err.message);
-    const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
+    const status = err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : 502;
     res.status(status).json({
-      error: err.code === 'PARSE_API_KEY_MISSING'
+      error: err.code === 'SPORTYBET_NOT_CONFIGURED'
         ? 'SportyBet integration is not configured yet'
         : 'Failed to create SportyBet booking code',
       bookingErrorCode: err.code || null,
@@ -3620,7 +3672,7 @@ app.post('/api/refresh/sport/:sport', express.json(), async (req, res) => {
     });
   } catch (err) {
     console.error(`[Daily ${sport} refresh] failed:`, err.message);
-    const status = err.code === 'PARSE_API_KEY_MISSING' ? 503 : 502;
+    const status = err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : 502;
     return res.status(status).json({
       error: `Failed to refresh ${sport} daily markets`,
       detail: process.env.NODE_ENV === 'production' ? undefined : String(err.message || err),

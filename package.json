@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "redis": "^4.7.0"
+    "redis": "^4.7.0",
+    "undici": "^6.19.0"
   },
   "engines": {
     "node": ">=18"

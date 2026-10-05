@@ -1,15 +1,40 @@
-# Matchday Odds Desk — Multi-Sport SportyBet + H2H setup
+# Matchday Odds Desk — Direct SportyBet setup (Parse.bot removed)
+
+SportyBet data no longer comes from the paid Parse.bot API. The server now talks
+**directly to SportyBet**:
+
+- Fixtures, markets and odds are scraped from SportyBet's own public web JSON
+  endpoints. No account and no API key are needed for reading data.
+- Booking-code creation logs in with your **dummy SportyBet account**. The
+  session is kept alive automatically (see below).
 
 ## Render environment variables
 
-Required:
+Required for booking codes (the dummy account):
 
 ```text
-PARSE_API_KEY=your_parse_api_key
+SPORTYBET_PHONE=2348012345678
+SPORTYBET_PASSWORD=your_dummy_account_password
+```
+
+Required for the probability model (unchanged):
+
+```text
 FOOTBALL_DATA_TOKEN=your_football_data_token
 ```
 
-Recommended:
+Strongly recommended — SportyBet geo-blocks non-allowed server IPs (Render
+US/EU included). Point this at an HTTP or SOCKS5 proxy with a Nigerian exit:
+
+```text
+SPORTYBET_PROXY_URL=http://user:pass@your-nigeria-proxy:8080
+```
+
+If SportyBet answers this server's IP directly you can omit the proxy; check
+`/api/sportybet/diagnostics` after deploy — a geo-block shows up there as
+`SPORTYBET_GEO_BLOCKED`.
+
+Recommended tuning (all optional):
 
 ```text
 SPORTYBET_CACHE_SECONDS=43200
@@ -17,196 +42,102 @@ SPORTYBET_HOURS=120
 SPORTYBET_MAX_PAGES=5
 SPORTYBET_PAGE_SIZE=100
 SPORTYBET_BOOKINGS_PER_MINUTE=5
+SPORTYBET_KEEPALIVE_SECONDS=240
 H2H_PREVIOUS_SEASONS=1
 H2H_MAX_MEETINGS=8
 H2H_MAX_WEIGHT=0.18
 ```
 
-`PARSE_SCRAPER_ID` is optional. The current SportyBet Nigeria scraper ID is already the default in `lib/sportybet.js`.
+## How the session is kept alive
 
-## Sports and markets
+1. On boot (and before the first booking) the server logs in the dummy account
+   with `SPORTYBET_PHONE` / `SPORTYBET_PASSWORD`.
+2. Cookies and the access token are persisted to Redis when `REDIS_URL` is set
+   (recommended on Render, where the filesystem is wiped on every deploy),
+   otherwise to `.sportybet-session.json`.
+3. A keep-alive ping runs every `SPORTYBET_KEEPALIVE_SECONDS` (default 240s),
+   refreshing cookies before they die.
+4. If SportyBet still invalidates the session server-side, the next request
+   gets a 401/403, the client **re-logs in silently** and retries once.
 
-The UI now has three sport sessions/tabs:
+Honest limit: no client can stop SportyBet from expiring sessions server-side.
+What this build guarantees is detection + automatic recovery, so expiry is
+never visible to users. If the account ever demands an SMS OTP at login,
+automatic renewal stops and diagnostics will say so — log in once from a
+browser on the same IP/proxy to clear it.
 
-- Football: 1X2, GG/NG, Double Chance, Draw No Bet, Over 1.5 Goals, Under 4.5 Goals, Asian Handicap +0 / +0.25 / -0.25
-- Over/Under 2.5 is intentionally excluded from the Auto Builder
-- Basketball: Winner incl. overtime, Handicap incl. overtime, Over/Under incl. overtime
+## Diagnostics and manual recovery
+
+```text
+GET  /api/sportybet/diagnostics        session state, cookie expiries, proxy/geo status, public-data probe
+POST /api/sportybet/session/relogin    force a fresh dummy-account login
+```
+
+Both are guarded by the website access cookie when `WEBSITE_ACCESS_CODE` is set.
+
+## Endpoint overrides
+
+SportyBet can rename its internal routes. Every path is an environment
+variable, so a route change never needs a code deploy:
+
+```text
+SPORTYBET_BASE_URL=https://www.sportybet.com/api/ng
+SPORTYBET_ENDPOINT_PREMATCH=/factsCenter/prematchSportEvents
+SPORTYBET_ENDPOINT_EVENT=/factsCenter/event
+SPORTYBET_ENDPOINT_LOGIN=/users/login
+SPORTYBET_ENDPOINT_USERINFO=/users/info
+SPORTYBET_ENDPOINT_BOOK=/orders/share
+SPORTYBET_ENDPOINT_BOOKING_LOOKUP=/orders/share
+SPORTYBET_SPORT_ID_FOOTBALL=sr:sport:1
+SPORTYBET_SPORT_ID_BASKETBALL=sr:sport:2
+SPORTYBET_SPORT_ID_HOCKEY=sr:sport:4
+```
+
+To find the current paths: open sportybet.com/ng in a browser, open DevTools →
+Network, log in / load a booking code / open a match, and copy the request
+paths into these variables.
+
+## Sports and markets (unchanged)
+
+- Football: 1X2, GG/NG, Double Chance, Draw No Bet, Over 0.5, Over 1.5, Under 4.5, Asian Handicap +0/+0.25/-0.25, Corners, 1st Half Team Corners, 1UP, team totals
+- Basketball: Winner incl. OT, Handicap incl. OT, Over/Under incl. OT
 - Ice Hockey: Winner/1X2, Puck Line/Handicap, Over/Under Goals
+- O/U 2.5 is intentionally excluded from the Auto Builder.
 
-Basketball and hockey percentages shown by the dashboard are no-vig market probabilities derived from SportyBet odds. They are not an independent historical-statistical model.
-
-## Multi-game SportyBet booking code
-
-Every selectable SportyBet outcome carries its `eventId`, `marketId`, `outcomeId`, and optional `specifier` into the browser betslip. The browser sends all selected legs to:
+## API routes (unchanged interface)
 
 ```text
+GET  /api/sportybet/odds?market=1x2|gg|dc|dnb|ou05|ou15|ou45|ah|oneup|corners|first_half_team_corners
+GET  /api/sportybet/sport/basketball?market=winner|handicap|totals
+GET  /api/sportybet/sport/hockey?market=winner|handicap|totals
 POST /api/sportybet/book
+POST /api/sportybet/auto-pick
+POST /api/sportybet/analyze-code
+POST /api/sportybet/replace-unsupported
 ```
 
-The backend calls Parse `book_bet` once and returns the SportyBet `shareCode`, `shareURL`, deadline and any unavailable selections. The API key never reaches the browser.
+## Booking code creation
 
-The slip permits one selection per event. Choosing another outcome from the same event replaces the previous selection.
+`POST /api/sportybet/book` now books through the dummy-account session instead
+of Parse. Every selectable outcome still carries its real SportyBet
+`eventId`, `marketId`, `outcomeId` and optional `specifier`; no IDs are ever
+invented. The account is never used to stake real money — only "book a bet"
+share-code creation is called.
 
-## H2H-adjusted football probabilities
+## Risk notes
 
-The refresh job now loads completed matches and finds previous direct meetings for every upcoming football fixture. Recent meetings receive more weight. H2H influence is 3 percentage points per meeting and is capped by `H2H_MAX_WEIGHT` (18% by default).
-
-Example: 5 previous meetings => 15% H2H influence and 85% current Poisson/form model.
-
-The dashboard displays:
-
-- number of H2H meetings used
-- H2H home/draw/away percentages
-- H2H model influence
-- up to five recent H2H scores
-- the original Poisson 1X2 probabilities for comparison
-
-### football-data.org history limitation
-
-The free football-data.org plan focuses on current fixtures/results/tables. Historical-season access can depend on your subscription. The code therefore treats previous-season H2H retrieval as best-effort: if the API returns 403, refresh continues with current-season history and the H2H influence becomes 0 when no direct meeting is available.
-
-For deeper historical H2H, use a football-data.org plan with history access (for example their ML history offering) or plug another historical-results provider into `getFinishedMatches()`.
-
-## New API routes
-
-```text
-GET /api/sportybet/odds?market=1x2
-GET /api/sportybet/odds?market=gg
-GET /api/sportybet/odds?market=dc
-GET /api/sportybet/odds?market=dnb
-GET /api/sportybet/odds?market=ou15
-GET /api/sportybet/odds?market=ou45
-GET /api/sportybet/odds?market=ah
-
-GET /api/sportybet/sport/basketball?market=winner
-GET /api/sportybet/sport/basketball?market=handicap
-GET /api/sportybet/sport/basketball?market=totals
-
-GET /api/sportybet/sport/hockey?market=winner
-GET /api/sportybet/sport/hockey?market=handicap
-GET /api/sportybet/sport/hockey?market=totals
-
-POST /api/sportybet/book
-```
+- Automated traffic on a logged-in account can get that account flagged or
+  banned by SportyBet's risk systems, and this usage is against their terms.
+  Use a throwaway dummy account only, keep `SPORTYBET_BOOKINGS_PER_MINUTE`
+  low, and never reuse an account you care about.
+- Reading odds is anonymous; only booking touches the account.
 
 ## Deploy
 
-Commit the modified project to the GitHub repository connected to Render, add the environment variables above, and redeploy. Run the normal refresh job once after deploying so stored football predictions include the new H2H fields.
+Commit to the GitHub repository connected to Render, set the environment
+variables above, redeploy, then open `/api/sportybet/diagnostics` and confirm
+`session.loggedIn: true` and `publicDataProbe.ok: true`. Run one
+`Daily Predictions Refresh` after deploying.
 
-## Automatic target-odds bet builder
-
-This version also includes a server-side automatic slip builder.
-
-Endpoint:
-
-```text
-POST /api/sportybet/auto-pick
-```
-
-Example JSON body:
-
-```json
-{
-  "targetOdds": 5.0,
-  "minProbability": 55,
-  "maxSelections": 8,
-  "leagues": ["Premier League", "La Liga", "Serie A"]
-}
-```
-
-The auto builder scans:
-
-- Football 1X2, GG/NG, Double Chance, Draw No Bet, Over 1.5, Under 4.5 and Asian Handicap 0/±0.25 using Poisson + capped H2H probabilities.
-- DNB and Asian quarter-handicap EV/fair odds are settlement-aware: pushes, half wins and half losses are explicitly priced.
-- O/U 2.5 is not used by the Auto Builder.
-- Basketball Winner using no-vig SportyBet market probability.
-- Ice Hockey Winner using no-vig SportyBet market probability.
-
-It uses controlled probability-weighted randomness, allows only one selection per event,
-and searches many possible combinations for combined odds close to the requested target.
-The frontend exposes both **Auto Pick Best Bets** and **Auto Pick + Generate Code**.
-
-No additional Render environment variable is required for this feature. It reuses
-`PARSE_API_KEY`, the existing SportyBet cache settings, and the existing football prediction data.
-
-## Booking Code Analyzer
-
-The website includes a Booking Code Analyzer for SportyBet share/booking codes created outside Matchday Odds Desk.
-
-Flow:
-1. Paste the outside SportyBet booking code.
-2. Choose the minimum probability to keep (for example 60%).
-3. Press **Analyze Code**.
-4. Each supported leg is matched to the current Matchday probability/value engine and marked **KEEP** or **REMOVE**.
-5. Unsupported markets are shown as **NOT SCORED**; the app never invents a probability for them.
-6. Press **Generate New SportyBet Code** to rebuild a code from only the qualifying selections.
-
-The analyzer uses the same `PARSE_API_KEY` already configured in Render. It retrieves existing booking-code details through Parse's SportyBet `get_booking` endpoint. The default decoder scraper is built in. To override it, add this optional Render environment variable:
-
-```text
-PARSE_BOOKING_SCRAPER_ID=8ffd9f0c-6174-43af-80dc-4898f47f074b
-```
-
-The booking lookup is a separate Parse request and therefore consumes the credits charged by that endpoint. Current market data may also be fetched if it is not already cached.
-
-
-## Booking Code Analyzer extended horizon
-
-The Analyzer uses its own future-match window and does not change the normal Auto Builder horizon. Optional Render variables:
-
-```text
-ANALYZER_DAYS=14
-ANALYZER_MAX_PAGES=12
-PREDICTION_DAYS_AHEAD=21
-```
-
-The website lets the user choose 7, 14, or 21 days for each analysis. The build defaults the football prediction refresh to 21 days so all three Analyzer choices can be scored when football-data.org exposes the fixture. You may explicitly set `PREDICTION_DAYS_AHEAD=21` in Render to make that behavior visible in your configuration. `SPORTYBET_HOURS` can remain at 120 for the normal Auto Builder.
-
-### Analyzer generic Over/Under resolution
-
-Some Parse `get_booking` responses return an imported football Over/Under leg with the correct fixture and booked odds but use the generic outcome label `Selection` instead of the actual line/outcome. The Analyzer now repairs this before probability scoring:
-
-1. It first matches the leg against the live SportyBet `Over 1.5` market by event/team and price.
-2. When the same booking contains explicit `Over 1.5` legs and no conflicting explicit O/U outcomes, remaining generic O/U legs are classified as `Over 1.5` for model matching.
-3. Re-booking IDs are never invented; a new booking code is created only from selections that ultimately match a real current SportyBet candidate.
-4. If Over 1.5 is resolved but the football prediction database has no matching fixture/competition, the UI says so instead of incorrectly reporting that the imported market itself is unsupported.
-
-
-## Cross-slip diversification
-
-Optional Render variable:
-
-```text
-TELEGRAM_REPEAT_MIN_PROBABILITY=80
-```
-
-During one Telegram auto-pick run, the same **game + bet type** is not reused in another target-odds slip when its probability is below this threshold. Picks at or above the threshold may repeat.
-
-## API-Football + Corners
-
-For expanded league coverage and corner probabilities, see `API_FOOTBALL_SETUP.md`. The corner builder uses actual SportyBet market IDs returned by Parse and API-Football only for the statistical probability model.
-
-
-## 1UP market fallback
-If the standard SportyBet NG prematch-market endpoint returns no 1UP rows, the app now automatically
-uses the subscribed full-market SportyBet API (`PARSE_BOOKING_SCRAPER_ID`) and filters explicit
-`1UP`, `1X2 - 1UP`, or `lead by one goal` markets from `get_event_odds`.
-
-No SportyBet market IDs are guessed. A 1UP candidate is only bookable when a real SportyBet event,
-market, outcome and odds row is returned.
-
-
-## Special-market cache reset (1UP / Corners)
-This build uses a versioned SportyBet Redis cache key. Default: `SPORTYBET_CACHE_VERSION=4`.
-This prevents old cached empty 1UP/corner responses from surviving a new deployment.
-
-The full-market fallback now scans `get_upcoming_events` market arrays across pages first, then only
-uses a bounded `get_event_odds` fallback if needed. This avoids limiting discovery to an arbitrary
-first 60 fixtures.
-
-Recommended Render:
-`SPORTYBET_CACHE_VERSION=4`
-`SPORTYBET_DETAIL_MAX_PAGES=6`
-`SPORTYBET_DETAIL_EVENT_ODDS_FALLBACK=20`
-
-After deployment run `Daily Predictions Refresh` once.
+Bump `SPORTYBET_CACHE_VERSION` (e.g. to `10`) on first deploy so no stale
+Parse-era cache entries are reused.

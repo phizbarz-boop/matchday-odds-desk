@@ -5,10 +5,10 @@ const fs=require('fs');
 const path=require('path');
 const sporty=fs.readFileSync(path.join(__dirname,'../lib/sportybet.js'),'utf8');
 
-test('team-total kinds use the subscribed Nigeria event-market API, not the separate .com fallback',()=>{
+test('team-total kinds use direct SportyBet per-event markets, with Parse.bot fully removed',()=>{
   assert.match(sporty,/TEAM_GOAL_KINDS\.includes\(kind\)/);
-  assert.match(sporty,/get_football_event_markets/);
-  assert.match(sporty,/params:\{event_id:fixture\.eventId\}, base:BASE/);
+  assert.match(sporty,/fetchEventMarketsFlattened\(fixture\.eventId, fixture\)/);
+  assert.doesNotMatch(sporty,/api\.parse\.bot|parseFetch\(|PARSE_API_KEY|PARSE_SCRAPER_ID/);
 });
 
 test('detailed-market matcher delegates team totals to strict side-specific selector',()=>{
