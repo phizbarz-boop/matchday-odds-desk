@@ -7,7 +7,7 @@ const app = express();
 app.set('trust proxy', 1); // Render forwards the real client IP.
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
-const { getFootballMarket, getSportMarket, getBooking, bookBet, SPORT_CONFIG, direct: sportyDirect } = require('./lib/sportybet');
+const { getFootballMarket, getSportMarket, getLiveSportMarket, validateLiveSelections, getBooking, bookBet, SPORT_CONFIG, direct: sportyDirect } = require('./lib/sportybet');
 const { buildCandidates, selectAutoBet, passesRedFlagFilter, normalMetrics } = require('./lib/autoPicker');
 const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest, sendTelegramAiMessageTo, telegramAiRequest } = require('./lib/telegram');
 const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, allowedBetIdsForPlan: telegramAiAllowedBetIdsForPlan, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, addExtraTickets: addTelegramAiExtraTickets, hasTicketCredit: telegramAiHasTicketCredit, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, ticketLimitKeyboard: telegramAiTicketLimitKeyboard, mainKeyboard: telegramAiMainKeyboard, builderSummary: telegramAiBuilderSummary, builderKeyboard: telegramAiBuilderKeyboard, sportKeyboard: telegramAiSportKeyboard, targetKeyboard: telegramAiTargetKeyboard, probabilityKeyboard: telegramAiProbabilityKeyboard, maxOddKeyboard: telegramAiMaxOddKeyboard, edgeKeyboard: telegramAiEdgeKeyboard, maxGamesKeyboard: telegramAiMaxGamesKeyboard, marketsKeyboard: telegramAiMarketsKeyboard, analyzerSummary: telegramAiAnalyzerSummary, analyzerKeyboard: telegramAiAnalyzerKeyboard, analyzerAnalysisKeyboard: telegramAiAnalyzerAnalysisKeyboard, analyzerProbKeyboard: telegramAiAnalyzerProbKeyboard, analyzerHorizonKeyboard: telegramAiAnalyzerHorizonKeyboard, resultKeyboard: telegramAiResultKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
@@ -601,7 +601,7 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   const ttlSeconds = Math.max(60, parseInt(process.env.SPORTYBET_CACHE_SECONDS || '43200', 10));
   const normalHours = Math.max(1, parseInt(process.env.SPORTYBET_HOURS || String((parseInt(process.env.DAYS_AHEAD || '4', 10) + 1) * 24), 10));
   const hours = Math.max(1, Math.min(24 * 21, parseInt(options.hours || normalHours, 10)));
-  const maxPages = Math.max(1, Math.min(20, parseInt(options.maxPages || process.env.SPORTYBET_MAX_PAGES || '5', 10)));
+  const maxPages = Math.max(1, Math.min(20, parseInt(options.maxPages || process.env.SPORTYBET_MAX_PAGES || '10', 10)));
   const maxCacheAgeSeconds = Number.isFinite(Number(options.maxCacheAgeSeconds))
     ? Math.max(0, Number(options.maxCacheAgeSeconds))
     : null;
@@ -1169,36 +1169,35 @@ app.get('/api/handball/status', async (req,res)=>{
 app.get('/api/sportybet/sport/:sport', async (req, res) => {
   try {
     const sport = String(req.params.sport || '').toLowerCase();
-    if (sport === 'tennis') {
+    // Tennis/handball/volleyball are scraped directly from SportyBet first
+    // (all leagues and divisions). The collector snapshots remain as a
+    // fallback for kinds the direct board is not serving right now.
+    if (['tennis', 'handball', 'volleyball'].includes(sport)) {
+      const legacyMarkets = { tennis: ['winner','totals','handicap'], handball: ['winner','totals'], volleyball: ['winner','totals','sets'] }[sport];
+      const legacyLoader = { tennis: loadTennisMarket, handball: loadHandballMarket, volleyball: loadVolleyballMarket }[sport];
       const kind = String(req.query.market || 'winner').toLowerCase();
-      if (!['winner','totals','handicap'].includes(kind)) {
-        return res.status(400).json({ error: 'tennis market must be one of: winner, totals, handicap' });
+      if (!legacyMarkets.includes(kind)) {
+        return res.status(400).json({ error: `${sport} market must be one of: ${legacyMarkets.join(', ')}` });
       }
-      const payload = await loadTennisMarket(kind);
-      res.set('Cache-Control', 'public, max-age=60');
-      return res.json(payload);
-    }
-    if (sport === 'handball') {
-      const kind = String(req.query.market || 'winner').toLowerCase();
-      if (!['winner','totals'].includes(kind)) {
-        return res.status(400).json({ error: 'handball market must be one of: winner, totals' });
+      const directCfg = SPORT_CONFIG[sport];
+      if (directCfg && directCfg.markets[kind]) {
+        try {
+          const payload = await loadSportyBetMarket(kind, sport);
+          if (Array.isArray(payload?.rows) && payload.rows.length) {
+            res.set('Cache-Control', 'public, max-age=60');
+            return res.json(payload);
+          }
+        } catch (err) {
+          console.warn(`[SportyBet ${sport}] direct scrape failed (${err.message}); trying collector snapshot`);
+        }
       }
-      const payload = await loadHandballMarket(kind);
+      const payload = await legacyLoader(kind);
       res.set('Cache-Control', 'public, max-age=60');
-      return res.json(payload);
-    }
-    if (sport === 'volleyball') {
-      const kind = String(req.query.market || 'winner').toLowerCase();
-      if (!['winner','totals','sets'].includes(kind)) {
-        return res.status(400).json({ error: 'volleyball market must be one of: winner, totals, sets' });
-      }
-      const payload = await loadVolleyballMarket(kind);
-      res.set('Cache-Control', 'public, max-age=60');
-      return res.json(payload);
+      return res.json({ ...payload, source: payload.rows?.length ? 'collector-snapshot (direct board empty)' : payload.source });
     }
     const cfg = SPORT_CONFIG[sport];
     if (!cfg) {
-      return res.status(400).json({ error: `sport must be one of: ${[...Object.keys(SPORT_CONFIG),'handball'].join(', ')}` });
+      return res.status(400).json({ error: `sport must be one of: ${[...Object.keys(SPORT_CONFIG)].join(', ')}` });
     }
     const kind = String(req.query.market || cfg.defaultMarket).toLowerCase();
     if (!cfg.markets[kind]) {
@@ -1215,6 +1214,79 @@ app.get('/api/sportybet/sport/:sport', async (req, res) => {
         ? 'SportyBet integration is not configured yet'
         : 'Failed to load SportyBet sport odds',
       detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Live / in-play betting: scrape the SportyBet live board through the
+// dummy-account session and create booking codes for live selections only.
+// ---------------------------------------------------------------------------
+
+// GET /api/sportybet/live/odds?sport=football&market=1x2
+// market=all returns every offered bet type for every live event.
+app.get('/api/sportybet/live/odds', async (req, res) => {
+  try {
+    const sport = String(req.query.sport || 'football').toLowerCase();
+    const kind = String(req.query.market || 'all').toLowerCase();
+    const maxPages = Math.max(1, Math.min(20, parseInt(req.query.maxPages || process.env.SPORTYBET_LIVE_MAX_PAGES || '5', 10)));
+    const payload = await getLiveSportMarket(sport, kind, { maxPages });
+    res.set('Cache-Control', 'no-store');
+    res.json(payload);
+  } catch (err) {
+    console.error('SportyBet live odds error:', err.message);
+    const status = err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : (err.code === 'SPORTYBET_TIMEOUT' ? 504 : 502);
+    res.status(status).json({
+      error: err.code === 'SPORTYBET_GEO_BLOCKED'
+        ? 'SportyBet geo-blocked this server IP — set SPORTYBET_PROXY_URL to a Nigeria-exit proxy'
+        : 'Failed to load SportyBet live odds',
+      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
+  }
+});
+
+// POST /api/sportybet/live/book { selections: [...] }
+// Every selection is re-validated against a fresh live board scrape first;
+// suspended/settled legs are dropped and reported, never booked blindly.
+app.post('/api/sportybet/live/book', express.json(), async (req, res) => {
+  try {
+    if (!(await allowBookingRequest(req))) {
+      return res.status(429).json({ error: 'Too many booking requests; try again in a minute' });
+    }
+    const selections = req.body && req.body.selections;
+    if (!Array.isArray(selections) || selections.length === 0 || selections.length > 100) {
+      return res.status(400).json({ error: 'selections must be an array containing 1-100 selections' });
+    }
+
+    const { valid, dropped } = await validateLiveSelections(selections, {
+      maxPages: Math.max(1, Math.min(20, parseInt(process.env.SPORTYBET_LIVE_MAX_PAGES || '5', 10))),
+    });
+    if (!valid.length) {
+      return res.status(409).json({
+        error: 'None of the selections are still offered on the live board; no booking was created',
+        dropped,
+      });
+    }
+
+    const result = await bookBet(valid, { preferFullMarket: true });
+    res.json({
+      ...result,
+      live: true,
+      bookedLegs: valid.length,
+      dropped,
+      validatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('SportyBet live booking error:', err.message);
+    const status = err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : (err.code === 'SPORTYBET_BOOKING_TIMEOUT' ? 504 : 502);
+    res.status(status).json({
+      error: err.code === 'SPORTYBET_NOT_CONFIGURED'
+        ? 'SportyBet dummy account is not configured (SPORTYBET_PHONE / SPORTYBET_PASSWORD)'
+        : 'Failed to create live SportyBet booking code',
+      bookingErrorCode: err.code || null,
+      detail: err.code === 'SPORTYBET_BOOKING_FAILED'
+        ? err.message
+        : (process.env.NODE_ENV === 'production' ? undefined : err.message),
     });
   }
 });

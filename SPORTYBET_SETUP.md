@@ -39,7 +39,7 @@ Recommended tuning (all optional):
 ```text
 SPORTYBET_CACHE_SECONDS=43200
 SPORTYBET_HOURS=120
-SPORTYBET_MAX_PAGES=5
+SPORTYBET_MAX_PAGES=10
 SPORTYBET_PAGE_SIZE=100
 SPORTYBET_BOOKINGS_PER_MINUTE=5
 SPORTYBET_KEEPALIVE_SECONDS=240
@@ -88,9 +88,7 @@ SPORTYBET_ENDPOINT_LOGIN=/users/login
 SPORTYBET_ENDPOINT_USERINFO=/users/info
 SPORTYBET_ENDPOINT_BOOK=/orders/share
 SPORTYBET_ENDPOINT_BOOKING_LOOKUP=/orders/share
-SPORTYBET_SPORT_ID_FOOTBALL=sr:sport:1
-SPORTYBET_SPORT_ID_BASKETBALL=sr:sport:2
-SPORTYBET_SPORT_ID_HOCKEY=sr:sport:4
+SPORTYBET_ENDPOINT_LIVE=/factsCenter/liveSportEvents
 ```
 
 To find the current paths: open sportybet.com/ng in a browser, open DevTools →
@@ -102,7 +100,51 @@ paths into these variables.
 - Football: 1X2, GG/NG, Double Chance, Draw No Bet, Over 0.5, Over 1.5, Under 4.5, Asian Handicap +0/+0.25/-0.25, Corners, 1st Half Team Corners, 1UP, team totals
 - Basketball: Winner incl. OT, Handicap incl. OT, Over/Under incl. OT
 - Ice Hockey: Winner/1X2, Puck Line/Handicap, Over/Under Goals
-- O/U 2.5 is intentionally excluded from the Auto Builder.
+- Tennis, Volleyball, Handball: Winner / Handicap / Totals — now scraped
+  directly from SportyBet like the other sports (all leagues and divisions,
+  `SPORTYBET_MAX_PAGES=10` default). The old collector snapshots remain as an
+  automatic fallback if the direct board returns nothing.
+- O/U 2.5 is intentionally excluded from the Auto Builder. The probability
+  model is untouched.
+
+Sport id overrides if SportyBet renumbers:
+
+```text
+SPORTYBET_SPORT_ID_FOOTBALL=sr:sport:1
+SPORTYBET_SPORT_ID_BASKETBALL=sr:sport:2
+SPORTYBET_SPORT_ID_HOCKEY=sr:sport:4
+SPORTYBET_SPORT_ID_TENNIS=sr:sport:5
+SPORTYBET_SPORT_ID_HANDBALL=sr:sport:6
+SPORTYBET_SPORT_ID_VOLLEYBALL=sr:sport:23
+```
+
+## Live / in-play betting
+
+The site has a **Live Betting** page (`/live.html`, behind the same website
+access code) that scrapes the SportyBet live board through the dummy-account
+session and creates booking codes for live selections only.
+
+```text
+GET  /api/sportybet/live/odds?sport=football&market=all
+POST /api/sportybet/live/book     { "selections": [...] }
+```
+
+- `market=all` returns every bet type offered for every live event; per-sport
+  filters work too (e.g. `sport=football&market=1x2`).
+- Live rows are cached at most `SPORTYBET_LIVE_CACHE_SECONDS` (default 15s).
+- Before a live code is created, every leg is re-validated against a **fresh,
+  uncached** live board scrape. Suspended or settled legs are dropped and
+  reported in `dropped`; they are never booked blindly.
+- Live booking uses the same dummy-account session and per-minute rate limit
+  as prematch booking.
+
+Live tuning:
+
+```text
+SPORTYBET_ENDPOINT_LIVE=/factsCenter/liveSportEvents
+SPORTYBET_LIVE_MAX_PAGES=5
+SPORTYBET_LIVE_CACHE_SECONDS=15
+```
 
 ## API routes (unchanged interface)
 

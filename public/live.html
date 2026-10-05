@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Live Betting — Matchday Odds Desk</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#070b09;color:#f3f7f4;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:20px}
+  .wrap{max-width:1180px;margin:0 auto}
+  header{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:18px}
+  .brand{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#58df84;font-weight:800}
+  h1{font-size:24px;margin:4px 0 2px}
+  .sub{color:#9eaaa2;font-size:13px}
+  a.back{color:#58df84;text-decoration:none;font-size:13px;font-weight:700}
+  .panel{background:#111814;border:1px solid #26352c;border-radius:16px;padding:16px;margin-bottom:16px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+  .chip{border:1px solid #34463a;background:#0c110e;color:#cbd5ce;border-radius:999px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer}
+  .chip.active{background:#27c45b;color:#031006;border-color:#27c45b}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  select,input[type=checkbox]{accent-color:#27c45b}
+  select{background:#0c110e;color:#f3f7f4;border:1px solid #34463a;border-radius:10px;padding:9px 12px;font-size:13px}
+  button.primary{border:0;border-radius:12px;padding:12px 18px;font-size:14px;font-weight:850;background:#27c45b;color:#031006;cursor:pointer}
+  button.primary:disabled{opacity:.5;cursor:not-allowed}
+  .status{font-size:13px;color:#9eaaa2;min-height:18px}
+  .status b{color:#f3f7f4}
+  .live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#ff4d4d;margin-right:6px;animation:pulse 1.2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .event{border:1px solid #26352c;border-radius:12px;margin-bottom:10px;overflow:hidden}
+  .event-head{display:flex;justify-content:space-between;gap:10px;padding:10px 14px;background:#0c110e;font-size:13px;flex-wrap:wrap}
+  .event-head .teams{font-weight:800}
+  .event-head .meta{color:#9eaaa2;font-size:12px}
+  .markets{padding:10px 14px;display:flex;flex-direction:column;gap:8px}
+  .market-name{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#68746c;font-weight:800}
+  .outcomes{display:flex;gap:8px;flex-wrap:wrap}
+  .odd{border:1px solid #34463a;background:#0c110e;border-radius:10px;padding:8px 12px;font-size:13px;cursor:pointer;color:#f3f7f4;display:flex;gap:8px;align-items:center}
+  .odd:hover{border-color:#36cf6a}
+  .odd.selected{background:#1c3a26;border-color:#27c45b;color:#8df0ab}
+  .odd .price{font-weight:850;color:#58df84}
+  .odd.selected .price{color:#b7f5c9}
+  .odd .spec{color:#68746c;font-size:11px}
+  #slip{position:sticky;top:12px}
+  .slip-leg{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #1d2a21;padding:8px 0;font-size:13px}
+  .slip-leg .remove{cursor:pointer;color:#ff8d8d;font-weight:800}
+  .grid{display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start}
+  @media (max-width:900px){.grid{grid-template-columns:1fr}}
+  .code-box{background:#0c110e;border:1px solid #27c45b;border-radius:12px;padding:14px;margin-top:12px;font-size:14px;display:none}
+  .code-box b{font-size:20px;color:#58df84;letter-spacing:.06em}
+  .dropped{color:#ffb6b6;font-size:12px;margin-top:8px}
+  .empty{color:#68746c;text-align:center;padding:30px 0;font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="brand"><span class="live-dot"></span>Live · SportyBet Direct</div>
+      <h1>Live Betting</h1>
+      <div class="sub">Scraped straight from the SportyBet live board through your account session. Select legs, create a live booking code.</div>
+    </div>
+    <a class="back" href="/">← Prematch desk</a>
+  </header>
+
+  <section class="panel">
+    <div class="chips" id="sport-chips"></div>
+    <div class="row">
+      <select id="market-select"></select>
+      <label style="font-size:13px;color:#9eaaa2"><input type="checkbox" id="auto-refresh"> Auto-refresh 30s</label>
+      <button class="primary" id="refresh-btn" type="button">Refresh live board</button>
+      <span class="status" id="status"></span>
+    </div>
+  </section>
+
+  <div class="grid">
+    <main id="events"></main>
+    <aside class="panel" id="slip">
+      <h3 style="margin:0 0 8px;font-size:15px">Live betslip</h3>
+      <div id="slip-legs"><div class="empty">No selections yet</div></div>
+      <div style="display:flex;justify-content:space-between;margin-top:10px;font-size:14px"><span>Combined odds</span><b id="slip-odds">—</b></div>
+      <button class="primary" id="create-code" type="button" disabled style="width:100%;margin-top:12px">Create Live Booking Code</button>
+      <div class="code-box" id="code-box"></div>
+      <div class="dropped" id="dropped-box"></div>
+    </aside>
+  </div>
+</div>
+
+<script>
+const SPORTS=[
+  {id:'football',label:'⚽ Football'},
+  {id:'basketball',label:'🏀 Basketball'},
+  {id:'tennis',label:'🎾 Tennis'},
+  {id:'hockey',label:'🏒 Ice Hockey'},
+  {id:'volleyball',label:'🏐 Volleyball'},
+  {id:'handball',label:'🤾 Handball'},
+];
+const MARKETS={
+  football:[['all','All live bet types'],['1x2','1X2'],['gg','GG/NG'],['dc','Double Chance'],['dnb','Draw No Bet'],['ou15','Over/Under 1.5'],['ou45','Over/Under 4.5'],['ah','Asian Handicap'],['corners','Corners'],['oneup','1UP']],
+  basketball:[['all','All live bet types'],['winner','Winner'],['handicap','Handicap'],['totals','Over/Under']],
+  tennis:[['all','All live bet types'],['winner','Winner'],['handicap','Handicap'],['totals','Over/Under']],
+  hockey:[['all','All live bet types'],['winner','1X2'],['handicap','Handicap'],['totals','Over/Under']],
+  volleyball:[['all','All live bet types'],['winner','Winner'],['handicap','Handicap'],['totals','Over/Under']],
+  handball:[['all','All live bet types'],['winner','1X2'],['handicap','Handicap'],['totals','Over/Under']],
+};
+const state={sport:'football',market:'all',rows:[],loading:false,slip:new Map(),timer:null};
+
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function renderSportChips(){
+  $('sport-chips').innerHTML=SPORTS.map(s=>`<button class="chip ${state.sport===s.id?'active':''}" data-sport="${s.id}">${s.label}</button>`).join('');
+  document.querySelectorAll('#sport-chips .chip').forEach(b=>b.onclick=()=>{state.sport=b.dataset.sport;state.market='all';renderMarketSelect();renderSportChips();loadLive();});
+}
+function renderMarketSelect(){
+  $('market-select').innerHTML=MARKETS[state.sport].map(([v,l])=>`<option value="${v}" ${state.market===v?'selected':''}>${l}</option>`).join('');
+}
+$('market-select').onchange=e=>{state.market=e.target.value;loadLive();};
+$('refresh-btn').onclick=()=>loadLive(true);
+$('auto-refresh').onchange=e=>{
+  if(state.timer){clearInterval(state.timer);state.timer=null;}
+  if(e.target.checked)state.timer=setInterval(()=>loadLive(true),30000);
+};
+
+function setStatus(html){$('status').innerHTML=html||'';}
+
+async function loadLive(manual){
+  if(state.loading)return;
+  state.loading=true;
+  setStatus('Loading live board…');
+  try{
+    const res=await fetch(`/api/sportybet/live/odds?sport=${encodeURIComponent(state.sport)}&market=${encodeURIComponent(state.market)}`);
+    const p=await res.json();
+    if(!res.ok)throw new Error(p.error||'live odds unavailable');
+    state.rows=Array.isArray(p.rows)?p.rows:[];
+    const t=p.fetchedAt?new Date(p.fetchedAt).toLocaleTimeString():'';
+    setStatus(`<b>${state.rows.length}</b> live outcomes · ${p.scannedEvents||0} events · updated ${t}${p.live?' · <span class="live-dot"></span>LIVE':''}`);
+    renderEvents();
+  }catch(e){
+    setStatus(`⚠ ${esc(e.message)}`);
+  }finally{state.loading=false;}
+}
+
+function groupByEvent(rows){
+  const map=new Map();
+  for(const r of rows){
+    const key=r.eventId;
+    if(!map.has(key))map.set(key,{eventId:key,home:r.home,away:r.away,tournament:r.tournament,sport:r.sport,markets:new Map()});
+    const ev=map.get(key);
+    const mkey=`${r.marketId}|${r.marketDesc}|${r.specifier||''}`;
+    if(!ev.markets.has(mkey))ev.markets.set(mkey,{desc:r.marketDesc||'Market',specifier:r.specifier,outcomes:[]});
+    ev.markets.get(mkey).outcomes.push(r);
+  }
+  return [...map.values()];
+}
+
+function legKey(r){return [r.eventId,r.marketId,r.outcomeId,r.specifier||''].join('|');}
+
+function renderEvents(){
+  const events=groupByEvent(state.rows);
+  if(!events.length){$('events').innerHTML='<div class="panel empty">No live events on the board for this sport right now.</div>';return;}
+  $('events').innerHTML=events.map(ev=>`
+    <div class="event">
+      <div class="event-head">
+        <span class="teams">${esc(ev.home)} vs ${esc(ev.away)}</span>
+        <span class="meta">${esc(ev.tournament||'')}</span>
+      </div>
+      <div class="markets">
+        ${[...ev.markets.values()].map(m=>`
+          <div>
+            <div class="market-name">${esc(m.desc)}${m.specifier?` · ${esc(m.specifier)}`:''}</div>
+            <div class="outcomes">
+              ${m.outcomes.map(o=>{
+                const k=legKey(o);
+                return `<button class="odd ${state.slip.has(k)?'selected':''}" data-leg="${esc(k)}">
+                  <span>${esc(o.outcomeDesc||'Selection')}</span>${o.specifier?`<span class="spec">${esc(o.specifier)}</span>`:''}<span class="price">${esc(o.odds)}</span>
+                </button>`;}).join('')}
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>`).join('');
+  document.querySelectorAll('[data-leg]').forEach(btn=>btn.onclick=()=>toggleLeg(btn.dataset.leg));
+}
+
+function findRow(k){return state.rows.find(r=>legKey(r)===k);}
+
+function toggleLeg(k){
+  if(state.slip.has(k)){state.slip.delete(k);}
+  else{
+    const r=findRow(k);
+    if(!r)return;
+    for(const [key,val] of state.slip){if(val.eventId===r.eventId)state.slip.delete(key);} // one selection per event
+    state.slip.set(k,r);
+  }
+  renderEvents();renderSlip();
+}
+
+function renderSlip(){
+  const legs=[...state.slip.values()];
+  $('slip-legs').innerHTML=legs.length?legs.map(r=>{
+    const k=legKey(r);
+    return `<div class="slip-leg"><span>${esc(r.home)} vs ${esc(r.away)}<br><span style="color:#9eaaa2">${esc(r.marketDesc)} · ${esc(r.outcomeDesc)}</span></span><span><b>${esc(r.odds)}</b> <span class="remove" data-remove="${esc(k)}">✕</span></span></div>`;
+  }).join(''):'<div class="empty">No selections yet</div>';
+  document.querySelectorAll('[data-remove]').forEach(x=>x.onclick=()=>toggleLeg(x.dataset.remove));
+  const combined=legs.reduce((a,r)=>a*(Number(r.odds)||1),1);
+  $('slip-odds').textContent=legs.length?combined.toFixed(2):'—';
+  $('create-code').disabled=!legs.length;
+}
+
+$('create-code').onclick=async()=>{
+  const legs=[...state.slip.values()];
+  if(!legs.length)return;
+  $('create-code').disabled=true;
+  $('code-box').style.display='none';
+  $('dropped-box').textContent='';
+  setStatus('Validating selections against the live board…');
+  try{
+    const res=await fetch('/api/sportybet/live/book',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selections:legs.map(r=>({eventId:r.eventId,marketId:r.marketId,outcomeId:r.outcomeId,specifier:r.specifier,sport:state.sport}))})});
+    const p=await res.json();
+    if(!res.ok)throw new Error(p.error||'live booking failed');
+    const box=$('code-box');
+    box.style.display='block';
+    box.innerHTML=`Live booking code: <b>${esc(p.shareCode||'')}</b>${p.shareURL?`<br><a class="back" href="${esc(p.shareURL)}" target="_blank" rel="noopener">Open on SportyBet →</a>`:''}<br><span style="color:#9eaaa2;font-size:12px">${p.bookedLegs||legs.length} legs booked</span>`;
+    if(Array.isArray(p.dropped)&&p.dropped.length){
+      $('dropped-box').textContent='Dropped (no longer offered): '+p.dropped.map(d=>`${d.home||''} vs ${d.away||''} — ${d.marketDesc||d.marketId}`).join('; ');
+      for(const d of p.dropped){for(const [k,v] of state.slip){if(String(v.eventId)===String(d.eventId)&&String(v.marketId)===String(d.marketId)&&String(v.outcomeId)===String(d.outcomeId))state.slip.delete(k);}}
+      renderEvents();renderSlip();
+    }
+    setStatus('Live code created.');
+  }catch(e){
+    setStatus(`⚠ ${esc(e.message)}`);
+  }finally{$('create-code').disabled=![...state.slip.values()].length;}
+};
+
+renderSportChips();renderMarketSelect();renderSlip();loadLive();
+</script>
+</body>
+</html>
