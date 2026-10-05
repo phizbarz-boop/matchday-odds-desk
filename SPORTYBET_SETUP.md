@@ -229,6 +229,16 @@ The same filter runs again during pre-booking validation, so a prematch match
 can never slip into a live-only coupon. Set `SPORTYBET_LIVE_FILTER=0` only if
 a future endpoint change makes the filter hide genuinely live matches.
 
+Live mode scans **all six sports and every supported bet type** (website and
+Telegram bot alike). The scan first asks the feed to embed the configured
+market IDs; the site's own live call sends only `sportId`, so if a sport comes
+back with live events but zero usable markets, the scan retries once without
+the `marketId` param and lets the feed return its default live markets (the
+market filter itself is never loosened). When a sport still matches nothing,
+the log line `[SportyBet live] <sport>: N live events scanned, 0 rows matched;
+embedded live markets: …` lists exactly what the feed offered — paste it if a
+sport looks missing so its live market IDs can be mapped.
+
 ## API routes (unchanged interface)
 
 ```text

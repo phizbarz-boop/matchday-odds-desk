@@ -178,3 +178,53 @@ test('live booking validation drops legs whose match left the in-play board', as
     assert.equal(dropped[0].eventId, 'sr:match:flip', 'prematch row on the mixed feed must not validate as live');
   } finally { direct.setFetchForTesting(null); }
 });
+
+test('live scan retries without the marketId param when it hides embedded live markets', async () => {
+  const now = Date.now();
+  const seenMarketParam = [];
+  // Hockey keeps this test on its own sportId cache key (the 15s live TTL
+  // cache is shared across tests in this process).
+  direct.setFetchForTesting(async url => {
+    const u = new URL(url);
+    assert.ok(LIVE_PATHS.some(p => u.pathname.endsWith(p)), `unexpected live path ${u.pathname}`);
+    assert.equal(u.searchParams.get('sportId'), SPORT_IDS.hockey);
+    const hasMarketParam = !!u.searchParams.get('marketId');
+    seenMarketParam.push(hasMarketParam);
+    if (hasMarketParam) {
+      // Live feed embeds nothing when asked for the prematch market ids.
+      return jsonResponse([
+        {eventId:'sr:match:r1',homeTeamName:'Retry HC',awayTeamName:'Param United',estimateStartTime:now-1200000,
+         tournament:'Live Hockey League',markets:[]},
+      ]);
+    }
+    // The site's own live call shape (sportId only) returns default markets.
+    return jsonResponse([
+      {eventId:'sr:match:r1',homeTeamName:'Retry HC',awayTeamName:'Param United',estimateStartTime:now-1200000,
+       tournament:'Live Hockey League',
+       markets:[market('1','1X2',[outcome('1','Home',null,2.10),outcome('2','Draw',null,3.40)])]},
+    ]);
+  });
+  try {
+    const res = await getLiveSportMarket('hockey','winner',{maxPages:1});
+    assert.equal(res.rows.length, 2, 'default live feed must supply the winner rows');
+    assert.ok(res.rows.every(r => r.marketId === '1'));
+    assert.ok(seenMarketParam.includes(true) && seenMarketParam.includes(false), 'must retry once without the marketId param');
+    assert.ok(seenMarketParam.indexOf(true) < seenMarketParam.lastIndexOf(false), 'marketId request comes first, retry second');
+  } finally { direct.setFetchForTesting(null); }
+});
+
+test('live scan does not retry when the sport simply has no live events', async () => {
+  let calls = 0;
+  direct.setFetchForTesting(async url => {
+    const u = new URL(url);
+    assert.ok(LIVE_PATHS.some(p => u.pathname.endsWith(p)), `unexpected live path ${u.pathname}`);
+    calls++;
+    return jsonResponse([]); // empty board
+  });
+  try {
+    const res = await getLiveSportMarket('volleyball','winner',{maxPages:1});
+    assert.equal(res.rows.length, 0);
+    assert.equal(res.scannedEvents, 0);
+    assert.equal(calls, 1, 'no retry when nothing is live');
+  } finally { direct.setFetchForTesting(null); }
+});
