@@ -1415,7 +1415,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
   const needTennisTotals = wantsTennis && wantsAny(['tennis_over','tennis_under']);
   const needTennisHandicap = wantsTennis && wantsAny(['tennis_handicap_home','tennis_handicap_away']);
 
-  // The general sportsbook cache may live for hours to save API credits, but the Auto Builder
+  // The general sportsbook cache may live for hours to reduce repeated requests, but the Auto Builder
   // needs much fresher availability data so expired events cannot remain eligible.
   const autoMaxCacheAgeSeconds = Math.max(0, parseInt(process.env.AUTO_SPORTYBET_MAX_CACHE_AGE_SECONDS || '43200', 10));
   const autoMarketOptions = {
@@ -1494,7 +1494,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
   if (wantsLive) {
     const liveMaxPages = Math.max(1, Math.min(20, parseInt(process.env.SPORTYBET_LIVE_MAX_PAGES || '5', 10)));
     const liveOnly = ['live','quick_cash'].includes(liveModeNorm);
-    liveDiagnostics = { mode: liveModeNorm, rows: {}, errors: {}, totalRows: 0, footballModels: null };
+    liveDiagnostics = { mode: liveModeNorm, rows: {}, errors: {}, totalRows: 0, footballModels: null, feeds:{} };
     const mergeLiveRows = (payload, liveRows) => {
       const base = liveOnly ? [] : (Array.isArray(payload?.rows) ? payload.rows : []);
       const liveEventIds = new Set(liveRows.map(r => String(r.eventId || '')).filter(Boolean));
@@ -1511,6 +1511,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
         const rows = (payload.rows || []).map(r => ({ ...r, live: true }));
         if(payload.probabilityRows)rows.probabilityRows=payload.probabilityRows.map(r=>({...r,live:true}));
         liveDiagnostics.rows[key] = rows.length;
+        liveDiagnostics.feeds[key]=payload.feedDiagnostics || {ongoingEvents:payload.scannedEvents || 0};
         liveDiagnostics.totalRows += rows.length;
         return rows;
       } catch (err) {
@@ -2238,21 +2239,21 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
 });
 
 
-async function autoCornerDiagnostics(betTypes) {
+async function autoCornerDiagnostics(betTypes,liveMode='prematch') {
   const wantsCorners=Array.isArray(betTypes) && betTypes.some(x=>String(x).includes('corner'));
   if(!wantsCorners) return null;
   try{
-    const [pred, c, h] = await Promise.all([
-      loadPredictions(),
-      loadSportyBetMarket('corners'),
-      loadSportyBetMarket('first_half_team_corners')
-    ]);
+    const live=['live','quick_cash'].includes(liveMode);
+    const [pred,c] = await Promise.all([loadPredictions(),live?getLiveSportMarket('football','corners'):loadSportyBetMarket('corners')]);
+    const playable=buildCandidates({predictions:live?{matches:[]}:pred,footballMarkets:{corners:c},sportScope:'football',betTypes:['corners_over','corners_under'],minProbability:0,minEdge:0});
     const matches=Array.isArray(pred?.matches)?pred.matches:[];
     return {
       predictionMatches:matches.length,
       matchesWithCornerModel:matches.filter(x=>Number(x?.corners?.totalLambda||0)>0).length,
       sportyCornerRows:Array.isArray(c?.rows)?c.rows.length:0,
-      sportyFirstHalfCornerRows:Array.isArray(h?.rows)?h.rows.length:0,
+      playableCornerSelections:playable.length,
+      historicalCornerModelRequired:false,
+      mode:live?'live':'prematch',
       source:'SportyBet direct',
     };
   }catch(e){
@@ -2265,7 +2266,8 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const body = req.body || {};
     const targetOdds = Math.min(100000, Math.max(1.05, Number(body.targetOdds) || 5));
     // Website Auto Builder probability is user-adjustable.
-    const minProbability = Math.min(95, Math.max(0, Number(body.minProbability) || 55));
+    const requestedProbability = body.minProbability == null ? 55 : Number(body.minProbability);
+    const minProbability = Math.min(95, Math.max(0, Number.isFinite(requestedProbability) ? requestedProbability : 55));
     const maxSelections = Math.min(50, Math.max(1, parseInt(body.maxSelections || '8', 10)));
     const minEdge = Math.min(50, Math.max(-25, Number(body.minEdge) || 0));
     // Optional website-only ceiling for the bookmaker odds of each individual selection.
@@ -2288,7 +2290,7 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const redFlagRejected = prepared.diagnostics.redFlagRejected;
     const result = selectAutoBet(oddsFilteredCandidates, { targetOdds, maxSelections });
     if (!result.selections.length) {
-      const cornerDiagnostics=await autoCornerDiagnostics(betTypes);
+      const cornerDiagnostics=await autoCornerDiagnostics(betTypes,liveMode);
       return res.status(404).json({
         error: 'No eligible SportyBet selections matched the requested sport and minimum probability',
         targetOdds,
@@ -2309,10 +2311,14 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
         liveDiagnostics: prepared.diagnostics.liveDiagnostics,
         teamGoalAvailability: prepared.diagnostics.teamGoalAvailability,
         cornerDiagnostics,
-        hint: Object.keys(prepared.diagnostics.teamGoalAvailability || {}).length
-          ? 'Team totals: check teamGoalAvailability. An unavailable bookmaker line or missing saved team model cannot be turned into a valid selection; increase SPORTYBET_TEAM_GOAL_MAX_EVENTS only if you accept more SportyBet requests.'
+        hint: prepared.diagnostics.liveDiagnostics
+          ? (Object.keys(prepared.diagnostics.liveDiagnostics.errors || {}).length
+            ? 'Some live market reads failed. See the live source errors below.'
+            : prepared.diagnostics.liveDiagnostics.totalRows===0
+              ? 'No playable live markets were returned for the selected sports and bet types. Finished, suspended and upcoming games are excluded.'
+              : 'Live markets were found, but no selection passed your probability, edge, league, maximum-odds and match-stage settings.')
           : cornerDiagnostics
-            ? 'Corner diagnostics included. matchesWithCornerModel must be > 0 and SportyBet corner rows must be > 0.'
+            ? 'Corners use an offered Over/Under price pair when historical statistics are unavailable. A historical corner model is not required.'
             : undefined,
       });
     }
