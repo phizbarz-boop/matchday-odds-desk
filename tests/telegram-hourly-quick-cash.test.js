@@ -8,11 +8,12 @@ function harness(runQuickCash,{redis=fakeRedis()}={}) {
   let handler,clock=new Date('2026-10-06T16:05:00Z');
   registerTelegramQuickCashRoute({post(route,_json,fn){assert.equal(route,'/api/telegram/quick-cash');handler=fn;}},
     {express:{json:()=>()=>{}},authorize:req=>req.headers.secret==='test',getRedis:async()=>redis,runQuickCash,now:()=>clock,logger:{error(){}}});
-  const request=({authorized=true}={})=>{
+  const request=({authorized=true,manual=false,runId}={})=>{
     const res=new EventEmitter();Object.assign(res,{destroyed:false,writableEnded:false,statusCode:200});
     res.status=code=>{res.statusCode=code;return res;};res.json=body=>{res.body=body;res.writableEnded=true;res.emit('close');return res;};
     res.disconnect=()=>{res.destroyed=true;res.emit('close');};
-    return {res,done:handler({headers:{secret:authorized?'test':'wrong'}},res)};
+    return {res,done:handler({headers:{secret:authorized?'test':'wrong',
+      ...(manual?{'x-matchday-run-mode':'manual'}:{}),...(runId?{'x-matchday-run-id':runId}:{})}},res)};
   };
   return {request,redis,setClock:date=>{clock=new Date(date);}};
 }
@@ -63,4 +64,51 @@ test('a partial five-plan result reports failure and permits retries protected b
   const first=h.request();await first.done;assert.equal(first.res.statusCode,502);
   assert.equal(await h.redis.exists('telegram:quick-cash:once:2026-10-06T17'),0);
   const retry=h.request();await retry.done;assert.equal(retry.res.statusCode,200);assert.equal(calls,2);
+});
+
+test('new manual runs bypass a completed scheduled hour at any minute',async()=>{
+  const contexts=[];
+  const h=harness(async context=>{contexts.push(context);await context.onPostingStart();return {sent:true,shareCode:'CODE'+contexts.length};});
+  h.setClock('2026-10-06T16:47:00Z');
+  await h.request().done;
+  const a=h.request({manual:true,runId:'github-100-1'});await a.done;
+  const b=h.request({manual:true,runId:'github-101-1'});await b.done;
+  assert.equal(a.res.body.runMode,'manual');assert.equal(a.res.body.shareCode,'CODE2');assert.equal(b.res.body.shareCode,'CODE3');
+  assert.ok(contexts.slice(1).every(c=>c.hourKey==='2026-10-06T17'&&c.runKey!==c.hourKey));
+  assert.notEqual(contexts[1].runKey,contexts[2].runKey);
+  const scheduled=h.request();await scheduled.done;assert.equal(scheduled.res.body.reason,'already_processed_this_hour');
+  assert.equal(contexts.length,3);
+});
+
+test('manual runs do not consume the scheduled hour and retry IDs deduplicate across an hour boundary',async()=>{
+  let calls=0;const h=harness(async({onPostingStart})=>{calls++;await onPostingStart();return {sent:true};});
+  const first=h.request({manual:true,runId:'github-200-1'});await first.done;
+  assert.equal(await h.redis.exists('telegram:quick-cash:once:2026-10-06T17'),0);
+  await h.request().done;assert.equal(calls,2);
+  h.setClock('2026-10-06T17:59:00Z');
+  const retry=h.request({manual:true,runId:'github-200-1'});await retry.done;
+  assert.equal(retry.res.body.reason,'already_processed_this_manual_run');assert.equal(calls,2);
+});
+
+test('manual requests without IDs are fresh intentional runs and still require authorization',async()=>{
+  let calls=0;const h=harness(async()=>{calls++;return {sent:false};});
+  const denied=h.request({manual:true,authorized:false});await denied.done;assert.equal(denied.res.statusCode,401);
+  const a=h.request({manual:true});await a.done;const b=h.request({manual:true});await b.done;
+  assert.notEqual(a.res.body.runKey,b.res.body.runKey);assert.equal(calls,2);
+  const bad=h.request({manual:true,runId:'unusable:request id'});await bad.done;
+  assert.equal(bad.res.statusCode,400);assert.equal(calls,2);
+});
+
+test('a failed unsent manual run retries its ID without touching the scheduled lock',async()=>{
+  let calls=0;const h=harness(async()=>{if(++calls===1)throw Error('source unavailable');return {sent:false};});
+  const a=h.request({manual:true,runId:'github-300-1'});await a.done;assert.equal(a.res.statusCode,502);
+  const b=h.request({manual:true,runId:'github-300-1'});await b.done;assert.equal(b.res.statusCode,200);
+  assert.equal(calls,2);assert.equal(await h.redis.exists('telegram:quick-cash:once:2026-10-06T17'),0);
+});
+
+test('ambiguous manual delivery remains protected for the same workflow request',async()=>{
+  let calls=0;const h=harness(async({onPostingStart})=>{calls++;await onPostingStart();throw Error('ambiguous send');});
+  const first=h.request({manual:true,runId:'github-400-1'});await first.done;
+  const retry=h.request({manual:true,runId:'github-400-1'});await retry.done;
+  assert.equal(retry.res.body.reason,'already_processed_this_manual_run');assert.equal(calls,1);
 });

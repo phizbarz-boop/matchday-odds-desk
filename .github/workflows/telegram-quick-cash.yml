@@ -1,9 +1,8 @@
 name: Plot207 Telegram Hourly QC and Live Picks
 
 on:
-  schedule:
-    # Every hour at :05 WAT (also :05 UTC). Avoid the busy top of the hour.
-    - cron: '5 * * * *'
+  # Hourly automation now runs directly in the app server. Keep this workflow
+  # only as an intentional manual trigger; do not add a second hourly clock.
   workflow_dispatch: {}
 
 permissions:
@@ -21,11 +20,15 @@ jobs:
       - name: Generate four current sport QC tickets and Live All Sports 85%
         env:
           TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
+          GH_EVENT_NAME: ${{ github.event_name }}
           MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
         run: |
           test -n "$TELEGRAM_JOB_SECRET" || (echo 'Missing GitHub secret TELEGRAM_JOB_SECRET' && exit 1)
+          if [ "$GH_EVENT_NAME" = 'workflow_dispatch' ]; then MODE=manual; else MODE=scheduled; fi
           curl --fail-with-body --show-error --silent --max-time 780 \
             -X POST "$MATCHDAY_BASE_URL/api/telegram/quick-cash" \
             -H 'Content-Type: application/json' \
             -H "x-telegram-job-secret: $TELEGRAM_JOB_SECRET" \
+            -H "x-matchday-run-mode: $MODE" \
+            -H "x-matchday-run-id: $GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             --data '{}' -w '\nHTTP_STATUS:%{http_code}\n'

@@ -18,7 +18,8 @@ const { selectTelegramMixedWithSportPriority } = require('./lib/telegramMixedSel
 const { enrichSportyFixtures, cleanPredictions, STATS_KEY, STATS_FILE } = require('./lib/sportyFootballModel');
 const {sportyRequest,withFreshSportyRequest,memoSportyRead}=require('./lib/sportyRequest');
 const { sanitizeStats } = require('./lib/sportyFootballStats');
-const {registerTelegramQuickCashRoute}=require('./lib/telegramQuickCash');
+const {createTelegramQuickCashJob,registerTelegramQuickCashRoute,watHourKey}=require('./lib/telegramQuickCash');
+const {createTelegramHourlyScheduler}=require('./lib/telegramHourlyScheduler');
 const {hourlyPlans,runHourlyPicks}=require('./lib/telegramHourlyPicks');
 const {refreshTicketResults,buildPerformanceReport,performanceText,registerTelegramPerformanceRoute}=require('./lib/telegramPerformance');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
@@ -408,10 +409,10 @@ async function loadTelegramDailyCodes(redis, dateKey) {
     .filter(c=>/safe|^(?:QC|LIVE)\b/i.test(String(c.targetOdds||'')))};
 }
 
-async function saveTelegramQuickCashCode(redis,dateKey,hourKey,booking,result,plan) {
-  const field=`${hourKey}:${plan.id}`;
-  const code={targetOdds:`${plan.label} · ${hourKey.slice(11)}:00 WAT`,planId:plan.id,liveMode:plan.liveMode,minProbability:plan.minProbability,
-    combinedOdds:Number(result.combinedOdds),shareCode:String(booking.shareCode),hourKey,generatedAt:new Date().toISOString()};
+async function saveTelegramQuickCashCode(redis,dateKey,hourKey,booking,result,plan,{runKey=hourKey,runMode='scheduled'}={}) {
+  const field=`${runKey}:${plan.id}`;
+  const code={targetOdds:runMode==='manual'?`${plan.label} · MANUAL`:`${plan.label} · ${hourKey.slice(11)}:00 WAT`,planId:plan.id,liveMode:plan.liveMode,minProbability:plan.minProbability,
+    combinedOdds:Number(result.combinedOdds),shareCode:String(booking.shareCode),hourKey,runKey,runMode,generatedAt:new Date().toISOString()};
   // QC owns separate hash fields: a daily run cannot erase hourly history,
   // and simultaneous daily/hourly writes cannot overwrite one another.
   const key=`telegram:quick-cash:codes:${dateKey}`;
@@ -3607,8 +3608,25 @@ app.post('/api/telegram/bot/setup', express.json(), async (req, res) => {
   } catch(err){ res.status(502).json({error:'Telegram AI setup failed',detail:process.env.NODE_ENV==='production'?undefined:err.message}); }
 });
 
-registerTelegramQuickCashRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runQuickCash:runTelegramQuickCash});
+const telegramHourlyJob=createTelegramQuickCashJob({getRedis,runQuickCash:runTelegramQuickCash});
+const telegramHourlyScheduler=createTelegramHourlyScheduler({runJob:telegramHourlyJob});
+registerTelegramQuickCashRoute(app,{express,authorize:authorizeTelegramJob,runJob:telegramHourlyJob});
 registerTelegramPerformanceRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runReport:runTelegramPerformanceReport});
+
+app.get('/api/telegram/quick-cash/run-status',async(req,res)=>{
+  if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});
+  try {
+    const redis=await getRedis();
+    if(!redis)return res.status(503).json({error:'REDIS_URL required for hourly run status'});
+    const hourKey=watHourKey();
+    const [locked,raw,...plans]=await Promise.all([
+      redis.exists(`telegram:quick-cash:once:${hourKey}`),redis.get(`telegram:quick-cash:status:${hourKey}`),
+      ...hourlyPlans().map(plan=>redis.get(`telegram:hourly-pick:status:${hourKey}:${plan.id}`)),
+    ]);
+    res.json({hourKey,locked:Boolean(locked),state:raw?JSON.parse(raw):null,
+      plans:plans.filter(Boolean).map(value=>JSON.parse(value)),scheduler:telegramHourlyScheduler.status()});
+  }catch(err){res.status(502).json({error:'Could not read hourly run status'});}
+});
 
 app.get('/api/telegram/status', (req, res) => {
   res.json({
@@ -3619,12 +3637,14 @@ app.get('/api/telegram/status', (req, res) => {
       safe: {minProbability:85,combinedOddsMin:1.30,combinedOddsMax:5.00,selectionCap:15,
         cron:'25 7 * * *',redFlagProtection:true},
       hourly: {plans:hourlyPlans(),supportedMarkets:AUTO_BET_TYPES_BY_SPORT,minimumProgress:'halfway',
-        currentlyWinningRequired:true,dummySessionRequired:true,cron:'5 * * * *',todayCodes:true,endpoint:'/api/telegram/quick-cash'},
+        currentlyWinningRequired:true,dummySessionRequired:true,scheduler:'app-server',
+        minute:telegramHourlyScheduler.status().minute,timezone:'Africa/Lagos',todayCodes:true,endpoint:'/api/telegram/quick-cash'},
       performance: {intervalHours:12,stakePerTicket:100,currency:'NGN',cron:'10 11,23 * * *',
         endpoint:'/api/telegram/performance-report',roiBasis:'settled and priced tickets; unresolved stake shown separately'},
     },
     maxSelections: Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10))),
-    scheduler: 'GitHub Actions',
+    scheduler: 'App server for hourly QC/live; GitHub Actions for morning SAFE and 12-hour reports',
+    hourlyScheduler:telegramHourlyScheduler.status(),
     aiBot: {
       enabled: String(process.env.TELEGRAM_AI_ENABLED || 'true').toLowerCase() !== 'false',
       tokenConfigured: Boolean(process.env.TELEGRAM_AI_BOT_TOKEN),
@@ -3965,4 +3985,10 @@ app.post('/api/refresh', express.json(), (req, res) => {
   return res.json({ ok: true, started: true, mode: manual ? 'manual' : 'scheduled', message: 'Refresh started in the background; GitHub Actions checks /api/predictions for completion.' });
 });
 
-app.listen(PORT, () => console.log(`Matchday site listening on :${PORT}`));
+const httpServer=app.listen(PORT, () => {
+  console.log(`Matchday site listening on :${PORT}`);
+  telegramHourlyScheduler.start();
+});
+httpServer.once('close',()=>telegramHourlyScheduler.stop());
+process.once('SIGTERM',()=>{telegramHourlyScheduler.stop();httpServer.close(()=>process.exit(0));});
+process.once('SIGINT',()=>{telegramHourlyScheduler.stop();httpServer.close(()=>process.exit(0));});

@@ -6,7 +6,7 @@ test('hourly QC creates current codes, sends to Telegram and preserves Today’s
   const scratch=mkdtempSync(path.join(tmpdir(),'plot207-qc-api-'));
   const child=fork(path.join(__dirname,'fixtures/hourly-qc-api-server.js'),[],{cwd:path.join(__dirname,'..'),silent:true,
     env:{...process.env,PORT:'0',REDIS_URL:'redis://test-only',TELEGRAM_JOB_SECRET:'qc-secret',TELEGRAM_WEBHOOK_SECRET:'hook-secret',
-      SPORTYBET_PHONE:'',SPORTYBET_PASSWORD:'',SPORTYBET_PROXY_URL:'',SPORTYBET_BOOTSTRAP_COOKIES:'',
+      TELEGRAM_HOURLY_ENABLED:'false',SPORTYBET_PHONE:'',SPORTYBET_PASSWORD:'',SPORTYBET_PROXY_URL:'',SPORTYBET_BOOTSTRAP_COOKIES:'',
       SPORTYBET_SESSION_FILE:path.join(scratch,'session.json'),SPORTYBET_LIVE_MAX_PAGES:'1'}});
   let logs='';child.stdout.on('data',d=>{logs+=d;});child.stderr.on('data',d=>{logs+=d;});
   t.after(()=>{child.kill();rmSync(scratch,{recursive:true,force:true});});
@@ -91,11 +91,35 @@ test('hourly QC creates current codes, sends to Telegram and preserves Today’s
     const booked=await post('/api/sportybet/book',{selections:picked.body.selections});
     assert.equal(booked.status,200,JSON.stringify(booked.body));assert.match(booked.body.shareCode,/QC-TEST-/);
   });
+  await t.test('two manual batches send all five categories after the scheduled hour and preserve independent codes and ROI records',async()=>{
+    await rpc('configure',{handballEligible:true});
+    const before=await rpc('state');
+    const scheduled=await hourly();assert.equal(scheduled.status,200,JSON.stringify(scheduled.body));assert.equal(scheduled.body.ticketsSent,5);
+    const manual=id=>post('/api/telegram/quick-cash',{}, {'x-telegram-job-secret':'qc-secret','x-matchday-run-mode':'manual','x-matchday-run-id':id});
+    const first=await manual('github-500-1');assert.equal(first.status,200,JSON.stringify(first.body));assert.equal(first.body.ticketsSent,5);
+    assert.equal(first.body.runMode,'manual');assert.notEqual(first.body.runKey,first.body.hourKey);
+    const retry=await manual('github-500-1');assert.equal(retry.body.reason,'already_processed_this_manual_run');
+    const second=await manual('github-501-1');assert.equal(second.body.ticketsSent,5);assert.notEqual(first.body.runKey,second.body.runKey);
+    const scheduledRetry=await hourly();assert.equal(scheduledRetry.body.reason,'already_processed_this_hour');
+    const state=await rpc('state');assert.equal(state.messages.length-before.messages.length,15);assert.equal(state.bookings.length-before.bookings.length,15);
+    assert.ok(state.messages.slice(-10).every(text=>text.includes('MANUAL RUN')));
+    const manualCodes=state.hashes.find(([key])=>key.includes('quick-cash:codes'))[1].filter(([,raw])=>JSON.parse(raw).runMode==='manual');
+    assert.equal(manualCodes.length,10);assert.equal(new Set(manualCodes.map(([field])=>field)).size,10);
+    const tracked=state.hashes.find(([key])=>key==='telegram:tracked-tickets:v2')[1];assert.equal(tracked.length,15);
+    assert.ok(tracked.every(([,raw])=>JSON.parse(raw).delivery==='posted'));
+    const after=state.aiMessages.length;
+    const ack=await post('/api/telegram/bot/webhook',{callback_query:{id:'manual-codes',data:'action:dailycodes',from:{id:5001},message:{chat:{id:5001},text:'/start'}}},
+      {'x-telegram-bot-api-secret-token':'hook-secret'});
+    assert.equal(ack.status,200);assert.equal(await rpc('await_ai',{after}),true);
+    const text=(await rpc('state')).aiMessages.at(-1);assert.match(text,/MANUAL/);
+    for(const [,raw] of manualCodes)assert.ok(text.includes(JSON.parse(raw).shareCode));
+  });
 });
-test('workflows schedule five hourly picks, the retained morning SAFE, and 12-hour reports',()=>{
+test('hourly workflow is manual-only; GitHub retains the morning SAFE and 12-hour reports',()=>{
   const root=path.join(__dirname,'..');
   const hourly=readFileSync(path.join(root,'.github/workflows/telegram-quick-cash.yml'),'utf8');
-  assert.match(hourly,/cron: '5 \* \* \* \*'/);assert.match(hourly,/api\/telegram\/quick-cash/);assert.match(hourly,/x-telegram-job-secret/);
+  assert.doesNotMatch(hourly,/\bschedule:|\bcron:/);assert.match(hourly,/workflow_dispatch:/);
+  assert.match(hourly,/api\/telegram\/quick-cash/);assert.match(hourly,/x-telegram-job-secret/);
   assert.match(readFileSync(path.join(root,'.github/workflows/telegram-picks.yml'),'utf8'),/cron: '25 7 \* \* \*'/);
   const report=readFileSync(path.join(root,'.github/workflows/telegram-performance.yml'),'utf8');
   assert.match(report,/cron: '10 11,23 \* \* \*'/);assert.match(report,/api\/telegram\/performance-report/);

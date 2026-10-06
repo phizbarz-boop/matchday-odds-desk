@@ -18,9 +18,9 @@ function harness(rows) {
     select:(pool,p)=>selectAutoBet(pool,{targetOdds:p.targetOdds,maxSelections:p.maxSelections,trials:50,rng:()=>.5}),
     validate:async selections=>({valid:selections,dropped:[]}),combine:(selections,targetOdds)=>({selections,targetOdds,combinedOdds:selections.reduce((n,s)=>n*s.odds,1)}),
     book:async selections=>{if(failBook){failBook=false;throw Error('temporary booking failure');}bookings.push(selections);return {shareCode:'CODE'+bookings.length};},
-    saveCode:async(_r,_d,h,b,result,plan)=>codes.push({h,b,result,plan}),track:trackTelegramSlip,updateTrack:updateTrackedTicket,
+    saveCode:async(_r,_d,h,b,result,plan,run)=>codes.push({h,b,result,plan,run}),track:trackTelegramSlip,updateTrack:updateTrackedTicket,
     send:async text=>{if(failSend){failSend=false;throw Error('ambiguous send');}messages.push(text);}};
-  const run=(hourKey='2026-10-06T19')=>runHourlyPicks(deps,{redis,hourKey,dateKey:hourKey.slice(0,10),onPostingStart:async()=>{},shouldAbort:()=>false});
+  const run=(hourKey='2026-10-06T19',context={})=>runHourlyPicks(deps,{redis,hourKey,dateKey:hourKey.slice(0,10),onPostingStart:async()=>{},shouldAbort:()=>false,...context});
   return {deps,redis,messages,bookings,codes,run,scans:()=>scans,failBook:()=>{failBook=true;},failSend:()=>{failSend=true;}};
 }
 test('hourly templates are four isolated QC pools at 0% and all-six-sport Live at 85%',()=>{
@@ -80,4 +80,28 @@ test('ambiguous delivery is excluded from played stakes and never sent twice',as
 test('a changed selection cannot meet the Live 85% floor merely using its earlier probability',async()=>{
   const h=harness([candidate('Football',90)]);h.deps.validate=async rows=>({valid:rows.map(r=>({...r,probability:50})),dropped:[]});
   const result=await h.run();assert.equal(result.results.at(-1).sent,false);
+});
+
+test('all five manual categories can repeat in a scheduled hour with separate codes and 100-naira ticket records',async()=>{
+  const h=harness(Object.keys(sportState).map(s=>candidate(s))),hour='2026-10-06T19';
+  await h.run(hour);
+  const first=await h.run(hour,{runKey:'manual:one',runMode:'manual'});
+  const second=await h.run(hour,{runKey:'manual:two',runMode:'manual'});
+  assert.equal(first.ticketsSent,5);assert.equal(second.ticketsSent,5);
+  assert.equal(h.messages.filter(text=>/MANUAL RUN/.test(text)).length,10);
+  assert.equal(h.codes.length,15);
+  assert.ok(h.codes.slice(5).every(c=>c.run.runMode==='manual'&&c.h===hour));
+  const tickets=await listTrackedSlips(h.redis);
+  assert.equal(tickets.length,15);assert.equal(new Set(tickets.map(t=>t.ticketId)).size,15);
+  const report=require('../lib/telegramPerformance').buildPerformanceReport(tickets,
+    {start:new Date(Date.now()-3600000).toISOString(),end:new Date(Date.now()+3600000).toISOString(),key:'test-manual'});
+  assert.equal(report.period.tickets,15);assert.equal(report.period.pendingStake,1500);
+});
+
+test('retrying a partially sent manual batch resends only its unsent category',async()=>{
+  const h=harness([candidate('Ice Hockey'),candidate('Basketball')]);h.failBook();
+  const context={runKey:'manual:partial',runMode:'manual'};
+  const first=await h.run(undefined,context);assert.equal(first.ticketsSent,2);assert.equal(first.retryable,true);
+  const retry=await h.run(undefined,context);assert.equal(retry.ticketsSent,1);
+  assert.equal(h.messages.length,3);assert.equal((await listTrackedSlips(h.redis)).length,3);
 });

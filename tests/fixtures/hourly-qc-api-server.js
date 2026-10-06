@@ -9,12 +9,28 @@ let aiWait;
 telegram.sendTelegramMessage=async text=>{messages.push(text);return [{message_id:messages.length}];};
 telegram.sendTelegramAiMessageTo=async(_chat,text)=>{aiMessages.push(text);if(aiWait){aiWait();aiWait=null;}return [{message_id:aiMessages.length}];};
 telegram.telegramAiRequest=async()=>({});
-const {boards,market,outcome}=require('./sportybet-live-format');
+const {boards,market,outcome,event}=require('./sportybet-live-format');
+// Only this isolated test process substitutes the wall clock and timer, so
+// integration tests can cross an hour without waiting or sending real bets.
+let testClock=process.env.TEST_HOURLY_CLOCK?Date.parse(process.env.TEST_HOURLY_CLOCK):null,schedulerTick;
+if(testClock!==null) {
+  const RealDate=Date,realSetInterval=setInterval,realClearInterval=clearInterval,marker={unref(){}};
+  global.Date=class extends RealDate {constructor(...args){super(...(args.length?args:[testClock]));}static now(){return testClock;}};
+  global.setInterval=(fn,ms,...args)=>{if(ms!==30000)return realSetInterval(fn,ms,...args);schedulerTick=fn;return marker;};
+  global.clearInterval=handle=>{if(handle===marker)schedulerTick=null;else realClearInterval(handle);};
+}
+function handballBoard() {
+  return {bizCode:10000,data:[{id:'sr:tournament:handball-manual',name:'Handball Live League',events:[
+    event('sr:match:live-format-handball',{playedSeconds:'55:30',remainingTimeInPeriod:'04:30',setScore:'30:25',markets:[
+      market('1','1X2',[outcome('1','Home',1.05),outcome('2','Draw',12),outcome('3','Away',26)])]}),
+  ]}]};
+}
 const {direct,SPORT_IDS,extractUpcomingEvents}=require('../../lib/sportybet');
 // This child process substitutes the authenticated dummy session only in tests.
 let sessionChecks=0,settled=false;
 direct.ensureSession=async()=>{sessionChecks++;};
 let fixture=boards(),liveReads=0,flip=false,flipOdds=false,empty=false,footballOnly=false,tennisOnly=false;
+if(process.env.TEST_HOURLY_ALL_SPORTS==='true')fixture.handball=handballBoard();
 const response=data=>({ok:true,status:200,headers:{get:k=>k==='content-type'?'application/json':null,getSetCookie:()=>[]},text:async()=>JSON.stringify(data)});
 direct.setFetchForTesting(async url=>{
   const u=new URL(url);
@@ -45,6 +61,7 @@ direct.createBookingCode=async selections=>{
 };
 process.on('message',async message=>{
   const {id,action}=message;
+  if(action==='clock'&&testClock!==null){testClock=Date.parse(message.date);schedulerTick?.();}
   if(action==='state')return process.send({id,data:{messages,aiMessages,bookings,sessionChecks,data:[...redis.data],hashes:[...redis.hashes].map(([key,rows])=>[key,[...rows]])}});
   if(action==='report_configuration') {
     settled=!!message.settled;
@@ -56,6 +73,7 @@ process.on('message',async message=>{
   }
   if(action==='configure'){
     fixture=boards();liveReads=0;flip=!!message.flip;flipOdds=!!message.flipOdds;empty=!!message.empty;footballOnly=!!message.footballOnly;tennisOnly=!!message.tennisOnly;
+    if(message.handballEligible)fixture.handball=handballBoard();
     if(tennisOnly){
       const e=fixture.tennis.data[0].events[0];e.gameScore=['6:4','4:6','4:2'];
       e.markets.push(market('test-match-score','Correct Score',['2:0','2:1','0:2','1:2'].map((score,i)=>outcome('score-'+i,score,2))));

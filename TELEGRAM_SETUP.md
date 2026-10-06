@@ -1,216 +1,127 @@
-# Telegram Auto Picks Setup
+# Telegram booking-code setup
 
-This build can automatically create SportyBet booking codes for target combined odds and send them to a Telegram chat twice per day.
+The server creates codes directly through the authenticated dummy SportyBet
+account and sends them to your configured Telegram chat. Hourly QC/live picks
+run inside the application; they do not depend on GitHub's hourly scheduler.
 
-Default target odds:
+| Ticket/update | Time in WAT | Scheduler |
+| --- | --- | --- |
+| QC Ice Hockey, Basketball, Handball + Volleyball, Football; 0% minimum | Every hour at :05 by default | App server |
+| Live All Sports; 85% minimum | Same hourly batch | App server |
+| SAFE; 85%, combined odds 1.30–5.00 | 08:25 daily | GitHub Actions |
+| Results, closest/worst tickets and hypothetical ₦100 ROI | 00:10 and 12:10 | GitHub Actions |
 
-- 1000
-- 750
-- 250
-- 100
-- 50
-- 20
+See [TELEGRAM_DIRECT_HOURLY.md](TELEGRAM_DIRECT_HOURLY.md) for direct scheduling
+and [TELEGRAM_HOURLY_SPORT_QC_AND_ROI.md](TELEGRAM_HOURLY_SPORT_QC_AND_ROI.md)
+for selection rules and reports.
 
-The scheduled job scans the selected sport scope once, builds one probability-weighted slip for each target, books each slip through the existing Parse.bot SportyBet API, and sends the code + selections to Telegram.
+## Bot and destination
 
-## 1. Create a Telegram bot
+If you already configured your Telegram bot/chat, retain those settings.
+Otherwise create a bot with Telegram's **@BotFather**, keep its token private,
+and start a conversation with it. Obtain your chat ID using the bot's
+`getUpdates` response. For a channel, add the bot with permission to post and
+use its channel ID or supported `@channelusername`.
 
-1. Open Telegram and search for **@BotFather**.
-2. Send `/newbot`.
-3. Follow the prompts to choose a bot name and username.
-4. BotFather returns a token similar to `123456789:AA...`.
-5. Keep this token private.
+## Server environment
 
-## 2. Find your Telegram chat ID
-
-1. Open the bot you just created and send it `/start` or any message.
-2. In a browser, use Telegram's Bot API `getUpdates` endpoint with your bot token:
-   `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
-3. Find `message.chat.id` in the returned JSON. That number is your private chat ID.
-
-For a Telegram channel, add the bot to the channel and use the channel's numeric chat ID or supported `@channelusername` as `TELEGRAM_CHAT_ID`.
-
-## 3. Add these Render Environment Variables
-
-Open:
-
-Render Dashboard -> matchday-odds-desk -> Environment
-
-Add:
+Keep these variables on Render or the host running `npm start`:
 
 ```text
-TELEGRAM_BOT_TOKEN=<token from BotFather>
-TELEGRAM_CHAT_ID=<your chat id>
-TELEGRAM_JOB_SECRET=<a long random secret you create>
-TELEGRAM_TARGET_ODDS=1000,750,250,100,50,20
-TELEGRAM_SPORT_SCOPE=all
-TELEGRAM_MIN_PROBABILITY=70
-TELEGRAM_MAX_SELECTIONS=30
-TELEGRAM_PICK_TRIALS=2200
+TELEGRAM_BOT_TOKEN=<your bot token>
+TELEGRAM_CHAT_ID=<your chat/channel ID>
+REDIS_URL=<your persistent Redis connection>
+TELEGRAM_JOB_SECRET=<your existing job secret>
+TELEGRAM_HOURLY_ENABLED=true
+TELEGRAM_HOURLY_MINUTE=5
 ```
 
-Optional football league restriction:
+The hourly enable/minute settings are optional with these defaults. Use minute
+`0` for the beginning of each hour, or `TELEGRAM_HOURLY_ENABLED=false` to disable
+automatic hourly picks. The direct timer requires Redis and Telegram settings;
+its internal job does not transmit or require the GitHub job secret. Keep the
+job secret for protected status/manual APIs, morning SAFE and results workflows.
+
+Retain a working dummy-account session/login configuration. Session setup and
+renewal are in [SPORTYBET_SESSION_RECOVERY.md](SPORTYBET_SESSION_RECOVERY.md).
+Never put session cookies or Telegram tokens in the committed source.
+
+The server must stay running between hourly runs. Render Free web services
+sleep after 15 minutes without inbound traffic, so they cannot reliably run an
+internal hourly timer while idle. Use an always-on service for automatic hourly
+delivery. See [Render's documentation](https://render.com/docs/free). Persistent
+Redis is also needed to retain locks, codes and tracking through restarts.
+
+Optional odds/cap settings:
 
 ```text
-TELEGRAM_FOOTBALL_LEAGUES=Premier League,La Liga,Serie A,Bundesliga,Ligue 1,Champions League
+TELEGRAM_QC_TARGET_ODDS=2
+TELEGRAM_QC_MAX_SELECTIONS=15
+TELEGRAM_LIVE_TARGET_ODDS=2
+TELEGRAM_LIVE_MAX_SELECTIONS=15
 ```
 
-If omitted, the Telegram job uses every football league available to your predictions data.
+Targets are flexible: a qualifying selection at 10 odds can produce a 10-odds
+code. The hourly probability floors remain fixed at QC 0% and Live 85%.
+Match stage, currently-winning selection and market availability still apply.
 
-Allowed `TELEGRAM_SPORT_SCOPE` values:
+## Deployment and verification
+
+Commit/push the installed source and wait for the connected server deployment.
+The existing `npm start` runs both the website and hourly timer. Check Render
+logs for `[Telegram hourly direct] active` and use:
 
 ```text
-all
-football
-basketball
-hockey
+GET /api/telegram/status
 ```
 
-## 4. Add the GitHub secret
+The `hourlyScheduler` section shows whether the direct timer is running, missing
+configuration, its next attempt and last batch outcomes. Check shared hourly
+state with `GET /api/telegram/quick-cash/run-status`, authenticated by the
+`x-telegram-job-secret` header.
 
-Your repository includes:
+Keep the same `TELEGRAM_JOB_SECRET` in GitHub Actions secrets for the retained
+morning/report workflows and manual triggers. `MATCHDAY_BASE_URL` can be a
+repository variable; the existing Render URL is the fallback. Your bot token
+and chat ID stay on the server.
 
-```text
-.github/workflows/telegram-picks.yml
-```
+## Manual picks at any time
 
-In GitHub open:
+**Matchday Telegram Auto Picks → Run workflow** requests SAFE and then all five
+hourly categories, including when SAFE fails. **Plot207 Telegram Hourly QC and
+Live Picks → Run workflow** requests only the five current live categories.
+The latter workflow is manual-only; automatic hourly delivery comes from the
+server timer.
 
-Repository -> Settings -> Secrets and variables -> Actions -> New repository secret
+A new manual run can produce fresh eligible codes in an hour already processed
+automatically. Codes appear in Today’s Codes and are tracked individually.
+Repeated requests for the same manual run ID protect against duplicate sends.
+See [TELEGRAM_MANUAL_ALL_PICKS.md](TELEGRAM_MANUAL_ALL_PICKS.md).
 
-Create:
-
-```text
-Name: TELEGRAM_JOB_SECRET
-Value: <EXACT SAME VALUE as TELEGRAM_JOB_SECRET in Render>
-```
-
-Do not put your Telegram bot token in GitHub. The workflow only needs the job secret; Render holds the Telegram token and chat ID.
-
-## 5. Default twice-daily schedule
-
-The included workflow runs at:
-
-```text
-09:15 America/New_York
-18:15 America/New_York
-```
-
-To change the schedule edit:
-
-```text
-.github/workflows/telegram-picks.yml
-```
-
-and change the `cron` / `timezone` values.
-
-## 6. Test Telegram before waiting for the schedule
-
-After Render deploys, test from your Mac Terminal:
+The daily API endpoint alone still requests only SAFE. For an immediate manual
+QC/live API request:
 
 ```bash
-curl -X POST "https://matchday-odds-desk.onrender.com/api/telegram/test" \
-  -H "Content-Type: application/json" \
-  -H "x-telegram-job-secret: YOUR_TELEGRAM_JOB_SECRET" \
+curl --fail-with-body --silent --show-error --max-time 780 \
+  -X POST 'https://matchday-odds-desk.onrender.com/api/telegram/quick-cash' \
+  -H 'Content-Type: application/json' \
+  -H 'x-telegram-job-secret: YOUR_TELEGRAM_JOB_SECRET' \
+  -H 'x-matchday-run-mode: manual' \
+  -H 'x-matchday-run-id: YOUR_UNIQUE_RUN_ID' \
   --data '{}'
 ```
 
-Your Telegram chat should receive:
+Reuse the run ID to retry that intentional run; use a new one for a new batch.
+A category with no eligible games cannot create a booking code. Source errors
+and skipped categories are visible in the response and shared status.
 
-```text
-✅ Matchday Odds Desk Telegram integration is connected.
-```
+## Website and interactive Telegram bot
 
-## 7. Test the complete six-code job manually
+The website's **Send to Telegram** button uses the existing bot and chat settings
+and a short-lived one-time send token. The browser does not receive your bot
+token or job secret. This button is separate from the hourly timer.
 
-```bash
-curl -X POST "https://matchday-odds-desk.onrender.com/api/telegram/daily-picks" \
-  -H "Content-Type: application/json" \
-  -H "x-telegram-job-secret: YOUR_TELEGRAM_JOB_SECRET" \
-  --data '{}'
-```
-
-This consumes SportyBet/Parse booking credits because it actually creates each code.
-
-You can also run it from GitHub:
-
-GitHub -> Actions -> Matchday Telegram Auto Picks -> Run workflow
-
-## Credit usage
-
-With six target codes and two runs per day, the Telegram job creates up to 12 booking codes per day. If your Parse plan charges 2 credits per successful `book_bet`, that is about 24 booking credits/day or about 720 booking credits in a 30-day month, excluding market data calls.
-
-To reduce usage, change for example:
-
-```text
-TELEGRAM_TARGET_ODDS=100,50,20
-```
-
-No source-code change is required.
-
-## Website: Send generated code to Telegram
-
-After a SportyBet code is generated on the website, the code box now includes a **Send to Telegram** button. The browser never receives your Telegram bot token or Telegram job secret. The server creates a short-lived one-time token (10 minutes), and pressing the button sends the exact current slip, combined odds, probabilities, booking code, and SportyBet link to the configured Telegram channel.
-
-No additional Render environment variable is required for this button. It uses the existing `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
-
-## Probability + value engine (v2)
-
-The Auto Builder now calculates, for each eligible selection:
-
-- **Bookmaker implied probability** = `100 / decimal odds`
-- **Probability edge** = selection probability minus bookmaker implied probability
-- **Estimated EV %** = `(probability × decimal odds - 1) × 100`
-- **Market reliability weight** based on the supported market type
-- **Quality score (0–100)** combining probability, edge and market reliability
-- **Estimated full-slip probability** by multiplying the leg probabilities (assumes independence)
-
-Football uses the independent Poisson + capped-H2H model, so its edge is a true **model-vs-price estimate**. Basketball and ice hockey currently use de-margined SportyBet market probabilities, so their displayed edge is a **market-adjusted pricing metric**, not an independent predictive edge.
-
-Optional Telegram environment setting:
-
-```text
-TELEGRAM_MIN_EDGE=0
-```
-
-This filters Football candidates whose Poisson+H2H probability edge is below the chosen number of percentage points. Example: `TELEGRAM_MIN_EDGE=3` requires at least a +3 point football model-vs-price edge. Basketball and hockey are not hard-filtered by this setting until independent statistical models are added for those sports.
-
-## Daily successful-code settlement alerts
-
-The app now stores every automatic SportyBet code successfully sent to Telegram and checks its booking status once per day.
-
-GitHub workflow: `.github/workflows/telegram-settlement-check.yml`
-
-Default schedule: 22:30 UTC daily (23:30 Lagos/WAT). It calls:
-
-`POST /api/telegram/check-settlements`
-
-using the existing `TELEGRAM_JOB_SECRET` GitHub repository secret.
-
-Recommended Render environment:
-
-- `REDIS_URL` — strongly recommended/required for reliable tracking across Render restarts.
-- `TELEGRAM_SETTLEMENT_SUMMARY=true` — sends the daily compact status summary. Set to `false` to receive only full-slip success alerts.
-- `TELEGRAM_TRACK_DAYS=45` — retention for completed tracked slips.
-
-The checker re-reads each SportyBet booking code and uses the booking's per-outcome winning/settlement status. Explicit wins and void/push outcomes are success-safe; an explicit loss marks the slip lost. Unknown or unfinished outcomes remain pending. A successful code is announced only once.
-
-
-## Cross-slip diversification
-
-Optional Render variable:
-
-```text
-TELEGRAM_REPEAT_MIN_PROBABILITY=80
-```
-
-During one Telegram auto-pick run, the same **game + bet type** is not reused in another target-odds slip when its probability is below this threshold. Picks at or above the threshold may repeat.
-
-
-## Maximum Auto Builder selections
-The website Auto Builder now supports up to 100 selections instead of stopping at 30.
-Available UI choices include 40, 50, 60, 75 and 100 picks.
-
-The server also accepts `maxSelections` up to 100.
-If desired, Telegram can likewise use values up to 100 with:
-`TELEGRAM_MAX_SELECTIONS=100`
+For the interactive Telegram analyser, plans and builder, retain the existing
+second-bot/webhook settings described in
+[TELEGRAM_AI_BOT_SETUP.md](TELEGRAM_AI_BOT_SETUP.md). Live selection rules apply
+there as well; user-selected probability settings remain active.

@@ -1,6 +1,5 @@
 node_modules/
 data/
-.env
+.env*
 .DS_Store
-.sportybet-session.json
-.sportybet-bootstrap.env
+.sportybet-*

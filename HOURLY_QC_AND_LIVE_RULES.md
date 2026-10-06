@@ -1,10 +1,20 @@
 # Hourly Quick Cash and live selection rules
 
+Manual GitHub daily picks run SAFE plus the five hourly categories immediately,
+and new manual runs can repeat in the same hour. See
+[TELEGRAM_MANUAL_ALL_PICKS.md](TELEGRAM_MANUAL_ALL_PICKS.md).
+
 ## Scheduled Quick Cash and reporting
 
 Current schedules, ticket categories, installation and result calculations are documented in [TELEGRAM_HOURLY_SPORT_QC_AND_ROI.md](TELEGRAM_HOURLY_SPORT_QC_AND_ROI.md).
 
-The hourly job at :05 WAT creates separate QC Ice Hockey, QC Basketball, QC Handball + Volleyball and QC Football tickets at 0%, plus Live All Sports at 85%. The old scheduled 2x/3x/1000 sport templates are removed. The morning SAFE remains at 08:25 WAT. Every hourly code is added to Today’s Codes under its category and hour.
+The app server's direct hourly job at :05 WAT creates separate QC Ice Hockey,
+QC Basketball, QC Handball + Volleyball and QC Football tickets at 0%, plus
+Live All Sports at 85%. GitHub's hourly workflow is now manual-only. See
+[TELEGRAM_DIRECT_HOURLY.md](TELEGRAM_DIRECT_HOURLY.md) for activation and uptime
+requirements. The old scheduled 2x/3x/1000 sport templates are removed. The
+morning SAFE remains at 08:25 WAT. Every hourly code is added to Today’s Codes
+under its category and hour.
 
 At 00:10 and 12:10 WAT, a result report identifies winners, closest/worst fully resolved losing tickets and hypothetical ₦100-per-sent-ticket ROI, with unresolved stakes shown separately.
 
@@ -27,4 +37,7 @@ All live selections are checked against a second current SportyBet read immediat
 
 ## Validation
 
-200 Node tests pass, including HTTP flows through the real server with mocked upstream services. See the current hourly/report document for coverage and deployment verification. Real Telegram delivery and authenticated SportyBet booking creation have not been exercised here.
+244 Node tests pass, including HTTP flows through the real server with mocked
+upstream services and direct server scheduling. See the current hourly/report
+document for coverage and deployment verification. Real Telegram delivery and
+authenticated SportyBet booking creation have not been exercised here.

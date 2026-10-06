@@ -1,10 +1,20 @@
 # Telegram hourly sport QC and 12-hour results
 
+Manual **Matchday Telegram Auto Picks** runs now attempt SAFE plus all five
+hourly QC/live categories at any time. Manual hourly runs also bypass prior
+scheduled-hour sends using independent run records. See
+[TELEGRAM_MANUAL_ALL_PICKS.md](TELEGRAM_MANUAL_ALL_PICKS.md) for setup and retry/history behavior.
+
 The scheduled 2x and 3x tickets and the three 1000-target sport tickets are retired. The morning SAFE ticket remains at 08:25 WAT, with its existing 85% probability floor and 1.30–5.00 odds range. Interactive website and Telegram builder odds choices remain user-controlled.
 
 ## Hourly tickets
 
-The workflow **Plot207 Telegram Hourly QC and Live Picks** runs every hour at **:05 WAT**. It requests the protected `/api/telegram/quick-cash` endpoint and creates up to five separate booking codes:
+The app server runs the five categories directly every hour at **:05 WAT** by
+default. It reads the dummy SportyBet session and sends to Telegram without a
+GitHub scheduled workflow or an HTTP trigger. The workflow **Plot207 Telegram
+Hourly QC and Live Picks** remains as a manual-only trigger. See
+[TELEGRAM_DIRECT_HOURLY.md](TELEGRAM_DIRECT_HOURLY.md) for setup, status and the
+always-running hosting requirement. Each batch creates up to five codes:
 
 | Ticket | Sport pool | Minimum probability | Match stage |
 | --- | --- | --- | --- |
@@ -57,10 +67,28 @@ Ticket records use individual Redis hash fields, retaining the old tracker’s r
 
 Use the existing `REDIS_URL`, dummy SportyBet credentials or bootstrap session, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and shared `TELEGRAM_JOB_SECRET`. Keep `TELEGRAM_JOB_SECRET` synchronized between Render and GitHub Actions secrets. No new required secret is introduced. `MATCHDAY_BASE_URL` can be set as a GitHub repository variable; the existing Render URL is the default.
 
-Push the updated source and wait for Render deployment. In GitHub Actions, run **Plot207 Telegram Hourly QC and Live Picks** and **Plot207 Telegram 12-Hour Results and ROI** to verify the live deployment. The report’s manual run uses the last completed WAT half-day and is deduplicated with that half-day’s scheduled report. GitHub scheduled starts may be delayed; the picks use data read at actual execution time.
+Push the updated source and wait for Render deployment. Check the direct hourly
+timer's Render log and `/api/telegram/status`; a startup after the due minute
+attempts the current hour immediately. Keep the service always running for
+future hours. In GitHub Actions, **Plot207 Telegram Hourly QC and Live Picks**
+can still request an extra manual batch. **Plot207 Telegram 12-Hour Results and
+ROI** retains its schedule and manual trigger. The report’s manual run uses the
+last completed WAT half-day and is deduplicated with that half-day's scheduled
+report. Only morning SAFE and reports retain GitHub scheduling; all picks use
+data read at actual execution time.
 
 ## Validation
 
-200 Node tests pass, with syntax checks for all 58 project JavaScript files and the inline website scripts. HTTP integration tests exercise the real server with mocked SportyBet, Redis and Telegram services. Coverage includes isolated sport pools, 0%/85% filtering, changed odds and score revalidation, hourly/category deduplication, partial-batch retries, Today’s Codes visibility/history, exact settlement matching, pushes, quarter-lines, missing results, WAT report windows, closest/worst ordering, earlier-ticket updates and ₦100 ROI arithmetic.
+The combined direct-hourly/manual release passes 244 Node tests, syntax checks
+for 66 JavaScript files and the inline website script, Telegram workflow YAML
+parsing and `git diff --check`.
+
+HTTP integration tests exercise the real server with mocked SportyBet, Redis
+and Telegram services. Coverage includes direct server scheduling, isolated
+sport pools, 0%/85% filtering, changed odds and score revalidation,
+hourly/category deduplication, repeatable same-hour manual batches,
+partial-batch retries, Today’s Codes visibility/history, exact settlement
+matching, pushes, quarter-lines, missing results, WAT report windows,
+closest/worst ordering, earlier-ticket updates and ₦100 ROI arithmetic.
 
 These tests do not create real SportyBet booking codes or send real Telegram messages. This archive is source ready for deployment; the user’s GitHub/Render deployment has not been changed from this workspace.

@@ -1,6 +1,7 @@
 name: Matchday Telegram Auto Picks
 
-# SINGLE daily run: 07:25 UTC = 08:25 WAT (Nigeria). No NY timezone or evening cron.
+# Morning cron sends SAFE. Run workflow manually sends SAFE plus the five
+# current hourly QC/Live templates, at any time of day.
 on:
   schedule:
     - cron: '25 7 * * *'
@@ -16,13 +17,13 @@ concurrency:
 jobs:
   send-picks:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
-      - name: Generate and send Telegram codes (manual runs may repeat anytime)
+      - name: Generate and send SAFE (manual runs may repeat anytime)
         env:
           TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
           GH_EVENT_NAME: ${{ github.event_name }}
-          MATCHDAY_BASE_URL: https://matchday-odds-desk.onrender.com
+          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
         run: |
           test -n "$TELEGRAM_JOB_SECRET" || (echo 'Missing GitHub secret TELEGRAM_JOB_SECRET' && exit 1)
           if [ "$GH_EVENT_NAME" = 'workflow_dispatch' ]; then MODE=manual; else MODE=scheduled; fi
@@ -32,4 +33,20 @@ jobs:
             -H 'Content-Type: application/json' \
             -H "x-telegram-job-secret: $TELEGRAM_JOB_SECRET" \
             -H "x-matchday-run-mode: $MODE" \
+            --data '{}' -w '\nHTTP_STATUS:%{http_code}\n'
+
+      - name: Manual run — generate all four QC tickets and Live All Sports 85%
+        # A failed SAFE request must not prevent the manual live batch.
+        if: ${{ github.event_name == 'workflow_dispatch' && !cancelled() }}
+        env:
+          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
+          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
+        run: |
+          test -n "$TELEGRAM_JOB_SECRET" || (echo 'Missing GitHub secret TELEGRAM_JOB_SECRET' && exit 1)
+          curl --fail-with-body --show-error --silent --max-time 780 \
+            -X POST "$MATCHDAY_BASE_URL/api/telegram/quick-cash" \
+            -H 'Content-Type: application/json' \
+            -H "x-telegram-job-secret: $TELEGRAM_JOB_SECRET" \
+            -H 'x-matchday-run-mode: manual' \
+            -H "x-matchday-run-id: $GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             --data '{}' -w '\nHTTP_STATUS:%{http_code}\n'
