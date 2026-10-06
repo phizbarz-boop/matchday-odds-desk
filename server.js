@@ -1480,6 +1480,66 @@ async function addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorne
   return {...predictions,matches};
 }
 
+// Live mode scores in-play football fixtures directly with the probability model
+// instead of depending on the daily snapshot cache: any live SportyBet football
+// event that has no saved prediction row gets an on-demand API-Football model here.
+// Events the model cannot price honestly (no API-Football fixture match, or a match
+// with no prediction/recent-results data) are simply left out of the pool — no
+// probability is ever invented for them.
+async function addLiveFootballModels(predictions, liveFootballPayloads, { buildCorners = false } = {}) {
+  const stats = { liveEvents: 0, uncovered: 0, requested: 0, modeled: 0, added: 0, fixtureOnly: 0, reason: null };
+  if (!process.env.API_FOOTBALL_KEY && !process.env.API_FOOTBALL_API_KEY) {
+    stats.reason = 'api_key_not_configured';
+    console.warn('[API-Football] live on-demand modeling skipped: API_FOOTBALL_KEY is not configured');
+    return { predictions, stats };
+  }
+
+  const matches = Array.isArray(predictions?.matches) ? predictions.matches : [];
+  const coveredIds = new Set(matches.map(r => String(r?.eventId || r?.sportyEventId || '')).filter(Boolean));
+  const coveredKeys = new Set(matches.map(fixtureKey));
+
+  const seen = new Set();
+  const uncovered = [];
+  for (const payload of liveFootballPayloads || []) {
+    for (const x of payload?.rows || []) {
+      if (x?.live !== true) continue;
+      const eventId = String(x.eventId || '');
+      if (seen.has(eventId || `${x.home}|${x.away}`)) continue;
+      seen.add(eventId || `${x.home}|${x.away}`);
+      if (!x.home || !x.away || !x.kickoffUtc) continue;
+      stats.liveEvents++;
+      if (eventId && coveredIds.has(eventId)) continue;
+      if (coveredKeys.has(fixtureKey(x))) continue;
+      uncovered.push({ eventId, home: x.home, away: x.away, kickoffUtc: x.kickoffUtc, tournament: x.tournament });
+    }
+  }
+  stats.uncovered = uncovered.length;
+  if (!uncovered.length) {
+    stats.reason = stats.liveEvents ? 'all_live_fixtures_already_modeled' : 'no_live_football_rows';
+    return { predictions, stats };
+  }
+
+  const limit = Math.max(1, Math.min(50, parseInt(process.env.SPORTYBET_LIVE_MODEL_MAX_EVENTS || '12', 10)));
+  const selected = uncovered.slice(0, limit);
+  stats.requested = selected.length;
+  console.log(`[API-Football] live on-demand modeling starting for ${selected.length}/${uncovered.length} live SportyBet fixtures`);
+  const apiRows = await enrichSportyFixtures(selected, {
+    daysAhead: 1,
+    maxFixtures: selected.length,
+    cornerEventIds: buildCorners ? new Set(selected.map(x => String(x.eventId || ''))) : new Set(),
+  });
+  stats.modeled = apiRows.length;
+  stats.fixtureOnly = apiRows.filter(r => String(r?.dataSource || '') === 'API-Football fixture only').length;
+
+  const existing = new Set(matches.map(fixtureKey));
+  for (const r of apiRows) {
+    const k = fixtureKey(r);
+    if (!existing.has(k)) { existing.add(k); matches.push(r); stats.added++; }
+  }
+  console.log(`[API-Football] live on-demand modeling complete: requested=${stats.requested}, modeled=${stats.modeled}, added=${stats.added}, fixtureOnly=${stats.fixtureOnly}`);
+  return { predictions: { ...(predictions || {}), matches }, stats };
+}
+
 
 const AUTO_BET_TYPES_BY_SPORT = {
   football: ['home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under','over25','under25','correct_score'],
@@ -1626,25 +1686,37 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
 
   // Live in-play option: scrape the SportyBet live board for exactly the market
   // families the request needs, tag the rows live:true, and merge them into the
-  // same payloads the probability engine already consumes. Football legs are
-  // still scored by the saved Poisson + H2H predictions (daily refresh runs
-  // before kickoff, so today's ongoing matches keep their model rows);
+  // same payloads the probability engine already consumes. Live rows fully replace
+  // the same event's stale prematch rows (mixing both would double-count outcomes
+  // in the no-vig model and keep suspended prematch prices alive). Football legs
+  // are scored by the probability model: saved predictions first, then on-demand
+  // API-Football modeling for live fixtures the daily snapshot does not cover;
   // other sports use the same no-vig market probability as prematch.
+  let liveDiagnostics = null;
   if (wantsLive) {
     const liveMaxPages = Math.max(1, Math.min(20, parseInt(process.env.SPORTYBET_LIVE_MAX_PAGES || '5', 10)));
     const liveOnly = liveModeNorm === 'live';
+    liveDiagnostics = { mode: liveModeNorm, rows: {}, errors: {}, totalRows: 0, footballModels: null };
     const mergeLiveRows = (payload, liveRows) => {
       const base = liveOnly ? [] : (Array.isArray(payload?.rows) ? payload.rows : []);
-      const rows = [...base, ...liveRows];
+      const liveEventIds = new Set(liveRows.map(r => String(r.eventId || '')).filter(Boolean));
+      const kept = liveEventIds.size ? base.filter(r => !liveEventIds.has(String(r.eventId || ''))) : base;
+      const rows = [...kept, ...liveRows];
       return { ...(payload || {}), rows, totalReturned: rows.length, live: true, liveRows: liveRows.length };
     };
     const liveFetch = async (sport, kind, enabled) => {
       if (!enabled) return [];
+      const key = `${sport}/${kind}`;
       try {
         const payload = await getLiveSportMarket(sport, kind, { maxPages: liveMaxPages });
-        return (payload.rows || []).map(r => ({ ...r, live: true }));
+        const rows = (payload.rows || []).map(r => ({ ...r, live: true }));
+        liveDiagnostics.rows[key] = rows.length;
+        liveDiagnostics.totalRows += rows.length;
+        return rows;
       } catch (err) {
-        console.warn(`[Auto candidates] live ${sport}/${kind} unavailable: ${err.message}`);
+        console.warn(`[Auto candidates] live ${key} unavailable: ${err.message}`);
+        liveDiagnostics.rows[key] = 0;
+        liveDiagnostics.errors[key] = String(err.message || err).slice(0, 160);
         return [];
       }
     };
@@ -1684,6 +1756,24 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     await Promise.all(liveJobs.map(async ([sport, kind, enabled, apply]) => {
       apply(await liveFetch(sport, kind, enabled));
     }));
+    console.log(`[Auto candidates] live scrape complete: totalRows=${liveDiagnostics.totalRows} (${Object.entries(liveDiagnostics.rows).map(([k, v]) => `${k}=${v}`).join(' ') || 'no markets requested'})`);
+
+    // Score live football fixtures directly with the probability model instead of
+    // depending on the daily snapshot cache: model any live event it does not cover.
+    if (wantsFootball && liveDiagnostics.totalRows > 0) {
+      try {
+        const result = await addLiveFootballModels(
+          predictions,
+          [f1x2, fgg, fdc, fdnb, fou05, fhomeou05, fawayou05, fhomeou45, fawayou45, fou15, fou45, fou25, fcs, fah, fcorners],
+          { buildCorners: cornerBetRequested(betTypes) },
+        );
+        predictions = result.predictions;
+        liveDiagnostics.footballModels = result.stats;
+      } catch (err) {
+        console.error('[API-Football] live on-demand modeling failed:', err.message);
+        liveDiagnostics.footballModels = { reason: 'modeling_error', detail: String(err.message || err).slice(0, 160) };
+      }
+    }
   }
 
   if (wantsFootball && liveModeNorm !== 'live' && cornerBetRequested(betTypes)) {
@@ -1747,6 +1837,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
   // Preserve source diagnostics through the shared Website/Telegram pipeline.
   // No API credentials or raw bookmaker payloads are returned to the browser.
   candidates.teamGoalAvailability = teamGoalAvailability;
+  candidates.liveDiagnostics = liveDiagnostics;
   return candidates;
 }
 
@@ -1832,6 +1923,7 @@ async function prepareAutoCandidatePool({
       maxMatchOdds: Number.isFinite(maxOdd) && maxOdd > 1 ? maxOdd : null,
       betTypes: Array.isArray(betTypes) ? betTypes.map(String) : null,
       teamGoalAvailability: rawCandidates.teamGoalAvailability || {},
+      liveDiagnostics: rawCandidates.liveDiagnostics || null,
     },
   };
 }
@@ -2408,6 +2500,8 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
         maxMatchOdds,
         todayOnly,
         todayCandidateCount: prepared.diagnostics.afterTodayFilter,
+        liveMode,
+        liveDiagnostics: prepared.diagnostics.liveDiagnostics,
         teamGoalAvailability: prepared.diagnostics.teamGoalAvailability,
         cornerDiagnostics,
         hint: Object.keys(prepared.diagnostics.teamGoalAvailability || {}).length
@@ -3083,7 +3177,21 @@ async function buildTelegramAiTicket(user, request) {
     const d = prepared.diagnostics;
     console.warn(`[Telegram AI pool] sport=${sport} raw=${d.rawCandidates} afterToday=${d.afterTodayFilter} todayOnly=${!!merged.todayOnly} afterRedFlag=${d.afterRedFlag} afterMaxOdds=${d.afterMaxOdds} minProb=${minProbability} minEdge=${minEdge} betTypes=${betTypes.join(',')}`);
     const todayPart = merged.todayOnly ? `, ${d.afterTodayFilter} playing today (WAT)` : '';
-    return { error: `No current SportyBet selections passed your ${minProbability}% probability rule, ${minEdge} edge setting and red-flag protection. (Candidates: ${d.rawCandidates} raw${todayPart}, ${d.afterRedFlag} after red flags, ${d.afterMaxOdds} after max-odd filter.)` };
+    let livePart = '';
+    const ld = d.liveDiagnostics;
+    if (ld) {
+      livePart = ` Live board scrape returned ${ld.totalRows} rows.`;
+      const fm = ld.footballModels;
+      if (fm) {
+        if (fm.reason === 'api_key_not_configured') livePart += ' Live football fixtures could not be modeled because API-Football is not configured.';
+        else if (fm.reason === 'all_live_fixtures_already_modeled') livePart += ' All live football fixtures already have a saved model — none passed your filters.';
+        else if (fm.reason === 'no_live_football_rows') livePart += ' No live football rows were on the board for the selected markets.';
+        else livePart += ` Live football modeling: ${Number(fm.added || 0)} of ${Number(fm.uncovered || 0)} uncovered fixtures modeled on demand.`;
+      }
+      const failedLive = Object.keys(ld.errors || {});
+      if (failedLive.length) livePart += ` Live fetch failed for: ${failedLive.join(', ')}.`;
+    }
+    return { error: `No current SportyBet selections passed your ${minProbability}% probability rule, ${minEdge} edge setting and red-flag protection. (Candidates: ${d.rawCandidates} raw${todayPart}, ${d.afterRedFlag} after red flags, ${d.afterMaxOdds} after max-odd filter.)${livePart}` };
   }
   const result = selectAutoBet(pool, {
     targetOdds: merged.safe ? 5.00 : targetOdds,
