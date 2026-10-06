@@ -74,7 +74,7 @@ test('live booking validation drops suspended legs and keeps offered ones with f
     const u = new URL(url);
     assert.ok(LIVE_PATHS.some(p => u.pathname.endsWith(p)), `unexpected live path ${u.pathname}`);
     return jsonResponse([
-      {eventId:'sr:match:live1',live:true,homeTeamName:'Live FC',awayTeamName:'Real Test',
+      {eventId:'sr:match:live1',live:true,matchStatus:'H2',playedSeconds:'63:00',setScore:'2:0',homeTeamName:'Live FC',awayTeamName:'Real Test',
        markets:[market('1','1X2',[outcome('1','Home',null,2.35)])]}, // away outcome suspended; odds moved 2.10 -> 2.35
     ]);
   });
@@ -164,7 +164,7 @@ test('live booking validation drops legs whose match left the in-play board', as
       // Same event id, but now back on the board as a not-started (prematch) row
       {eventId:'sr:match:flip',homeTeamName:'Flip FC',awayTeamName:'Flop United',estimateStartTime:now+3600000,
        markets:[market('1','1X2',[outcome('1','Home',null,2.00)])]},
-      {eventId:'sr:match:live1',live:true,homeTeamName:'Live FC',awayTeamName:'Real Test',estimateStartTime:now-1200000,
+      {eventId:'sr:match:live1',live:true,matchStatus:'H2',playedSeconds:'63:00',setScore:'2:0',homeTeamName:'Live FC',awayTeamName:'Real Test',estimateStartTime:now-1200000,
        markets:[market('1','1X2',[outcome('1','Home',null,2.35)])]},
     ]);
   });
@@ -274,7 +274,7 @@ test('live booking validation falls back to the default live feed when marketId 
     assert.equal(u.searchParams.get('sportId'), SPORT_IDS.handball);
     if (u.searchParams.get('marketId')) return jsonResponse([]);
     return jsonResponse([
-      {eventId:'sr:match:hbv',live:true,homeTeamName:'Val A',awayTeamName:'Val B',estimateStartTime:now-900000,
+      {eventId:'sr:match:hbv',live:true,matchStatus:'H2',playedSeconds:'48:00',setScore:'22:19',homeTeamName:'Val A',awayTeamName:'Val B',estimateStartTime:now-900000,
        tournament:'Live Handball',
        markets:[market('1','1X2',[outcome('1','Home',null,2.05)])]},
     ]);

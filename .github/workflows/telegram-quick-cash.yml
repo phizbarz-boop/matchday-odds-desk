@@ -1,0 +1,31 @@
+name: Plot207 Telegram Hourly Quick Cash
+
+on:
+  schedule:
+    # Every hour at :05 WAT (also :05 UTC). Avoid the busy top of the hour.
+    - cron: '5 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plot207-telegram-hourly-quick-cash
+  cancel-in-progress: false
+
+jobs:
+  quick-cash:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Generate current Quick Cash ticket and send to Telegram
+        env:
+          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
+          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
+        run: |
+          test -n "$TELEGRAM_JOB_SECRET" || (echo 'Missing GitHub secret TELEGRAM_JOB_SECRET' && exit 1)
+          curl --fail-with-body --show-error --silent --max-time 780 \
+            -X POST "$MATCHDAY_BASE_URL/api/telegram/quick-cash" \
+            -H 'Content-Type: application/json' \
+            -H "x-telegram-job-secret: $TELEGRAM_JOB_SECRET" \
+            --data '{}' -w '\nHTTP_STATUS:%{http_code}\n'

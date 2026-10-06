@@ -22,6 +22,11 @@ by `jobs/sporty-football-statistics-collector.js` through the dummy session.
 Complete offered price sets supply labelled no-vig estimates when statistics are
 missing. No paid football data subscription or key is required.
 
+Website and Telegram user requests now fetch current SportyBet fixtures/markets
+and calculate selections on demand. They bypass saved daily market snapshots;
+Daily Prediction Refresh remains useful for historical statistics and scheduled
+jobs. See `SPORTYBET_ON_DEMAND.md`. No additional setting enables this behavior.
+
 For the GitHub refresh workflow also set `SPORTYBET_PHONE` and
 `SPORTYBET_PASSWORD` as repository secrets. Keep `TELEGRAM_JOB_SECRET` the same
 on GitHub and Render so the collector can publish its snapshot. The workflow

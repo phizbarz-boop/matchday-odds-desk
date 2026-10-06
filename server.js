@@ -1,4 +1,4 @@
-const {winningSideSelection,conditionFootballModel}=require('./lib/liveModel');
+const {liveSelectionEligible,halfwayPlayed,selectionWinningNow,conditionFootballModel}=require('./lib/liveModel');
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
@@ -9,14 +9,16 @@ app.set('trust proxy', 1); // Render forwards the real client IP.
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
 const { getFootballMarket, getSportMarket, getLiveSportMarket, validateLiveSelections, getBooking, bookBet, SPORT_CONFIG, direct: sportyDirect } = require('./lib/sportybet');
-const { buildCandidates, selectAutoBet, passesRedFlagFilter, normalMetrics } = require('./lib/autoPicker');
+const { buildCandidates, selectAutoBet, passesRedFlagFilter } = require('./lib/autoPicker');
 const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest, sendTelegramAiMessageTo, telegramAiRequest } = require('./lib/telegram');
 const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, SPECIAL_BET_IDS: TELEGRAM_SPECIAL_BET_IDS, allowedBetIdsForPlan: telegramAiAllowedBetIdsForPlan, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, addExtraTickets: addTelegramAiExtraTickets, hasTicketCredit: telegramAiHasTicketCredit, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, ticketLimitKeyboard: telegramAiTicketLimitKeyboard, mainKeyboard: telegramAiMainKeyboard, builderSummary: telegramAiBuilderSummary, builderKeyboard: telegramAiBuilderKeyboard, sportKeyboard: telegramAiSportKeyboard, targetKeyboard: telegramAiTargetKeyboard, probabilityKeyboard: telegramAiProbabilityKeyboard, maxOddKeyboard: telegramAiMaxOddKeyboard, edgeKeyboard: telegramAiEdgeKeyboard, maxGamesKeyboard: telegramAiMaxGamesKeyboard, marketsKeyboard: telegramAiMarketsKeyboard, analyzerSummary: telegramAiAnalyzerSummary, analyzerKeyboard: telegramAiAnalyzerKeyboard, analyzerAnalysisKeyboard: telegramAiAnalyzerAnalysisKeyboard, analyzerProbKeyboard: telegramAiAnalyzerProbKeyboard, analyzerHorizonKeyboard: telegramAiAnalyzerHorizonKeyboard, resultKeyboard: telegramAiResultKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
 const { trackTelegramSlip, evaluateBooking } = require('./lib/slipTracker');
 const { watDateKey } = require('./lib/dailyScheduleGuard');
 const { SPORT_TIERS: TELEGRAM_SPORT_TIERS, selectTelegramMixedWithSportPriority } = require('./lib/telegramMixedSelector');
 const { enrichSportyFixtures, cleanPredictions, STATS_KEY, STATS_FILE } = require('./lib/sportyFootballModel');
+const {sportyRequest,withFreshSportyRequest,memoSportyRead}=require('./lib/sportyRequest');
 const { sanitizeStats } = require('./lib/sportyFootballStats');
+const {registerTelegramQuickCashRoute,quickCashConfig}=require('./lib/telegramQuickCash');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
 
 let redisClient = null;
@@ -279,6 +281,7 @@ const sportyMarketInFlight = new Map();
 const bookingMemoryRate = new Map();
 const telegramSendMemory = new Map();
 const telegramDailyCodesMemory = new Map();
+const telegramQuickCashCodesMemory = new Map();
 let handballSnapshotMemory = null;
 const HANDBALL_SNAPSHOT_REDIS_KEY = 'sportybet:handball:v4:snapshot';
 let volleyballSnapshotMemory = null;
@@ -291,7 +294,7 @@ function telegramDailyCodeVisibleForPlan(planId, label) {
   const plan = String(planId || 'free').toLowerCase();
   if (plan !== 'free') return true;
   const key = String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  return key.includes('safe') || key === '2';
+  return key.includes('safe') || key === '2' || key.startsWith('qc') || key.includes('quickcash');
 }
 
 
@@ -324,11 +327,11 @@ function plot207TelegramHelpText(plan = null) {
     'A SAFE pick is still a prediction, not a guaranteed win.',
     '',
     '🎟 TODAY’S CODES',
-    'This shows only the SportyBet booking codes created by the scheduled Daily Auto Picks. It does not show the games.',
-    '• Free: SAFE and 2x daily codes.',
+    'This shows SportyBet booking codes from Daily Auto Picks and hourly Quick Cash (QC).',
+    '• Free: SAFE, 2x and hourly QC codes.',
     '• Pro: all available daily codes.',
     '• Elite: all available daily codes.',
-    'The list refreshes when the day’s automated picks are generated.',
+    'QC scans current late-stage live games every hour at 0% minimum probability. New QC codes are added to Today’s Codes with their WAT time.',
     '',
     '🔎 ANALYZE CODE',
     'Use this to check an existing SportyBet booking code.',
@@ -337,7 +340,7 @@ function plot207TelegramHelpText(plan = null) {
     '3. Choose the fixture search horizon.',
     '4. Tap ⌨️ Enter Code and send the SportyBet booking code.',
     '5. Plot207 shows which selections meet the model threshold.',
-    'If unsupported selections are found, use ♻️ Replace Unsupported. Replacements are searched from saved/cached markets on the same fixture and are not automatic.',
+    'If unsupported selections are found, use ♻️ Replace Unsupported. Replacements use current SportyBet markets on the same fixture.',
     '',
     '📋 MY ACCOUNT',
     'Shows your current plan, remaining daily ticket/analysis allowance, and other account limits.',
@@ -359,6 +362,7 @@ function plot207TelegramHelpText(plan = null) {
     '• Higher minimum probability = stricter filtering, but fewer candidates.',
     '• Lower maximum odd per match = generally more conservative individual selections.',
     '• Today Only means kickoff must fall on today’s WAT calendar date.',
+    '• Live legs must be at least halfway through the match and currently winning for their offered bet type. They are checked again before code generation.',
     '• Booking codes can only be created from markets where valid SportyBet event/market/outcome IDs are available.',
     '• If no ticket is produced, loosen one setting at a time: probability, max odd, market selection, target odds, or Today Only.',
     '',
@@ -387,13 +391,30 @@ async function saveTelegramDailyCodes(redis, dateKey, payload) {
 }
 
 async function loadTelegramDailyCodes(redis, dateKey) {
+  let snapshot=telegramDailyCodesMemory.get(dateKey)||{date:dateKey,generatedAt:null,codes:[]};
+  let quickCash=[...(telegramQuickCashCodesMemory.get(dateKey)?.values()||[])];
   if (redis) {
     try {
       const raw = await redis.get(telegramDailyCodesKey(dateKey));
-      if (raw) return cleanPredictions(JSON.parse(raw));
+      if (raw) snapshot=JSON.parse(raw);
     } catch (e) { console.warn('Daily codes Redis read failed:', e.message); }
+    try { quickCash=(await redis.hVals(`telegram:quick-cash:codes:${dateKey}`)).map(row=>JSON.parse(row)); }
+    catch(e){console.warn('Quick Cash codes Redis read failed:',e.message);}
   }
-  return telegramDailyCodesMemory.get(dateKey) || { date: dateKey, generatedAt: null, codes: [] };
+  return {...snapshot,codes:[...(Array.isArray(snapshot.codes)?snapshot.codes:[]),...quickCash.filter(c=>c.shareCode)]};
+}
+
+async function saveTelegramQuickCashCode(redis,dateKey,hourKey,booking,result) {
+  const code={targetOdds:`QC · ${hourKey.slice(11)}:00 WAT`,liveMode:'quick_cash',minProbability:0,
+    combinedOdds:Number(result.combinedOdds),shareCode:String(booking.shareCode),hourKey,generatedAt:new Date().toISOString()};
+  // QC owns separate hash fields: a daily run cannot erase hourly history,
+  // and simultaneous daily/hourly writes cannot overwrite one another.
+  const key=`telegram:quick-cash:codes:${dateKey}`;
+  await redis.hSet(key,hourKey,JSON.stringify(code));
+  await redis.expire(key,172800);
+  if(!telegramQuickCashCodesMemory.has(dateKey))telegramQuickCashCodesMemory.set(dateKey,new Map());
+  telegramQuickCashCodesMemory.get(dateKey).set(hourKey,code);
+  return code;
 }
 
 function telegramDailyCodesText(snapshot, plan) {
@@ -419,7 +440,7 @@ function telegramDailyCodesText(snapshot, plan) {
       if (raw === '3') return 2;
       return 3;
     };
-    const sorted = codes.slice().sort((a, b) => priority(a.targetOdds) - priority(b.targetOdds));
+    const sorted = codes.slice().sort((a, b) => priority(a.targetOdds) - priority(b.targetOdds)||(b.hourKey||'').localeCompare(a.hourKey||''));
     for (const row of sorted) {
       const label = labelFor(row.targetOdds);
       if (isFree && !telegramDailyCodeVisibleForPlan('free', row.targetOdds)) {
@@ -431,7 +452,8 @@ function telegramDailyCodesText(snapshot, plan) {
     }
   }
   lines.push('', 'Codes only — game selections are not shown here.');
-  if (isFree) lines.push('Free access: SAFE + 2x only. Upgrade to Pro or Elite to reveal every other daily code.');
+  lines.push('QC = hourly live Quick Cash · minimum probability 0% · newest QC first.');
+  if (isFree) lines.push('Free access: SAFE + 2x + QC. Upgrade to Pro or Elite to reveal every other daily code.');
   return lines.join('\n');
 }
 
@@ -639,6 +661,15 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
     : null;
   const kickoffBufferSeconds = Math.max(0, Number(options.kickoffBufferSeconds ?? process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS ?? 60) || 0);
   const forceRefresh = options.forceRefresh === true;
+  if(sportyRequest()) {
+    const fixtureKey=Array.isArray(options.fixtures)?options.fixtures.map(f=>String(f.eventId||f.sportyEventId||'')).join(','):'direct';
+    return memoSportyRead(`market|${sport}|${kind}|${hours}|${maxPages}|${fixtureKey}`,async()=>{
+      const payload=sport==='football'
+        ?await getFootballMarket(kind,{hours,maxPages,fixtures:options.fixtures})
+        :await getSportMarket(sport,kind,{hours,maxPages,fixtures:options.fixtures});
+      return {...filterUpcomingSportyPayload(payload,{nowMs:Date.now(),kickoffBufferSeconds}),readMode:'direct',source:'SportyBet current board (direct)'};
+    });
+  }
   // Keep Analyzer's 14/21-day cache completely separate from the normal Auto Builder cache.
   // Versioned cache key: bumping this invalidates stale/empty market caches after parser changes.
   // Team-goal markets changed to the Nigeria full-event endpoint; do not
@@ -649,9 +680,8 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   const client = await getRedis();
   const nowMs = Date.now();
 
-  // Shared daily snapshot is independent of request horizon/page count. A 7/14-day
-  // Analyzer request can therefore reuse a 21-day Daily Refresh snapshot instead of
-  // purchasing the same SportyBet rows again.
+  // Background jobs can reuse a 21-day Daily Refresh snapshot. User requests
+  // already returned through the direct path above.
   if (!forceRefresh) {
     const snapshot = await readSportySnapshot(client, sport, kind, hours, nowMs, kickoffBufferSeconds);
     if (snapshot) {
@@ -685,7 +715,7 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
     else sportyMemoryCache.delete(cacheKey);
   }
 
-  // Analyzer replacement can be configured to use only data already saved by the Daily Refresh.
+  // Background callers can request saved data without starting an upstream read.
   // When cacheOnly is true, never fetch fresh SportyBet market pages here.
   if (options.cacheOnly) {
     console.log(`[SportyBet cache-only] MISS ${sport}/${kind} requested=${hours}h`);
@@ -754,13 +784,19 @@ async function loadPredictions() {
   const client = await getRedis();
   if (client) {
     const raw = await client.get('predictions:latest');
-    if (raw) return JSON.parse(raw);
+    if (raw) return cleanPredictions(JSON.parse(raw));
     return { generatedAt: null, matches: [] };
   }
   if (fs.existsSync(DATA_FILE)) {
     return cleanPredictions(JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')));
   }
   return { generatedAt: null, matches: [] };
+}
+
+async function currentFootballPredictions(payloads) {
+  const rows=(payloads||[]).flatMap(p=>[...(p?.rows||[]),...(p?.probabilityRows||[])]).filter(r=>r.live!==true);
+  const matches=await enrichSportyFixtures(rows,{marketRows:rows});
+  return {generatedAt:new Date().toISOString(),source:'SportyBet current board (direct)',readMode:'direct',matches};
 }
 
 
@@ -880,9 +916,22 @@ app.use((req, res, next) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+app.use('/api/sportybet',(req,res,next)=>{
+  res.set('Cache-Control','no-store');
+  withFreshSportyRequest(next);
+});
+
 
 app.get('/api/predictions', async (req, res) => {
   try {
+    if(req.query.source==='current') {
+      const payload=await withFreshSportyRequest(async()=>{
+        const market=await loadSportyBetMarket('1x2');
+        return currentFootballPredictions([market]);
+      });
+      res.set('Cache-Control','no-store');
+      return res.json(payload);
+    }
     const payload = await loadPredictions();
     res.json(payload);
   } catch (err) {
@@ -942,9 +991,9 @@ app.get('/api/sportybet/odds', async (req, res) => {
     // Use the same saved fixture IDs as the Auto Builder and Telegram bot;
     // taking the bookmaker's arbitrary first 12 events instead can display
     // zero rows even while the model has usable fixtures elsewhere.
-    const opts = isTeamGoal ? { fixtures:(await loadPredictions()).matches || [] } : {};
+    const opts = isTeamGoal && !sportyRequest() ? { fixtures:(await loadPredictions()).matches || [] } : {};
     const payload = await loadSportyBetMarket(kind, 'football', opts);
-    res.set('Cache-Control', 'public, max-age=60');
+    res.set('Cache-Control', 'no-store');
     res.json(payload);
   } catch (err) {
     console.error('SportyBet odds error:', err.message);
@@ -1099,6 +1148,11 @@ app.get('/api/handball/status', async (req,res)=>{
 app.get('/api/sportybet/sport/:sport', async (req, res) => {
   try {
     const sport = String(req.params.sport || '').toLowerCase();
+    if(sportyRequest()) {
+      const cfg=SPORT_CONFIG[sport],kind=String(req.query.market||cfg?.defaultMarket||'winner').toLowerCase();
+      if(!cfg?.markets[kind])return res.status(400).json({error:'Unsupported SportyBet sport or market'});
+      return res.json(await loadSportyBetMarket(kind,sport));
+    }
     // Tennis/handball/volleyball are scraped directly from SportyBet first
     // (all leagues and divisions). The collector snapshots remain as a
     // fallback for kinds the direct board is not serving right now.
@@ -1114,7 +1168,7 @@ app.get('/api/sportybet/sport/:sport', async (req, res) => {
         try {
           const payload = await loadSportyBetMarket(kind, sport);
           if (Array.isArray(payload?.rows) && payload.rows.length) {
-            res.set('Cache-Control', 'public, max-age=60');
+            res.set('Cache-Control', 'no-store');
             return res.json(payload);
           }
         } catch (err) {
@@ -1122,7 +1176,7 @@ app.get('/api/sportybet/sport/:sport', async (req, res) => {
         }
       }
       const payload = await legacyLoader(kind);
-      res.set('Cache-Control', 'public, max-age=60');
+      res.set('Cache-Control', 'no-store');
       return res.json({ ...payload, source: payload.rows?.length ? 'collector-snapshot (direct board empty)' : payload.source });
     }
     const cfg = SPORT_CONFIG[sport];
@@ -1134,7 +1188,7 @@ app.get('/api/sportybet/sport/:sport', async (req, res) => {
       return res.status(400).json({ error: `market must be one of: ${Object.keys(cfg.markets).join(', ')}` });
     }
     const payload = await loadSportyBetMarket(kind, sport);
-    res.set('Cache-Control', 'public, max-age=60');
+    res.set('Cache-Control', 'no-store');
     res.json(payload);
   } catch (err) {
     console.error('SportyBet sport odds error:', err.message);
@@ -1318,14 +1372,6 @@ function fixtureKey(r) {
   return `${n(r?.home)}|${n(r?.away)}|${String(r?.kickoffUtc||'').slice(0,10)}`;
 }
 
-async function addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorners, hours) {
-  const rows=[...(f1x2?.rows || []),...(fcorners?.rows || [])];
-  const fresh=await enrichSportyFixtures(rows,{marketRows:rows});
-  const matches=new Map((predictions?.matches || []).map(r=>[String(r.eventId || r.sportyEventId),r]));
-  for(const r of fresh)matches.set(r.eventId,r);
-  return {...predictions,matches:[...matches.values()]};
-}
-
 async function addLiveFootballModels(predictions, liveFootballPayloads, {buildCorners=false}={}) {
   const rows=(liveFootballPayloads || []).flatMap(p=>p?.rows || []).filter(r=>r.live===true);
   const ids=new Set(rows.map(x=>String(x.eventId)));
@@ -1363,287 +1409,293 @@ function normalizeAutoBetTypesForSports(sports, betTypes) {
   return [...compatible];
 }
 
-async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, marketCacheOnly = false, liveMode = 'prematch' } = {}) {
-  const liveModeNorm = normalizeLiveMode(liveMode);
-  const wantsPrematch = !['live','quick_cash'].includes(liveModeNorm);
-  const wantsLive = liveModeNorm !== 'prematch';
-  const selectedSports = normalizeSportScopes(Array.isArray(sports) && sports.length ? sports : sportScope);
-  const selectedSet = new Set(selectedSports);
-  const wantsFootball = selectedSet.has('football');
-  const wantsBasketball = selectedSet.has('basketball');
-  const wantsHockey = selectedSet.has('hockey');
-  const wantsHandball = selectedSet.has('handball');
-  const wantsVolleyball = selectedSet.has('volleyball');
-  const wantsTennis = selectedSet.has('tennis');
+async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch' } = {}) {
+  return withFreshSportyRequest(async()=>{
+    const liveModeNorm = normalizeLiveMode(liveMode);
+    const wantsPrematch = !['live','quick_cash'].includes(liveModeNorm);
+    const wantsLive = liveModeNorm !== 'prematch';
+    const selectedSports = normalizeSportScopes(Array.isArray(sports) && sports.length ? sports : sportScope);
+    const selectedSet = new Set(selectedSports);
+    const wantsFootball = selectedSet.has('football');
+    const wantsBasketball = selectedSet.has('basketball');
+    const wantsHockey = selectedSet.has('hockey');
+    const wantsHandball = selectedSet.has('handball');
+    const wantsVolleyball = selectedSet.has('volleyball');
+    const wantsTennis = selectedSet.has('tennis');
 
-  // Fetch only the market families actually requested. Previously, even a one-market
-  // Analyzer request could fan out to every football/basketball/hockey market.
-  const effectiveBetTypes = normalizeAutoBetTypesForSports(selectedSports, betTypes);
-  const requestedBetTypes = effectiveBetTypes.length ? new Set(effectiveBetTypes) : null;
-  const wantsAny = ids => !requestedBetTypes || ids.some(id => requestedBetTypes.has(id));
-  const needF1x2 = wantsFootball && wantsAny(['home_win','draw','away_win','dc_1x','dc_x2']);
-  const needFGg = wantsFootball && wantsAny(['gg_yes','ng_no']);
-  const needFDc = wantsFootball && wantsAny(['dc_1x','dc_x2']);
-  const needFDnb = wantsFootball && wantsAny(['dnb']);
-  const needFOu05 = wantsFootball && wantsAny(['over05']);
-  const needFHomeOu05 = wantsFootball && wantsAny(['home_over05']);
-  const needFAwayOu05 = wantsFootball && wantsAny(['away_over05']);
-  const needFHomeOu45 = wantsFootball && wantsAny(['home_under45']);
-  const needFAwayOu45 = wantsFootball && wantsAny(['away_under45']);
-  const needFOu15 = wantsFootball && wantsAny(['over15']);
-  const needFOu45 = wantsFootball && wantsAny(['under45']);
-  const needFAh = wantsFootball && wantsAny(['ah_0','ah_plus025','ah_minus025']);
-  const needFCorners = wantsFootball && wantsAny(['corners_over','corners_under']);
-  const needFOu25 = wantsFootball && wantsAny(['over25','under25']);
-  const needFCs = wantsFootball && wantsAny(['correct_score']);
-  const needF1hCorners = false;
-  const needFOneup = false;
-  const needBasketballWinner = wantsBasketball && wantsAny(['basketball_winner']);
-  const needBasketballTotals = wantsBasketball && wantsAny(['basketball_over','basketball_under']);
-  const needBasketballHandicap = wantsBasketball && wantsAny(['basketball_handicap_home','basketball_handicap_away']);
-  const needHockeyWinner = wantsHockey && wantsAny(['hockey_winner']);
-  const needHockeyTotals = wantsHockey && wantsAny(['hockey_over','hockey_under']);
-  const needHockeyHandicap = wantsHockey && wantsAny(['hockey_handicap_home','hockey_handicap_away']);
-  const needHandballWinner = wantsHandball && wantsAny(['handball_winner']);
-  const needHandballTotals = wantsHandball && wantsAny(['handball_over','handball_under']);
-  const needHandballHandicap = wantsHandball && wantsAny(['handball_handicap_home','handball_handicap_away']);
-  const needVolleyballWinner = wantsVolleyball && wantsAny(['volleyball_winner']);
-  const needVolleyballTotals = wantsVolleyball && wantsAny(['volleyball_over','volleyball_under']);
-  const needVolleyballSets = wantsVolleyball && wantsAny(['volleyball_sets_over','volleyball_sets_under']);
-  const needVolleyballHandicap = wantsVolleyball && wantsAny(['volleyball_handicap_home','volleyball_handicap_away']);
-  const needTennisWinner = wantsTennis && wantsAny(['tennis_winner']);
-  const needTennisTotals = wantsTennis && wantsAny(['tennis_over','tennis_under']);
-  const needTennisHandicap = wantsTennis && wantsAny(['tennis_handicap_home','tennis_handicap_away']);
+    // Fetch only the market families actually requested. Previously, even a one-market
+    // Analyzer request could fan out to every football/basketball/hockey market.
+    const effectiveBetTypes = normalizeAutoBetTypesForSports(selectedSports, betTypes);
+    const requestedBetTypes = effectiveBetTypes.length ? new Set(effectiveBetTypes) : null;
+    const wantsAny = ids => !requestedBetTypes || ids.some(id => requestedBetTypes.has(id));
+    const needF1x2 = wantsFootball && wantsAny(['home_win','draw','away_win','dc_1x','dc_x2']);
+    const needFGg = wantsFootball && wantsAny(['gg_yes','ng_no']);
+    const needFDc = wantsFootball && wantsAny(['dc_1x','dc_x2']);
+    const needFDnb = wantsFootball && wantsAny(['dnb']);
+    const needFOu05 = wantsFootball && wantsAny(['over05']);
+    const needFHomeOu05 = wantsFootball && wantsAny(['home_over05']);
+    const needFAwayOu05 = wantsFootball && wantsAny(['away_over05']);
+    const needFHomeOu45 = wantsFootball && wantsAny(['home_under45']);
+    const needFAwayOu45 = wantsFootball && wantsAny(['away_under45']);
+    const needFOu15 = wantsFootball && wantsAny(['over15']);
+    const needFOu45 = wantsFootball && wantsAny(['under45']);
+    const needFAh = wantsFootball && wantsAny(['ah_0','ah_plus025','ah_minus025']);
+    const needFCorners = wantsFootball && wantsAny(['corners_over','corners_under']);
+    const needFOu25 = wantsFootball && wantsAny(['over25','under25']);
+    const needFCs = wantsFootball && wantsAny(['correct_score']);
+    const needF1hCorners = false;
+    const needFOneup = false;
+    const needBasketballWinner = wantsBasketball && wantsAny(['basketball_winner']);
+    const needBasketballTotals = wantsBasketball && wantsAny(['basketball_over','basketball_under']);
+    const needBasketballHandicap = wantsBasketball && wantsAny(['basketball_handicap_home','basketball_handicap_away']);
+    const needHockeyWinner = wantsHockey && wantsAny(['hockey_winner']);
+    const needHockeyTotals = wantsHockey && wantsAny(['hockey_over','hockey_under']);
+    const needHockeyHandicap = wantsHockey && wantsAny(['hockey_handicap_home','hockey_handicap_away']);
+    const needHandballWinner = wantsHandball && wantsAny(['handball_winner']);
+    const needHandballTotals = wantsHandball && wantsAny(['handball_over','handball_under']);
+    const needHandballHandicap = wantsHandball && wantsAny(['handball_handicap_home','handball_handicap_away']);
+    const needVolleyballWinner = wantsVolleyball && wantsAny(['volleyball_winner']);
+    const needVolleyballTotals = wantsVolleyball && wantsAny(['volleyball_over','volleyball_under']);
+    const needVolleyballSets = wantsVolleyball && wantsAny(['volleyball_sets_over','volleyball_sets_under']);
+    const needVolleyballHandicap = wantsVolleyball && wantsAny(['volleyball_handicap_home','volleyball_handicap_away']);
+    const needTennisWinner = wantsTennis && wantsAny(['tennis_winner']);
+    const needTennisTotals = wantsTennis && wantsAny(['tennis_over','tennis_under']);
+    const needTennisHandicap = wantsTennis && wantsAny(['tennis_handicap_home','tennis_handicap_away']);
 
-  // The general sportsbook cache may live for hours to reduce repeated requests, but the Auto Builder
-  // needs much fresher availability data so expired events cannot remain eligible.
-  const autoMaxCacheAgeSeconds = Math.max(0, parseInt(process.env.AUTO_SPORTYBET_MAX_CACHE_AGE_SECONDS || '43200', 10));
-  const autoMarketOptions = {
-    hours: marketHours || undefined,
-    maxPages: marketMaxPages || undefined,
-    maxCacheAgeSeconds: autoMaxCacheAgeSeconds,
-    kickoffBufferSeconds: Math.max(0, parseInt(process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS || '60', 10)),
-    cacheOnly: !!marketCacheOnly,
-  };
-
-  // Do not let one unavailable SportyBet market family kill the complete Auto/Telegram pool.
-  // This is particularly important for corners: the prematch list may embed zero corner
-  // rows, and the per-event detail fallback can also come back empty for some fixtures.
-  const safeMarket = async (label, enabled, fn, emptyValue = { rows: [] }) => {
-    if (!enabled) return emptyValue;
-    try {
-      return await fn();
-    } catch (err) {
-      console.error(`[Auto candidates] ${label} unavailable: ${err.message}`);
-      return { ...emptyValue, rows: Array.isArray(emptyValue.rows) ? emptyValue.rows : [], error: err.message };
-    }
-  };
-
-  // Read the existing prediction cache first. Its SportyBet event IDs let us
-  // inspect exactly the fixtures the model knows about, avoiding a costly and
-  // largely irrelevant sweep through the first games on the bookmaker site.
-  let predictions = await safeMarket('football predictions', wantsFootball, () => loadPredictions(), { matches: [] });
-  autoMarketOptions.fixtures = predictions?.matches?.length ? predictions.matches : null;
-  let [f1x2, fgg, fdc, fdnb, fou05, fhomeou05, fawayou05, fhomeou45, fawayou45, fou15, fou45, fou25, fcs, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, basketballHandicap, hockeyWinner, hockeyTotals, hockeyHandicap, handballWinner, handballTotals, handballHandicap, volleyballWinner, volleyballTotals, volleyballSets, volleyballHandicap, tennisWinner, tennisTotals, tennisHandicap] = await Promise.all([
-    safeMarket('football 1X2', needF1x2 && wantsPrematch, () => loadSportyBetMarket('1x2', 'football', autoMarketOptions)),
-    safeMarket('football GG/NG', needFGg && wantsPrematch, () => loadSportyBetMarket('gg', 'football', autoMarketOptions)),
-    safeMarket('football Double Chance', needFDc && wantsPrematch, () => loadSportyBetMarket('dc', 'football', autoMarketOptions)),
-    safeMarket('football Draw No Bet', needFDnb && wantsPrematch, () => loadSportyBetMarket('dnb', 'football', autoMarketOptions)),
-    safeMarket('football Over 0.5', needFOu05 && wantsPrematch, () => loadSportyBetMarket('ou05', 'football', autoMarketOptions)),
-    safeMarket('football Home Over 0.5', needFHomeOu05 && wantsPrematch, () => loadSportyBetMarket('home_ou05', 'football', autoMarketOptions)),
-    safeMarket('football Away Over 0.5', needFAwayOu05 && wantsPrematch, () => loadSportyBetMarket('away_ou05', 'football', autoMarketOptions)),
-    safeMarket('football Home Under 4.5', needFHomeOu45 && wantsPrematch, () => loadSportyBetMarket('home_ou45', 'football', autoMarketOptions)),
-    safeMarket('football Away Under 4.5', needFAwayOu45 && wantsPrematch, () => loadSportyBetMarket('away_ou45', 'football', autoMarketOptions)),
-    safeMarket('football Over 1.5', needFOu15 && wantsPrematch, () => loadSportyBetMarket('ou15', 'football', autoMarketOptions)),
-    safeMarket('football Under 4.5', needFOu45 && wantsPrematch, () => loadSportyBetMarket('ou45', 'football', autoMarketOptions)),
-    safeMarket('football Over/Under 2.5', needFOu25 && wantsPrematch, () => loadSportyBetMarket('ou25', 'football', autoMarketOptions)),
-    safeMarket('football Correct Score', needFCs && wantsPrematch, () => loadSportyBetMarket('cs', 'football', autoMarketOptions)),
-    safeMarket('football Asian Handicap', needFAh && wantsPrematch, () => loadSportyBetMarket('ah', 'football', autoMarketOptions)),
-    safeMarket('football Corners', needFCorners && wantsPrematch, () => loadSportyBetMarket('corners', 'football', autoMarketOptions)),
-    safeMarket('football 1H team corners', needF1hCorners && wantsPrematch, () => loadSportyBetMarket('first_half_team_corners', 'football', autoMarketOptions)),
-    safeMarket('football 1UP', needFOneup && wantsPrematch, () => loadSportyBetMarket('oneup', 'football', autoMarketOptions)),
-    safeMarket('basketball winner', needBasketballWinner && wantsPrematch, () => loadSportyBetMarket('winner', 'basketball', autoMarketOptions)),
-    safeMarket('basketball totals', needBasketballTotals && wantsPrematch, () => loadSportyBetMarket('totals', 'basketball', autoMarketOptions)),
-    safeMarket('basketball handicap', needBasketballHandicap && wantsPrematch, () => loadSportyBetMarket('handicap', 'basketball', autoMarketOptions)),
-    safeMarket('hockey winner', needHockeyWinner && wantsPrematch, () => loadSportyBetMarket('winner', 'hockey', autoMarketOptions)),
-    safeMarket('hockey totals', needHockeyTotals && wantsPrematch, () => loadSportyBetMarket('totals', 'hockey', autoMarketOptions)),
-    safeMarket('hockey handicap', needHockeyHandicap && wantsPrematch, () => loadSportyBetMarket('handicap', 'hockey', autoMarketOptions)),
-    // Handball/volleyball handicaps come from the SportyBet direct board (the
-    // SportyBet snapshot loaders only carry winner/totals/sets).
-    safeMarket('handball winner', needHandballWinner && wantsPrematch, () => loadHandballMarket('winner')),
-    safeMarket('handball totals', needHandballTotals && wantsPrematch, () => loadHandballMarket('totals')),
-    safeMarket('handball handicap', needHandballHandicap && wantsPrematch, () => loadSportyBetMarket('handicap', 'handball', autoMarketOptions)),
-    safeMarket('volleyball winner', needVolleyballWinner && wantsPrematch, () => loadVolleyballMarket('winner')),
-    safeMarket('volleyball totals', needVolleyballTotals && wantsPrematch, () => loadVolleyballMarket('totals')),
-    safeMarket('volleyball total sets', needVolleyballSets && wantsPrematch, () => loadVolleyballMarket('sets')),
-    safeMarket('volleyball handicap', needVolleyballHandicap && wantsPrematch, () => loadSportyBetMarket('handicap', 'volleyball', autoMarketOptions)),
-    safeMarket('tennis winner', needTennisWinner && wantsPrematch, () => loadTennisMarket('winner')),
-    safeMarket('tennis totals', needTennisTotals && wantsPrematch, () => loadTennisMarket('totals')),
-    safeMarket('tennis handicap', needTennisHandicap && wantsPrematch, () => loadTennisMarket('handicap')),
-  ]);
-
-  // Live in-play option: scrape the SportyBet live board for exactly the market
-  // families the request needs, tag the rows live:true, and merge them into the
-  // same payloads the probability engine already consumes. Live rows fully replace
-  // the same event's stale prematch rows (mixing both would double-count outcomes
-  // in the no-vig model and keep suspended prematch prices alive). Football legs
-  // are scored by the probability model: saved predictions first, then on-demand
-  // SportyBet modeling for live fixtures the daily snapshot does not cover;
-  // other sports use the same no-vig market probability as prematch.
-  let liveDiagnostics = null;
-  if (wantsLive) {
-    const liveMaxPages = Math.max(1, Math.min(20, parseInt(process.env.SPORTYBET_LIVE_MAX_PAGES || '5', 10)));
-    const liveOnly = ['live','quick_cash'].includes(liveModeNorm);
-    liveDiagnostics = { mode: liveModeNorm, rows: {}, errors: {}, totalRows: 0, footballModels: null, feeds:{} };
-    const mergeLiveRows = (payload, liveRows) => {
-      const base = liveOnly ? [] : (Array.isArray(payload?.rows) ? payload.rows : []);
-      const liveEventIds = new Set(liveRows.map(r => String(r.eventId || '')).filter(Boolean));
-      const kept = liveEventIds.size ? base.filter(r => !liveEventIds.has(String(r.eventId || ''))) : base;
-      const rows = [...kept, ...liveRows];
-      const probabilityRows=liveRows.probabilityRows ? [...(liveOnly?[]:(payload?.probabilityRows || []).filter(r=>!liveEventIds.has(String(r.eventId)))),...liveRows.probabilityRows] : undefined;
-      return { ...(payload || {}), ...(probabilityRows?{probabilityRows}:{}), rows, totalReturned: rows.length, live: true, liveRows: liveRows.length };
+    // Every build reads the current bookmaker board. Daily fixture/market
+    // snapshots never decide which matches or prices a user can select.
+    const autoMarketOptions = {
+      hours: marketHours || undefined,
+      maxPages: marketMaxPages || undefined,
+      fixtures:Array.isArray(requestedFixtures)?requestedFixtures:null,
+      kickoffBufferSeconds: Math.max(0, parseInt(process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS || '60', 10)),
     };
-    const liveFetch = async (sport, kind, enabled) => {
-      if (!enabled) return [];
-      const key = `${sport}/${kind}`;
+
+    // Do not let one unavailable SportyBet market family kill the complete Auto/Telegram pool.
+    // This is particularly important for corners: the prematch list may embed zero corner
+    // rows, and the per-event detail fallback can also come back empty for some fixtures.
+    const sourceErrors={};
+    const safeMarket = async (label, enabled, fn, emptyValue = { rows: [] }) => {
+      if (!enabled) return emptyValue;
       try {
-        const payload = await getLiveSportMarket(sport, kind, { maxPages: liveMaxPages });
-        const rows = (payload.rows || []).map(r => ({ ...r, live: true }));
-        if(payload.probabilityRows)rows.probabilityRows=payload.probabilityRows.map(r=>({...r,live:true}));
-        liveDiagnostics.rows[key] = rows.length;
-        liveDiagnostics.feeds[key]=payload.feedDiagnostics || {ongoingEvents:payload.scannedEvents || 0};
-        liveDiagnostics.totalRows += rows.length;
-        return rows;
+        return await fn();
       } catch (err) {
-        console.warn(`[Auto candidates] live ${key} unavailable: ${err.message}`);
-        liveDiagnostics.rows[key] = 0;
-        liveDiagnostics.errors[key] = String(err.message || err).slice(0, 160);
-        return [];
+        console.error(`[Auto candidates] ${label} unavailable: ${err.message}`);
+        sourceErrors[label]=String(err.message||err).slice(0,160);
+        return { ...emptyValue, rows: Array.isArray(emptyValue.rows) ? emptyValue.rows : [], error: err.message };
       }
     };
-    const liveJobs = [
-      ['football', '1x2', needF1x2, v => { f1x2 = mergeLiveRows(f1x2, v); }],
-      ['football', 'gg', needFGg, v => { fgg = mergeLiveRows(fgg, v); }],
-      ['football', 'dc', needFDc, v => { fdc = mergeLiveRows(fdc, v); }],
-      ['football', 'dnb', needFDnb, v => { fdnb = mergeLiveRows(fdnb, v); }],
-      ['football', 'ou05', needFOu05, v => { fou05 = mergeLiveRows(fou05, v); }],
-      ['football', 'home_ou05', needFHomeOu05, v => { fhomeou05 = mergeLiveRows(fhomeou05, v); }],
-      ['football', 'away_ou05', needFAwayOu05, v => { fawayou05 = mergeLiveRows(fawayou05, v); }],
-      ['football', 'home_ou45', needFHomeOu45, v => { fhomeou45 = mergeLiveRows(fhomeou45, v); }],
-      ['football', 'away_ou45', needFAwayOu45, v => { fawayou45 = mergeLiveRows(fawayou45, v); }],
-      ['football', 'ou15', needFOu15, v => { fou15 = mergeLiveRows(fou15, v); }],
-      ['football', 'ou45', needFOu45, v => { fou45 = mergeLiveRows(fou45, v); }],
-      ['football', 'ou25', needFOu25, v => { fou25 = mergeLiveRows(fou25, v); }],
-      ['football', 'cs', needFCs, v => { fcs = mergeLiveRows(fcs, v); }],
-      ['football', 'ah', needFAh, v => { fah = mergeLiveRows(fah, v); }],
-      ['football', 'corners', needFCorners, v => { fcorners = mergeLiveRows(fcorners, v); }],
-      ['basketball', 'winner', needBasketballWinner, v => { basketballWinner = mergeLiveRows(basketballWinner, v); }],
-      ['basketball', 'totals', needBasketballTotals, v => { basketballTotals = mergeLiveRows(basketballTotals, v); }],
-      ['basketball', 'handicap', needBasketballHandicap, v => { basketballHandicap = mergeLiveRows(basketballHandicap, v); }],
-      ['hockey', 'winner', needHockeyWinner, v => { hockeyWinner = mergeLiveRows(hockeyWinner, v); }],
-      ['hockey', 'totals', needHockeyTotals, v => { hockeyTotals = mergeLiveRows(hockeyTotals, v); }],
-      ['hockey', 'handicap', needHockeyHandicap, v => { hockeyHandicap = mergeLiveRows(hockeyHandicap, v); }],
-      ['handball', 'winner', needHandballWinner, v => { handballWinner = mergeLiveRows(handballWinner, v); }],
-      ['handball', 'totals', needHandballTotals, v => { handballTotals = mergeLiveRows(handballTotals, v); }],
-      ['handball', 'handicap', needHandballHandicap, v => { handballHandicap = mergeLiveRows(handballHandicap, v); }],
-      ['volleyball', 'winner', needVolleyballWinner, v => { volleyballWinner = mergeLiveRows(volleyballWinner, v); }],
-      ['volleyball', 'totals', needVolleyballTotals, v => { volleyballTotals = mergeLiveRows(volleyballTotals, v); }],
-      ['volleyball', 'sets', needVolleyballSets, v => { volleyballSets = mergeLiveRows(volleyballSets, v); }],
-      ['volleyball', 'handicap', needVolleyballHandicap, v => { volleyballHandicap = mergeLiveRows(volleyballHandicap, v); }],
-      ['tennis', 'winner', needTennisWinner, v => { tennisWinner = mergeLiveRows(tennisWinner, v); }],
-      ['tennis', 'totals', needTennisTotals, v => { tennisTotals = mergeLiveRows(tennisTotals, v); }],
-      ['tennis', 'handicap', needTennisHandicap, v => { tennisHandicap = mergeLiveRows(tennisHandicap, v); }],
-    ];
-    await Promise.all(liveJobs.map(async ([sport, kind, enabled, apply]) => {
-      apply(await liveFetch(sport, kind, enabled));
-    }));
-    console.log(`[Auto candidates] live scrape complete: totalRows=${liveDiagnostics.totalRows} (${Object.entries(liveDiagnostics.rows).map(([k, v]) => `${k}=${v}`).join(' ') || 'no markets requested'})`);
 
-    // Score live football fixtures directly with the probability model instead of
-    // depending on the daily snapshot cache: model any live event it does not cover.
-    if (wantsFootball && liveDiagnostics.totalRows > 0) {
-      try {
-        const result = await addLiveFootballModels(
-          predictions,
-          [f1x2, fgg, fdc, fdnb, fou05, fhomeou05, fawayou05, fhomeou45, fawayou45, fou15, fou45, fou25, fcs, fah, fcorners],
-          { buildCorners: cornerBetRequested(betTypes) },
-        );
-        predictions = result.predictions;
-        liveDiagnostics.footballModels = result.stats;
-      } catch (err) {
-        console.error('[SportyBet] live on-demand modeling failed:', err.message);
-        liveDiagnostics.footballModels = { reason: 'modeling_error', detail: String(err.message || err).slice(0, 160) };
+    let predictions = {matches:[]};
+    let [f1x2, fgg, fdc, fdnb, fou05, fhomeou05, fawayou05, fhomeou45, fawayou45, fou15, fou45, fou25, fcs, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, basketballHandicap, hockeyWinner, hockeyTotals, hockeyHandicap, handballWinner, handballTotals, handballHandicap, volleyballWinner, volleyballTotals, volleyballSets, volleyballHandicap, tennisWinner, tennisTotals, tennisHandicap] = await Promise.all([
+      safeMarket('football 1X2', needF1x2 && wantsPrematch, () => loadSportyBetMarket('1x2', 'football', autoMarketOptions)),
+      safeMarket('football GG/NG', needFGg && wantsPrematch, () => loadSportyBetMarket('gg', 'football', autoMarketOptions)),
+      safeMarket('football Double Chance', needFDc && wantsPrematch, () => loadSportyBetMarket('dc', 'football', autoMarketOptions)),
+      safeMarket('football Draw No Bet', needFDnb && wantsPrematch, () => loadSportyBetMarket('dnb', 'football', autoMarketOptions)),
+      safeMarket('football Over 0.5', needFOu05 && wantsPrematch, () => loadSportyBetMarket('ou05', 'football', autoMarketOptions)),
+      safeMarket('football Home Over 0.5', needFHomeOu05 && wantsPrematch, () => loadSportyBetMarket('home_ou05', 'football', autoMarketOptions)),
+      safeMarket('football Away Over 0.5', needFAwayOu05 && wantsPrematch, () => loadSportyBetMarket('away_ou05', 'football', autoMarketOptions)),
+      safeMarket('football Home Under 4.5', needFHomeOu45 && wantsPrematch, () => loadSportyBetMarket('home_ou45', 'football', autoMarketOptions)),
+      safeMarket('football Away Under 4.5', needFAwayOu45 && wantsPrematch, () => loadSportyBetMarket('away_ou45', 'football', autoMarketOptions)),
+      safeMarket('football Over 1.5', needFOu15 && wantsPrematch, () => loadSportyBetMarket('ou15', 'football', autoMarketOptions)),
+      safeMarket('football Under 4.5', needFOu45 && wantsPrematch, () => loadSportyBetMarket('ou45', 'football', autoMarketOptions)),
+      safeMarket('football Over/Under 2.5', needFOu25 && wantsPrematch, () => loadSportyBetMarket('ou25', 'football', autoMarketOptions)),
+      safeMarket('football Correct Score', needFCs && wantsPrematch, () => loadSportyBetMarket('cs', 'football', autoMarketOptions)),
+      safeMarket('football Asian Handicap', needFAh && wantsPrematch, () => loadSportyBetMarket('ah', 'football', autoMarketOptions)),
+      safeMarket('football Corners', needFCorners && wantsPrematch, () => loadSportyBetMarket('corners', 'football', autoMarketOptions)),
+      safeMarket('football 1H team corners', needF1hCorners && wantsPrematch, () => loadSportyBetMarket('first_half_team_corners', 'football', autoMarketOptions)),
+      safeMarket('football 1UP', needFOneup && wantsPrematch, () => loadSportyBetMarket('oneup', 'football', autoMarketOptions)),
+      safeMarket('basketball winner', needBasketballWinner && wantsPrematch, () => loadSportyBetMarket('winner', 'basketball', autoMarketOptions)),
+      safeMarket('basketball totals', needBasketballTotals && wantsPrematch, () => loadSportyBetMarket('totals', 'basketball', autoMarketOptions)),
+      safeMarket('basketball handicap', needBasketballHandicap && wantsPrematch, () => loadSportyBetMarket('handicap', 'basketball', autoMarketOptions)),
+      safeMarket('hockey winner', needHockeyWinner && wantsPrematch, () => loadSportyBetMarket('winner', 'hockey', autoMarketOptions)),
+      safeMarket('hockey totals', needHockeyTotals && wantsPrematch, () => loadSportyBetMarket('totals', 'hockey', autoMarketOptions)),
+      safeMarket('hockey handicap', needHockeyHandicap && wantsPrematch, () => loadSportyBetMarket('handicap', 'hockey', autoMarketOptions)),
+      // Handball/volleyball handicaps come from the SportyBet direct board (the
+      // SportyBet snapshot loaders only carry winner/totals/sets).
+      safeMarket('handball winner', needHandballWinner && wantsPrematch, () => loadSportyBetMarket('winner','handball',autoMarketOptions)),
+      safeMarket('handball totals', needHandballTotals && wantsPrematch, () => loadSportyBetMarket('totals','handball',autoMarketOptions)),
+      safeMarket('handball handicap', needHandballHandicap && wantsPrematch, () => loadSportyBetMarket('handicap', 'handball', autoMarketOptions)),
+      safeMarket('volleyball winner', needVolleyballWinner && wantsPrematch, () => loadSportyBetMarket('winner','volleyball',autoMarketOptions)),
+      safeMarket('volleyball totals', needVolleyballTotals && wantsPrematch, () => loadSportyBetMarket('totals','volleyball',autoMarketOptions)),
+      safeMarket('volleyball total sets', needVolleyballSets && wantsPrematch, () => loadSportyBetMarket('sets','volleyball',autoMarketOptions)),
+      safeMarket('volleyball handicap', needVolleyballHandicap && wantsPrematch, () => loadSportyBetMarket('handicap', 'volleyball', autoMarketOptions)),
+      safeMarket('tennis winner', needTennisWinner && wantsPrematch, () => loadSportyBetMarket('winner','tennis',autoMarketOptions)),
+      safeMarket('tennis totals', needTennisTotals && wantsPrematch, () => loadSportyBetMarket('totals','tennis',autoMarketOptions)),
+      safeMarket('tennis handicap', needTennisHandicap && wantsPrematch, () => loadSportyBetMarket('handicap','tennis',autoMarketOptions)),
+    ]);
+
+    if(wantsFootball&&wantsPrematch) {
+      predictions=await safeMarket('current football modelling',true,()=>currentFootballPredictions(
+        [f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners]),{matches:[]});
+    }
+
+    // Live in-play option: scrape the SportyBet live board for exactly the market
+    // families the request needs, tag the rows live:true, and merge them into the
+    // same payloads the probability engine already consumes. Live rows fully replace
+    // the same event's stale prematch rows (mixing both would double-count outcomes
+    // in the no-vig model and keep suspended prematch prices alive). Football legs
+    // are scored on demand from current fixtures and available SportyBet statistics;
+    // other sports use the same no-vig market probability as prematch.
+    let liveDiagnostics = null;
+    if (wantsLive) {
+      const liveMaxPages = Math.max(1, Math.min(20, parseInt(process.env.SPORTYBET_LIVE_MAX_PAGES || '5', 10)));
+      const liveOnly = ['live','quick_cash'].includes(liveModeNorm);
+      liveDiagnostics = { mode: liveModeNorm, rows: {}, errors: {}, totalRows: 0, footballModels: null, feeds:{} };
+      const mergeLiveRows = (payload, liveRows) => {
+        const base = liveOnly ? [] : (Array.isArray(payload?.rows) ? payload.rows : []);
+        const liveEventIds = new Set(liveRows.map(r => String(r.eventId || '')).filter(Boolean));
+        const kept = liveEventIds.size ? base.filter(r => !liveEventIds.has(String(r.eventId || ''))) : base;
+        const rows = [...kept, ...liveRows];
+        const probabilityRows=liveRows.probabilityRows ? [...(liveOnly?[]:(payload?.probabilityRows || []).filter(r=>!liveEventIds.has(String(r.eventId)))),...liveRows.probabilityRows] : undefined;
+        return { ...(payload || {}), ...(probabilityRows?{probabilityRows}:{}), rows, totalReturned: rows.length, live: true, liveRows: liveRows.length };
+      };
+      const liveFetch = async (sport, kind, enabled) => {
+        if (!enabled) return [];
+        const key = `${sport}/${kind}`;
+        try {
+          const payload = await getLiveSportMarket(sport, kind, { maxPages: liveMaxPages });
+          const rows = (payload.rows || []).map(r => ({ ...r, live: true }));
+          if(payload.probabilityRows)rows.probabilityRows=payload.probabilityRows.map(r=>({...r,live:true}));
+          liveDiagnostics.rows[key] = rows.length;
+          liveDiagnostics.feeds[key]=payload.feedDiagnostics || {ongoingEvents:payload.scannedEvents || 0};
+          liveDiagnostics.totalRows += rows.length;
+          return rows;
+        } catch (err) {
+          console.warn(`[Auto candidates] live ${key} unavailable: ${err.message}`);
+          liveDiagnostics.rows[key] = 0;
+          liveDiagnostics.errors[key] = String(err.message || err).slice(0, 160);
+          return [];
+        }
+      };
+      const liveJobs = [
+        ['football', '1x2', needF1x2, v => { f1x2 = mergeLiveRows(f1x2, v); }],
+        ['football', 'gg', needFGg, v => { fgg = mergeLiveRows(fgg, v); }],
+        ['football', 'dc', needFDc, v => { fdc = mergeLiveRows(fdc, v); }],
+        ['football', 'dnb', needFDnb, v => { fdnb = mergeLiveRows(fdnb, v); }],
+        ['football', 'ou05', needFOu05, v => { fou05 = mergeLiveRows(fou05, v); }],
+        ['football', 'home_ou05', needFHomeOu05, v => { fhomeou05 = mergeLiveRows(fhomeou05, v); }],
+        ['football', 'away_ou05', needFAwayOu05, v => { fawayou05 = mergeLiveRows(fawayou05, v); }],
+        ['football', 'home_ou45', needFHomeOu45, v => { fhomeou45 = mergeLiveRows(fhomeou45, v); }],
+        ['football', 'away_ou45', needFAwayOu45, v => { fawayou45 = mergeLiveRows(fawayou45, v); }],
+        ['football', 'ou15', needFOu15, v => { fou15 = mergeLiveRows(fou15, v); }],
+        ['football', 'ou45', needFOu45, v => { fou45 = mergeLiveRows(fou45, v); }],
+        ['football', 'ou25', needFOu25, v => { fou25 = mergeLiveRows(fou25, v); }],
+        ['football', 'cs', needFCs, v => { fcs = mergeLiveRows(fcs, v); }],
+        ['football', 'ah', needFAh, v => { fah = mergeLiveRows(fah, v); }],
+        ['football', 'corners', needFCorners, v => { fcorners = mergeLiveRows(fcorners, v); }],
+        ['basketball', 'winner', needBasketballWinner, v => { basketballWinner = mergeLiveRows(basketballWinner, v); }],
+        ['basketball', 'totals', needBasketballTotals, v => { basketballTotals = mergeLiveRows(basketballTotals, v); }],
+        ['basketball', 'handicap', needBasketballHandicap, v => { basketballHandicap = mergeLiveRows(basketballHandicap, v); }],
+        ['hockey', 'winner', needHockeyWinner, v => { hockeyWinner = mergeLiveRows(hockeyWinner, v); }],
+        ['hockey', 'totals', needHockeyTotals, v => { hockeyTotals = mergeLiveRows(hockeyTotals, v); }],
+        ['hockey', 'handicap', needHockeyHandicap, v => { hockeyHandicap = mergeLiveRows(hockeyHandicap, v); }],
+        ['handball', 'winner', needHandballWinner, v => { handballWinner = mergeLiveRows(handballWinner, v); }],
+        ['handball', 'totals', needHandballTotals, v => { handballTotals = mergeLiveRows(handballTotals, v); }],
+        ['handball', 'handicap', needHandballHandicap, v => { handballHandicap = mergeLiveRows(handballHandicap, v); }],
+        ['volleyball', 'winner', needVolleyballWinner, v => { volleyballWinner = mergeLiveRows(volleyballWinner, v); }],
+        ['volleyball', 'totals', needVolleyballTotals, v => { volleyballTotals = mergeLiveRows(volleyballTotals, v); }],
+        ['volleyball', 'sets', needVolleyballSets, v => { volleyballSets = mergeLiveRows(volleyballSets, v); }],
+        ['volleyball', 'handicap', needVolleyballHandicap, v => { volleyballHandicap = mergeLiveRows(volleyballHandicap, v); }],
+        ['tennis', 'winner', needTennisWinner, v => { tennisWinner = mergeLiveRows(tennisWinner, v); }],
+        ['tennis', 'totals', needTennisTotals, v => { tennisTotals = mergeLiveRows(tennisTotals, v); }],
+        ['tennis', 'handicap', needTennisHandicap, v => { tennisHandicap = mergeLiveRows(tennisHandicap, v); }],
+      ];
+      await Promise.all(liveJobs.map(async ([sport, kind, enabled, apply]) => {
+        apply(await liveFetch(sport, kind, enabled));
+      }));
+      console.log(`[Auto candidates] live scrape complete: totalRows=${liveDiagnostics.totalRows} (${Object.entries(liveDiagnostics.rows).map(([k, v]) => `${k}=${v}`).join(' ') || 'no markets requested'})`);
+
+      // Score live football fixtures directly with the probability model instead of
+      // depending on the daily snapshot cache: model any live event it does not cover.
+      if (wantsFootball && liveDiagnostics.totalRows > 0) {
+        try {
+          const result = await addLiveFootballModels(
+            predictions,
+            [f1x2, fgg, fdc, fdnb, fou05, fhomeou05, fawayou05, fhomeou45, fawayou45, fou15, fou45, fou25, fcs, fah, fcorners],
+            { buildCorners: cornerBetRequested(betTypes) },
+          );
+          predictions = result.predictions;
+          liveDiagnostics.footballModels = result.stats;
+        } catch (err) {
+          console.error('[SportyBet] live on-demand modeling failed:', err.message);
+          liveDiagnostics.footballModels = { reason: 'modeling_error', detail: String(err.message || err).slice(0, 160) };
+        }
       }
     }
-  }
 
-  if (wantsFootball && !['live','quick_cash'].includes(liveModeNorm) && cornerBetRequested(betTypes)) {
-    try {
-      predictions = await addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorners, marketHours);
-    } catch (err) {
-      console.error('[SportyBet] on-demand corner enrichment failed:', err.message);
+    const teamGoalAvailability = Object.fromEntries([
+      ['home_ou05',fhomeou05],['away_ou05',fawayou05],
+      ['home_ou45',fhomeou45],['away_ou45',fawayou45],
+    ].filter(([,payload]) => payload?.teamGoalDiagnostics || payload?.error)
+      .map(([kind,payload]) => [kind, {
+        rows:payload?.rows?.length || 0,
+        status:payload?.teamGoalDiagnostics?.status || 'fetch_error',
+        scannedEvents:payload?.teamGoalDiagnostics?.scannedEvents || 0,
+        eligibleFixtures:payload?.teamGoalDiagnostics?.eligibleFixtures || 0,
+        modeledFixtures:(predictions?.matches || []).filter(r => {
+          const field={home_ou05:'homeO05',away_ou05:'awayO05',home_ou45:'homeU45',away_ou45:'awayU45'}[kind];
+          return r?.[field] != null && Number.isFinite(Number(r[field]));
+        }).length,
+        detail:payload?.error || payload?.teamGoalDiagnostics?.errors?.[0] || null,
+      }]));
+
+    const candidates = buildCandidates({
+      predictions,
+      footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou05: fou05, home_ou05: fhomeou05, away_ou05: fawayou05, home_ou45: fhomeou45, away_ou45: fawayou45, ou15: fou15, ou45: fou45, ou25: fou25, cs: fcs, ah: fah, corners: fcorners, first_half_team_corners: f1hteamcorners, oneup: foneup },
+      basketballWinner,
+      basketballTotals,
+      basketballHandicap,
+      hockeyWinner,
+      hockeyTotals,
+      hockeyHandicap,
+      handballWinner,
+      handballTotals,
+      handballHandicap,
+      volleyballWinner,
+      volleyballTotals,
+      volleyballSets,
+      volleyballHandicap,
+      tennisWinner,
+      tennisTotals,
+      tennisHandicap,
+      minProbability,
+      minEdge,
+      leagues,
+      sportScope: 'all',
+      betTypes: effectiveBetTypes,
+    }).filter(c => {
+      const sportName = String(c?.sport || '').toLowerCase();
+      if (sportName.includes('football') || sportName.includes('soccer')) return selectedSet.has('football');
+      if (sportName.includes('basket')) return selectedSet.has('basketball');
+      if (sportName.includes('hockey')) return selectedSet.has('hockey');
+      if (sportName.includes('handball')) return selectedSet.has('handball');
+      if (sportName.includes('volleyball')) return selectedSet.has('volleyball');
+      if (sportName.includes('tennis')) return selectedSet.has('tennis');
+      return false;
+    });
+    if(wantsLive) {
+      for(const c of candidates){
+        const format=sportyRequest()?.liveFormats?.get(String(c.eventId));
+        if(c.live&&format)c.liveState={...c.liveState,bestOf:format};
+      }
+      const liveBefore=candidates.filter(c=>c.live);
+      const eligible=candidates.filter(c=>!c.live||liveSelectionEligible(c,{quickCash:liveModeNorm==='quick_cash'}));
+      liveDiagnostics.selectionRules={minimumProgress:'halfway',currentlyWinningRequired:true,
+        liveBefore:liveBefore.length,halfwayRejected:liveBefore.filter(c=>!halfwayPlayed(c)).length,
+        notWinningRejected:liveBefore.filter(c=>halfwayPlayed(c)&&!selectionWinningNow(c)).length,
+        eligibleLive:eligible.filter(c=>c.live).length};
+      candidates.splice(0,candidates.length,...eligible.map(c=>c.live&&liveModeNorm==='quick_cash'?{...c,quickCash:true}:c));
     }
-  }
-
-  const teamGoalAvailability = Object.fromEntries([
-    ['home_ou05',fhomeou05],['away_ou05',fawayou05],
-    ['home_ou45',fhomeou45],['away_ou45',fawayou45],
-  ].filter(([,payload]) => payload?.teamGoalDiagnostics || payload?.error)
-    .map(([kind,payload]) => [kind, {
-      rows:payload?.rows?.length || 0,
-      status:payload?.teamGoalDiagnostics?.status || 'fetch_error',
-      scannedEvents:payload?.teamGoalDiagnostics?.scannedEvents || 0,
-      eligibleFixtures:payload?.teamGoalDiagnostics?.eligibleFixtures || 0,
-      modeledFixtures:(predictions?.matches || []).filter(r => {
-        const field={home_ou05:'homeO05',away_ou05:'awayO05',home_ou45:'homeU45',away_ou45:'awayU45'}[kind];
-        return r?.[field] != null && Number.isFinite(Number(r[field]));
-      }).length,
-      detail:payload?.error || payload?.teamGoalDiagnostics?.errors?.[0] || null,
-    }]));
-
-  const candidates = buildCandidates({
-    predictions,
-    footballMarkets: { '1x2': f1x2, gg: fgg, dc: fdc, dnb: fdnb, ou05: fou05, home_ou05: fhomeou05, away_ou05: fawayou05, home_ou45: fhomeou45, away_ou45: fawayou45, ou15: fou15, ou45: fou45, ou25: fou25, cs: fcs, ah: fah, corners: fcorners, first_half_team_corners: f1hteamcorners, oneup: foneup },
-    basketballWinner,
-    basketballTotals,
-    basketballHandicap,
-    hockeyWinner,
-    hockeyTotals,
-    hockeyHandicap,
-    handballWinner,
-    handballTotals,
-    handballHandicap,
-    volleyballWinner,
-    volleyballTotals,
-    volleyballSets,
-    volleyballHandicap,
-    tennisWinner,
-    tennisTotals,
-    tennisHandicap,
-    minProbability,
-    minEdge,
-    leagues,
-    sportScope: 'all',
-    betTypes: effectiveBetTypes,
-  }).filter(c => {
-    const sportName = String(c?.sport || '').toLowerCase();
-    if (sportName.includes('football') || sportName.includes('soccer')) return selectedSet.has('football');
-    if (sportName.includes('basket')) return selectedSet.has('basketball');
-    if (sportName.includes('hockey')) return selectedSet.has('hockey');
-    if (sportName.includes('handball')) return selectedSet.has('handball');
-    if (sportName.includes('volleyball')) return selectedSet.has('volleyball');
-    if (sportName.includes('tennis')) return selectedSet.has('tennis');
-    return false;
+    // Preserve source diagnostics through the shared Website/Telegram pipeline.
+    // No API credentials or raw bookmaker payloads are returned to the browser.
+    candidates.teamGoalAvailability = teamGoalAvailability;
+    candidates.liveDiagnostics = liveDiagnostics;
+    candidates.dataSource='SportyBet direct';
+    candidates.dataFetchedAt=new Date().toISOString();
+    candidates.sourceErrors=sourceErrors;
+    return candidates;
   });
-  if(liveModeNorm==='quick_cash') {
-    const filtered=candidates.filter(c=>c.live && winningSideSelection(c));
-    candidates.splice(0,candidates.length,...filtered.map(c=>({...c,quickCash:true})));
-  }
-  // Preserve source diagnostics through the shared Website/Telegram pipeline.
-  // No API credentials or raw bookmaker payloads are returned to the browser.
-  candidates.teamGoalAvailability = teamGoalAvailability;
-  candidates.liveDiagnostics = liveDiagnostics;
-  return candidates;
 }
 
 
@@ -1729,6 +1781,9 @@ async function prepareAutoCandidatePool({
       betTypes: Array.isArray(betTypes) ? betTypes.map(String) : null,
       teamGoalAvailability: rawCandidates.teamGoalAvailability || {},
       liveDiagnostics: rawCandidates.liveDiagnostics || null,
+      dataSource:rawCandidates.dataSource,
+      dataFetchedAt:rawCandidates.dataFetchedAt,
+      sourceErrors:rawCandidates.sourceErrors||{},
     },
   };
 }
@@ -1748,60 +1803,6 @@ function analyzerTeamMatch(a, b) {
   return x === y || (Math.min(x.length, y.length) >= 6 && (x.includes(y) || y.includes(x)));
 }
 
-
-function findSavedPredictionForAnalyzerLeg(leg, predictions) {
-  const rows=Array.isArray(predictions?.matches)?predictions.matches:[];
-  if(leg?.eventId){
-    const exact=rows.find(r=>String(r?.sportyEventId||r?.eventId||'')===String(leg.eventId));
-    if(exact) return exact;
-  }
-  return rows.find(r=>analyzerTeamMatch(leg?.home,r?.home)&&analyzerTeamMatch(leg?.away,r?.away)) || null;
-}
-
-function directSavedFootballAnalyzerCandidate(leg, prediction) {
-  if(!prediction || prediction.goalModelAvailable === false || !Number.isFinite(Number(leg?.odds)) || Number(leg.odds)<=1) return null;
-  const text=analyzerNormText(`${leg.marketDesc||''} ${leg.outcomeDesc||''} ${leg.specifier||''}`);
-  if(/corner|half|period|quarter|card/.test(text))return null;
-  let probability=null, betType=null, probabilitySource=null;
-
-  if(/over 0 5/.test(text) || /total 0 5/.test(text) && /over/.test(text)){
-    const market=analyzerNormText(leg.marketDesc||'');
-    const side=/\bhome\b/.test(market)?'home':/\baway\b/.test(market)?'away':null;
-    probability=side==='home'?Number(prediction.homeO05):side==='away'?Number(prediction.awayO05):Number(prediction.o05);
-    betType=side==='home'?'home_over05':side==='away'?'away_over05':'over05';
-    // Do not treat a missing saved team-goals model as a zero/guessed probability.
-    if(side && prediction[side==='home'?'homeO05':'awayO05']==null)return null;
-  } else if(/over 1 5/.test(text) || /total 1 5/.test(text) && /over/.test(text)){
-    probability=Number(prediction.o15); betType='over15';
-  } else if(/under 4 5/.test(text) || /total 4 5/.test(text) && /under/.test(text)){
-    const market=analyzerNormText(leg.marketDesc||'');
-    const side=/\bhome\b/.test(market)?'home':/\baway\b/.test(market)?'away':null;
-    if(side && prediction[side==='home'?'homeU45':'awayU45']==null)return null;
-    probability=side==='home'?Number(prediction.homeU45):side==='away'?Number(prediction.awayU45):Number(prediction.u45);
-    betType=side==='home'?'home_under45':side==='away'?'away_under45':'under45';
-  }
-
-  if(!betType || !Number.isFinite(probability) || probability<=0) return null;
-  probabilitySource=String(prediction.dataSource||prediction.source||'Saved daily prediction');
-  const metrics=normalMetrics(Number(leg.odds),probability);
-  const edgeScore=Math.max(0,Math.min(100,50+Number(metrics.edge||0)*4));
-  const qualityScore=Math.round((Math.max(0,Math.min(100,probability))*0.55 + edgeScore*0.25 + 92*0.20)*10)/10;
-  return {
-    ...leg,
-    eventId:String(leg.eventId||prediction.sportyEventId||prediction.eventId||''),
-    sport:leg.sport||'Football',
-    home:leg.home||prediction.home,
-    away:leg.away||prediction.away,
-    tournament:leg.tournament||prediction.league||'',
-    kickoffUtc:prediction.kickoffUtc||null,
-    betType,
-    probabilitySource:`${probabilitySource} · daily cache`,
-    ...metrics,
-    qualityScore,
-    marketReliability:92,
-    supported:true,
-  };
-}
 
 function extractBookingOutcomes(booking) {
   if (!booking || typeof booking !== 'object') return [];
@@ -1970,7 +1971,7 @@ function analyzerBetTypesFromBooking(rows, sportScope) {
 
 app.post('/api/sportybet/replace-unsupported', express.json(), async (req, res) => {
   try {
-    const minProbability = Math.min(95, Math.max(0, Number(req.body?.minProbability) || 55));
+    const minProbability = Math.min(95, Math.max(0, Number(req.body?.minProbability ?? 55) || 0));
     const horizonDays = [7, 14, 21].includes(Number(req.body?.horizonDays)) ? Number(req.body.horizonDays) : 14;
     const analyzerHours = horizonDays * 24;
     const analyzedInput = Array.isArray(req.body?.analyzed) ? req.body.analyzed.slice(0, 50) : [];
@@ -1982,8 +1983,7 @@ app.post('/api/sportybet/replace-unsupported', express.json(), async (req, res) 
     else if (decodedSports.length && decodedSports.every(x => x.includes('basket'))) sportScope = 'basketball';
     else if (decodedSports.length && decodedSports.every(x => x.includes('hockey') || x.includes('ice hockey'))) sportScope = 'hockey';
 
-    // IMPORTANT: replacement is cache-only. It must never fetch fresh SportyBet market pages.
-    // We need real cached SportyBet market/outcome IDs so a replacement can later be booked.
+    // Replace only with currently offered selections on the same fixture.
     const candidates = await loadAutoCandidates({
       sportScope,
       minProbability: 0,
@@ -1992,7 +1992,7 @@ app.post('/api/sportybet/replace-unsupported', express.json(), async (req, res) 
       betTypes: null,
       marketHours: analyzerHours,
       marketMaxPages: 2,
-      marketCacheOnly: true,
+      requestedFixtures:analyzedInput,
     });
 
     let replacedCount = 0;
@@ -2031,8 +2031,8 @@ app.post('/api/sportybet/replace-unsupported', express.json(), async (req, res) 
         fullWinProbability: Number(replacement.fullWinProbability) || null,
         nonLossProbability: Number(replacement.nonLossProbability) || null,
         settlementNote: replacement.settlementNote || '',
-        reason: `Replaced unsupported selection from saved/cached data on the same fixture; meets ${minProbability}% minimum`,
-        replacementReason: 'Same-fixture cached replacement',
+        reason: `Replaced with a current SportyBet selection on the same fixture; meets ${minProbability}% minimum`,
+        replacementReason: 'Same-fixture current SportyBet replacement',
       };
     });
 
@@ -2049,10 +2049,12 @@ app.post('/api/sportybet/replace-unsupported', express.json(), async (req, res) 
       filteredCombinedOdds: Math.round(filteredOdds * 100) / 100,
       replacedCount,
       unsupportedCount: analyzed.filter(x => !x.supported).length,
-      replacementCacheOnly: true,
+      replacementCacheOnly: false,
+      dataSource:candidates.dataSource,
+      dataFetchedAt:candidates.dataFetchedAt,
       replacementNote: replacedCount
-        ? `${replacedCount} unsupported selection${replacedCount === 1 ? '' : 's'} replaced from saved data on the same fixture.`
-        : 'No safe same-fixture cached replacement met the current probability/red-flag rules.',
+        ? `${replacedCount} unsupported selection${replacedCount === 1 ? '' : 's'} replaced with current SportyBet markets on the same fixture.`
+        : 'No current same-fixture replacement met your probability/red-flag rules.',
     });
   } catch (err) {
     console.error('Website analyzer replacement error:', err.code || '', err.message);
@@ -2063,7 +2065,7 @@ app.post('/api/sportybet/replace-unsupported', express.json(), async (req, res) 
 app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
   try {
     const bookingCode = String(req.body?.bookingCode || '').trim().toUpperCase();
-    const minProbability = Math.min(95, Math.max(0, Number(req.body?.minProbability) || 55));
+    const minProbability = Math.min(95, Math.max(0, Number(req.body?.minProbability ?? 55) || 0));
     const horizonDays = [7, 14, 21].includes(Number(req.body?.horizonDays)) ? Number(req.body.horizonDays) : Math.max(7, Math.min(21, parseInt(process.env.ANALYZER_DAYS || '14', 10)));
     const analyzerHours = horizonDays * 24;
     const analyzerMaxPages = Math.max(1, Math.min(4, parseInt(process.env.ANALYZER_MAX_PAGES || '2', 10)));
@@ -2088,7 +2090,7 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
       leg => isAnalyzerOverUnderMarket(leg.marketDesc) && isGenericAnalyzerSelection(leg.outcomeDesc)
     );
     const analyzerOver15 = needsOver15Repair
-      ? await loadSportyBetMarket('ou15', 'football', { hours: analyzerHours, maxPages: analyzerMaxPages })
+      ? await loadSportyBetMarket('ou15', 'football', { hours: analyzerHours, maxPages: analyzerMaxPages,fixtures:decodedRows })
       : { rows: [] };
     let sourceRows = decodedRows.map(leg => resolveGenericOver15Leg(leg, analyzerOver15?.rows));
 
@@ -2124,42 +2126,19 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
     const analyzerBetTypes = analyzerBetTypesFromBooking(sourceRows, analyzerSportScope);
     console.log(`[Analyzer] scope=${analyzerSportScope} legs=${sourceRows.length} betTypes=${analyzerBetTypes ? analyzerBetTypes.join(',') : 'all-supported'}`);
 
-    // First score common football goal lines directly from the Daily Predictions cache.
-    // This avoids repurchasing SportyBet market pages simply to score a booked Over 0.5/
-    // Over 1.5/Under 4.5 selection. Imported booking identifiers remain untouched.
-    const savedPredictions = analyzerSportScope === 'football' || analyzerSportScope === 'all'
-      ? await loadPredictions()
-      : { matches: [] };
-    const directSaved = sourceRows.map(leg => {
-      if(analyzerSportScope!=='football' && analyzerSportScope!=='all') return null;
-      const p=findSavedPredictionForAnalyzerLeg(leg,savedPredictions);
-      return directSavedFootballAnalyzerCandidate(leg,p);
-    });
-    const needsCandidateLookup = directSaved.some(x=>!x);
-
     const candidateStartedAt = Date.now();
-    const candidates = needsCandidateLookup ? await loadAutoCandidates({
+    const candidates = await loadAutoCandidates({
       sportScope: analyzerSportScope,
       minProbability: 0,
       minEdge: -25,
       leagues: null,
       betTypes: analyzerBetTypes,
       marketHours: analyzerHours,
-      marketMaxPages: analyzerMaxPages
-    }) : [];
-    console.log(`[Analyzer] direct-cache=${directSaved.filter(Boolean).length}/${sourceRows.length} candidates=${candidates.length} loaded in ${Date.now()-candidateStartedAt}ms total=${Date.now()-startedAt}ms`);
+      marketMaxPages: analyzerMaxPages,
+      requestedFixtures:sourceRows,
+    });
+    console.log(`[Analyzer] current SportyBet candidates=${candidates.length} loaded in ${Date.now()-candidateStartedAt}ms total=${Date.now()-startedAt}ms`);
     const analyzed = sourceRows.map((leg, index) => {
-      const direct=directSaved[index];
-      if(direct){
-        const probability=Number(direct.probability)||0;
-        const qualified=probability>=minProbability;
-        return {
-          index,
-          ...direct,
-          qualified,
-          reason: qualified ? `Meets ${minProbability}% minimum (saved Daily Prediction)` : `Below ${minProbability}% minimum (saved Daily Prediction)`,
-        };
-      }
       let best = null, bestScore = -1;
       // Exact SportyBet event ID is the strongest signal. Only fall back to team-name
       // matching when the imported booking does not provide a usable event ID.
@@ -2215,6 +2194,8 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
       filteredCombinedOdds: Math.round(filteredOdds*100)/100,
       analyzed,
       qualifiedSelections,
+      dataSource:candidates.dataSource,
+      dataFetchedAt:candidates.dataFetchedAt,
       generatedAt: new Date().toISOString(),
       note: `Analyzer searched up to ${horizonDays} days ahead. Only markets supported by the current Matchday probability engine are scored. Unsupported selections are never assigned a guessed probability.`,
     });
@@ -2244,7 +2225,8 @@ async function autoCornerDiagnostics(betTypes,liveMode='prematch') {
   if(!wantsCorners) return null;
   try{
     const live=['live','quick_cash'].includes(liveMode);
-    const [pred,c] = await Promise.all([loadPredictions(),live?getLiveSportMarket('football','corners'):loadSportyBetMarket('corners')]);
+    const c=await (live?getLiveSportMarket('football','corners'):loadSportyBetMarket('corners'));
+    const pred=live?{matches:[]}:await currentFootballPredictions([c]);
     const playable=buildCandidates({predictions:live?{matches:[]}:pred,footballMarkets:{corners:c},sportScope:'football',betTypes:['corners_over','corners_under'],minProbability:0,minEdge:0});
     const matches=Array.isArray(pred?.matches)?pred.matches:[];
     return {
@@ -2309,6 +2291,9 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
         todayCandidateCount: prepared.diagnostics.afterTodayFilter,
         liveMode,
         liveDiagnostics: prepared.diagnostics.liveDiagnostics,
+        dataSource:prepared.diagnostics.dataSource,
+        dataFetchedAt:prepared.diagnostics.dataFetchedAt,
+        sourceErrors:prepared.diagnostics.sourceErrors,
         teamGoalAvailability: prepared.diagnostics.teamGoalAvailability,
         cornerDiagnostics,
         hint: prepared.diagnostics.liveDiagnostics
@@ -2316,8 +2301,10 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
             ? 'Some live market reads failed. See the live source errors below.'
             : prepared.diagnostics.liveDiagnostics.totalRows===0
               ? 'No playable live markets were returned for the selected sports and bet types. Finished, suspended and upcoming games are excluded.'
-              : 'Live markets were found, but no selection passed your probability, edge, league, maximum-odds and match-stage settings.')
-          : cornerDiagnostics
+              : 'Live markets were found, but selections must be at least halfway through the match and currently winning for the offered bet type, then pass your probability and other settings.')
+          : Object.keys(prepared.diagnostics.sourceErrors||{}).length
+            ? 'Some current SportyBet market reads failed. See the source errors and retry.'
+            : cornerDiagnostics
             ? 'Corners use an offered Over/Under price pair when historical statistics are unavailable. A historical corner model is not required.'
             : undefined,
       });
@@ -2335,8 +2322,13 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       todayCandidateCount: prepared.diagnostics.afterTodayFilter,
       candidatesBeforeMaxOddsFilter: redFlagSafeCandidatesCount,
       candidatesBeforeRedFlagFilter: rawCandidatesCount,
+      liveMode,
+      liveDiagnostics:prepared.diagnostics.liveDiagnostics,
       redFlagRejected,
       betTypes,
+      dataSource:prepared.diagnostics.dataSource,
+      dataFetchedAt:prepared.diagnostics.dataFetchedAt,
+      sourceErrors:prepared.diagnostics.sourceErrors,
       generatedAt: new Date().toISOString(),
       note: 'Value engine: football uses 1X2, Corners O/U, GG/NG, Double Chance, Draw No Bet, Over 0.5/1.5/2.5, Under 2.5/4.5, Correct Score and Asian Handicap +0/+0.25/-0.25. DNB/AH use settlement-aware fair odds and EV; basketball/hockey/handball/volleyball totals and handicaps remain no-vig market estimates.',
     });
@@ -2505,8 +2497,7 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
     { label: '1000 HANDBALL + VOLLEYBALL', targetOdds: 1000, minProbability: 80, maxSelections: 15, flexibleTarget: true, sportScopeLabel: 'handball + volleyball', sportTiers: TELEGRAM_HANDBALL_VOLLEYBALL_SPORT_TIERS },
   ];
 
-  // One market fetch covers all six sports for every target. Saved market caching
-  // remains enabled; missing market data may still be fetched as requested.
+  // One current market scan covers all six sports for every target.
   // Removed 1UP and first-half team-corner markets are never reintroduced.
   const globalCandidates = await loadAutoCandidates({
     sportScope: 'all', minProbability: 0, minEdge: -25, leagues,
@@ -2682,6 +2673,52 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
 }
 
 
+
+async function runTelegramQuickCash({redis,hourKey,dateKey,onPostingStart=()=>{},shouldAbort=()=>false}) {
+  return withFreshSportyRequest(async()=>{
+    const checkCancelled=()=>{
+      if(shouldAbort()){const err=new Error('Quick Cash cancelled before Telegram posting');err.code='TELEGRAM_CANCELLED_BEFORE_POST';throw err;}
+    };
+    checkCancelled();
+    const config=quickCashConfig();
+    const betTypes=Object.values(AUTO_BET_TYPES_BY_SPORT).flat();
+    const prepared=await prepareAutoCandidatePool({sportScope:'all',liveMode:'quick_cash',
+      minProbability:0,minEdge:-25,leagues:null,betTypes,todayOnly:false});
+    checkCancelled();
+    const pool=prepared.candidates;
+    const empty=reason=>({sent:false,skipped:true,reason,liveMode:'quick_cash',minProbability:0,candidateCount:pool.length});
+    if(!pool.length){
+      const errors={...prepared.diagnostics.sourceErrors,...prepared.diagnostics.liveDiagnostics?.errors};
+      if(Object.keys(errors).length)throw new Error('Current SportyBet live reads failed: '+Object.keys(errors).join(', '));
+      return empty('no_eligible_live_games');
+    }
+    const selected=selectAutoBet(pool,{targetOdds:config.targetOdds,maxSelections:config.maxSelections,trials:400});
+    if(!selected.selections.length)return empty('no_eligible_combination');
+    // Always perform a second current read before creating an hourly live code.
+    const current=await validateLiveSelections(selected.selections,{maxPages:Math.max(1,Math.min(20,Number(process.env.SPORTYBET_LIVE_MAX_PAGES)||5))});
+    checkCancelled();
+    const result=telegramCombinedResult(current.valid,config.targetOdds,pool.length);
+    if(!result.selections.length)return empty('live_selections_changed_before_booking');
+    const booking=await bookBet(result.selections.map(s=>({eventId:s.eventId,marketId:s.marketId,outcomeId:s.outcomeId,...(s.specifier?{specifier:s.specifier}:{})})));
+    if(!booking?.shareCode)throw new Error('SportyBet did not return a Quick Cash booking code');
+    if(booking.unavailableOutcomes?.length)throw new Error('SportyBet removed selections while creating the Quick Cash code; retry the current board');
+    checkCancelled();
+    await saveTelegramQuickCashCode(redis,dateKey,hourKey,booking,result);
+    checkCancelled();
+    await onPostingStart();
+    const lines=['💵 PLOT207 SPORTS • HOURLY QUICK CASH',`${dateKey} · ${hourKey.slice(11)}:00 WAT`,
+      'Minimum probability: 0%','Late live matches · at least halfway · selection currently winning',
+      `Games: ${result.selections.length} · Combined odds: ${result.combinedOdds.toFixed(2)}`,''];
+    result.selections.forEach((s,i)=>lines.push(`${i+1}. ${s.home} vs ${s.away}\n   ${s.outcomeDesc} — ${s.marketDesc} @ ${Number(s.odds).toFixed(2)} · ${Number(s.probability).toFixed(1)}%`));
+    lines.push('',`SportyBet code: ${booking.shareCode}`,...(booking.shareURL?[booking.shareURL]:[]),
+      'Added to 🎟 Today’s Codes. Live scores and market availability can change.');
+    await sendTelegramMessage(lines.join('\n'));
+    await trackTelegramSlip(redis,{shareCode:booking.shareCode,shareURL:booking.shareURL,targetOdds:`QC ${hourKey.slice(11)}:00 WAT`,
+      combinedOdds:result.combinedOdds,sportScope:'all live',selections:result.selections});
+    return {sent:true,liveMode:'quick_cash',minProbability:0,shareCode:booking.shareCode,combinedOdds:result.combinedOdds,
+      selections:result.selections.length,candidateCount:pool.length,droppedLive:current.dropped.length,reachedTarget:result.reachedTarget};
+  });
+}
 
 // Copy Hub is isolated from the Auto Builder and disabled by default.
 // It only reads public source data + existing booking-code data and stores its own leaderboard state.
@@ -3078,66 +3115,65 @@ function telegramAnalyzerReplacementFor(leg, candidates, minProbability) {
 }
 
 async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDays = 14, replaceUnsupported = false, includeLive = false) {
-  horizonDays = Math.min(21, Math.max(7, Number(horizonDays) || 14));
-  const analyzerHours = horizonDays * 24;
-  const booking = await getBooking(bookingCode);
-  const decodedRows = extractBookingOutcomes(booking).map(normalizeBookingLeg).filter(x => x.home || x.away || x.eventId);
-  if (!decodedRows.length) throw new Error('The SportyBet code was found, but no selections could be read from it.');
+  return withFreshSportyRequest(async()=>{
+    horizonDays = Math.min(21, Math.max(7, Number(horizonDays) || 14));
+    const analyzerHours = horizonDays * 24;
+    const booking = await getBooking(bookingCode);
+    const decodedRows = extractBookingOutcomes(booking).map(normalizeBookingLeg).filter(x => x.home || x.away || x.eventId);
+    if (!decodedRows.length) throw new Error('The SportyBet code was found, but no selections could be read from it.');
 
-  const decodedSports = decodedRows.map(x => analyzerNormText(x.sport)).filter(Boolean);
-  let sportScope = 'all';
-  if (decodedSports.length && decodedSports.every(x => x.includes('football') || x.includes('soccer'))) sportScope = 'football';
-  else if (decodedSports.length && decodedSports.every(x => x.includes('basket'))) sportScope = 'basketball';
-  else if (decodedSports.length && decodedSports.every(x => x.includes('hockey') || x.includes('ice hockey'))) sportScope = 'hockey';
+    const decodedSports = decodedRows.map(x => analyzerNormText(x.sport)).filter(Boolean);
+    let sportScope = 'all';
+    if (decodedSports.length && decodedSports.every(x => x.includes('football') || x.includes('soccer'))) sportScope = 'football';
+    else if (decodedSports.length && decodedSports.every(x => x.includes('basket'))) sportScope = 'basketball';
+    else if (decodedSports.length && decodedSports.every(x => x.includes('hockey') || x.includes('ice hockey'))) sportScope = 'hockey';
 
-  // Only use the Daily Refresh/shared cache for market matching and replacement. get_booking
-  // remains the one live lookup needed to decode the submitted code.
-  const analyzerOver15 = sportScope === 'football'
-    ? await loadSportyBetMarket('ou15', 'football', { hours: analyzerHours, maxPages: 2, cacheOnly: true })
-    : { rows: [] };
-  const sourceRows = decodedRows.map(leg => resolveGenericOver15Leg(leg, analyzerOver15?.rows));
+    // Read current markets to match and replace selections from the submitted code.
+    const analyzerOver15 = sportScope === 'football'
+      ? await loadSportyBetMarket('ou15', 'football', { hours: analyzerHours, maxPages: 2,fixtures:decodedRows })
+      : { rows: [] };
+    const sourceRows = decodedRows.map(leg => resolveGenericOver15Leg(leg, analyzerOver15?.rows));
 
-  // Load the full supported market universe for the booking's sport from cache only.
-  // This lets an unsupported imported market be replaced by another supported saved
-  // market on the exact same fixture without fetching fresh SportyBet market pages.
-  // includeLive is an explicit analyzer opt-in: ongoing in-play games are fetched
-  // fresh (never from the cache-only prematch path) and scored with the same model.
-  const candidates = await loadAutoCandidates({
-    sportScope, minProbability:0, minEdge:-25, leagues:null, betTypes:null,
-    marketHours:analyzerHours, marketMaxPages:2, marketCacheOnly:true,
-    liveMode: includeLive ? 'both' : 'prematch'
-  });
+    // Read the supported market universe for the booking's sport. Live games
+    // remain an explicit opt-in and use the same fresh request and model.
+    const candidates = await loadAutoCandidates({
+      sportScope, minProbability:0, minEdge:-25, leagues:null, betTypes:null,
+      marketHours:analyzerHours, marketMaxPages:2,
+      requestedFixtures:sourceRows,
+      liveMode: includeLive ? 'both' : 'prematch'
+    });
 
-  const analyzed = sourceRows.map((leg, index) => {
-    let best=null, bestScore=-1;
-    const exact = leg.eventId ? candidates.filter(c => String(c.eventId||'') === String(leg.eventId)) : [];
-    for (const c of (exact.length ? exact : candidates)) {
-      const score=analyzerCandidateScore(leg,c); if(score>bestScore){bestScore=score;best=c;}
-    }
-    if (!best || bestScore < 60) {
-      if (replaceUnsupported) {
-        const replacement = telegramAnalyzerReplacementFor(leg, candidates, minProbability);
-        if (replacement) {
-          return {
-            index, ...leg, supported:true, qualified:true, replaced:true,
-            originalMarketDesc: leg.marketDesc, originalOutcomeDesc: leg.outcomeDesc, originalOdds: leg.odds,
-            eventId:String(replacement.eventId||leg.eventId||''), marketId:String(replacement.marketId||''), outcomeId:String(replacement.outcomeId||''), specifier:replacement.specifier||null,
-            sport:replacement.sport||leg.sport, home:replacement.home||leg.home, away:replacement.away||leg.away,
-            outcomeDesc:replacement.outcomeDesc, marketDesc:replacement.marketDesc, odds:Number(replacement.odds||0),
-            probability:Number(replacement.probability||0), edge:Number(replacement.edge||0), qualityScore:Number(replacement.qualityScore||0),
-            replacementReason:'Unsupported imported market replaced from saved/cached data on the same fixture'
-          };
-        }
+    const analyzed = sourceRows.map((leg, index) => {
+      let best=null, bestScore=-1;
+      const exact = leg.eventId ? candidates.filter(c => String(c.eventId||'') === String(leg.eventId)) : [];
+      for (const c of (exact.length ? exact : candidates)) {
+        const score=analyzerCandidateScore(leg,c); if(score>bestScore){bestScore=score;best=c;}
       }
-      return { index, ...leg, supported:false, qualified:false, replaced:false };
-    }
-    return { index, ...leg, supported:true, qualified:Number(best.probability||0)>=minProbability, replaced:false, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:best.outcomeDesc, marketDesc:best.marketDesc, odds:Number(best.odds||leg.odds||0) };
+      if (!best || bestScore < 60) {
+        if (replaceUnsupported) {
+          const replacement = telegramAnalyzerReplacementFor(leg, candidates, minProbability);
+          if (replacement) {
+            return {
+              index, ...leg, supported:true, qualified:true, replaced:true,
+              originalMarketDesc: leg.marketDesc, originalOutcomeDesc: leg.outcomeDesc, originalOdds: leg.odds,
+              eventId:String(replacement.eventId||leg.eventId||''), marketId:String(replacement.marketId||''), outcomeId:String(replacement.outcomeId||''), specifier:replacement.specifier||null,
+              sport:replacement.sport||leg.sport, home:replacement.home||leg.home, away:replacement.away||leg.away,
+              outcomeDesc:replacement.outcomeDesc, marketDesc:replacement.marketDesc, odds:Number(replacement.odds||0),
+              probability:Number(replacement.probability||0), edge:Number(replacement.edge||0), qualityScore:Number(replacement.qualityScore||0),
+              replacementReason:'Unsupported imported market replaced with a current SportyBet market on the same fixture'
+            };
+          }
+        }
+        return { index, ...leg, supported:false, qualified:false, replaced:false };
+      }
+      return { index, ...leg, supported:true, qualified:Number(best.probability||0)>=minProbability, replaced:false, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:best.outcomeDesc, marketDesc:best.marketDesc, odds:Number(best.odds||leg.odds||0) };
+    });
+    return { bookingCode, analyzed, supported: analyzed.filter(x=>x.supported).length, qualified: analyzed.filter(x=>x.qualified).length, replaced: analyzed.filter(x=>x.replaced).length, unsupported: analyzed.filter(x=>!x.supported).length, total: analyzed.length, minProbability, replaceUnsupported:!!replaceUnsupported, cacheOnlyMarkets:false, includeLive:!!includeLive,dataSource:candidates.dataSource,dataFetchedAt:candidates.dataFetchedAt };
   });
-  return { bookingCode, analyzed, supported: analyzed.filter(x=>x.supported).length, qualified: analyzed.filter(x=>x.qualified).length, replaced: analyzed.filter(x=>x.replaced).length, unsupported: analyzed.filter(x=>!x.supported).length, total: analyzed.length, minProbability, replaceUnsupported:!!replaceUnsupported, cacheOnlyMarkets:true, includeLive:!!includeLive };
 }
 
 function telegramAiAnalysisText(a) {
-  const lines=[`🔎 MATCHDAY AI CODE ANALYSIS — ${a.bookingCode}`, `Scored: ${a.supported}/${a.total}`, `Qualified ≥ ${a.minProbability}%: ${a.qualified}/${a.total}`, ...(a.includeLive?['🔴 Live opt-in: ongoing in-play games were included'] : []), ...(a.replaceUnsupported?[`Replaced from saved data: ${a.replaced||0}`]:[]), ''];
+  const lines=[`🔎 MATCHDAY AI CODE ANALYSIS — ${a.bookingCode}`, `Scored: ${a.supported}/${a.total}`, `Qualified ≥ ${a.minProbability}%: ${a.qualified}/${a.total}`, ...(a.includeLive?['🔴 Live opt-in: ongoing in-play games were included'] : []), ...(a.replaceUnsupported?[`Replaced using current SportyBet markets: ${a.replaced||0}`]:[]), ''];
   a.analyzed.forEach((x,i)=>{
     const icon=x.replaced?'♻️':!x.supported?'⚪':x.qualified?'✅':'❌';
     lines.push(`${icon} ${i+1}. ${x.live===true?'🔴 LIVE ':''}${x.home||'Unknown'} vs ${x.away||'Unknown'}`);
@@ -3294,11 +3330,11 @@ async function handleTelegramAiUpdate(update) {
       user.preferences.builder.liveMode=order[(order.indexOf(cur)+1)%order.length];
       await saveTelegramAiUser(redis,user);
       const mode=user.preferences.builder.liveMode;
-      const note=mode==='quick_cash'?'💵 QUICK CASH: late live matches with a current leader, filtered by your probability and selected winner/side markets. No result is guaranteed.':mode==='live'
-        ?'🔴 LIVE ONLY: tickets are built exclusively from matches being played right now. Live odds are re-checked just before the code is created.'
+      const note=mode==='quick_cash'?'💵 QUICK CASH: late live matches, at least halfway through, with selections currently winning under the offered SportyBet bet type. Your probability settings apply. Hourly scheduled QC uses 0% and appears in Today’s Codes.':mode==='live'
+        ?'🔴 LIVE ONLY: matches must be at least halfway through and the selected market must currently be winning. Progress, scores and live odds are re-checked before code generation.'
         :mode==='both'
-          ?'🔴+🟢 LIVE + PREMATCH: the builder may mix ongoing live matches with upcoming fixtures. Live legs are re-checked before booking.'
-          :'🟢 PREMATCH ONLY: tickets use upcoming fixtures from the daily cached snapshot (fastest).';
+          ?'🔴+🟢 LIVE + PREMATCH: upcoming games can be mixed with live selections that are at least halfway through and currently winning. Live legs are re-checked before booking.'
+          :'🟢 PREMATCH ONLY: tickets read current upcoming SportyBet fixtures when you request a build.';
       return sendTelegramAiMessageTo(chatId,`${note}\n\n${telegramAiBuilderSummary(user)}`,{reply_markup:telegramAiBuilderKeyboard(user)});
     }
     else if (d === 'builder:markets') return sendTelegramAiMessageTo(chatId, '🎲 Select the exact bet types the Auto Builder may use. Tap a market to toggle it:', { reply_markup: telegramAiMarketsKeyboard(user) });
@@ -3327,13 +3363,13 @@ async function handleTelegramAiUpdate(update) {
       user.preferences.analyzer.includeLive=!user.preferences.analyzer.includeLive;
       await saveTelegramAiUser(redis,user);
       const on=user.preferences.analyzer.includeLive;
-      return sendTelegramAiMessageTo(chatId,`${on?'🔴 Live opt-in ON: ongoing in-play games are also scored when analyzing a code.':'🟢 Live opt-in OFF: only upcoming fixtures are used for analysis.'}\n\n${telegramAiAnalyzerSummary(user)}`,{reply_markup:telegramAiAnalyzerKeyboard(user)});
+      return sendTelegramAiMessageTo(chatId,`${on?'🔴 Live opt-in ON: selections at least halfway through and currently winning are also scored.':'🟢 Live opt-in OFF: only upcoming fixtures are used for analysis.'}\n\n${telegramAiAnalyzerSummary(user)}`,{reply_markup:telegramAiAnalyzerKeyboard(user)});
     }
     else if (d === 'analyzer:horizon') return sendTelegramAiMessageTo(chatId, '📅 How far ahead should Matchday search for fixtures in the imported code?', { reply_markup: telegramAiAnalyzerHorizonKeyboard() });
     else if (d === 'analyzer:replace:last') {
       const last=user.lastAnalyzerRequest;
       if(!last?.bookingCode)return sendTelegramAiMessageTo(chatId,'There is no recent analysis to repair. Analyze a booking code first.',{reply_markup:telegramAiAnalyzerKeyboard(user)});
-      await sendTelegramAiMessageTo(chatId,`♻️ Checking saved markets for safe same-fixture replacements in ${last.bookingCode}…`);
+      await sendTelegramAiMessageTo(chatId,`♻️ Checking current SportyBet markets for same-fixture replacements in ${last.bookingCode}…`);
       try{
         const repaired=await analyzeTelegramAiCode(last.bookingCode,last.minProbability,last.horizonDays,true,!!last.includeLive);
         user.lastAnalyzerRequest={...last,repairedAt:new Date().toISOString()};await saveTelegramAiUser(redis,user);
@@ -3608,6 +3644,8 @@ app.post('/api/telegram/bot/setup', express.json(), async (req, res) => {
   } catch(err){ res.status(502).json({error:'Telegram AI setup failed',detail:process.env.NODE_ENV==='production'?undefined:err.message}); }
 });
 
+registerTelegramQuickCashRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runQuickCash:runTelegramQuickCash});
+
 app.get('/api/telegram/status', (req, res) => {
   res.json({
     configured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID && process.env.TELEGRAM_JOB_SECRET),
@@ -3617,6 +3655,8 @@ app.get('/api/telegram/status', (req, res) => {
       regular: { minProbabilityByTarget: { '2':80, '3':80 }, winnerOnly: false, targets: [2,3], selectionCaps: { '2':20, '3':20 }, supportedMarkets: TELEGRAM_HIGH_ODDS_BET_TYPES, prioritySports: TELEGRAM_2X3X_SPORT_TIERS, primaryPrioritySports: ['hockey','basketball','tennis'], allSixSports: false, positiveEdgeRequired: false, redFlagProtection: true },
       safe: { minProbability: 85, winnerOnly: false, supportedMarkets: TELEGRAM_HIGH_ODDS_BET_TYPES, prioritySports: TELEGRAM_SAFE_SPORT_TIERS, primaryPrioritySports: ['hockey','basketball'], combinedOddsMin: 1.30, combinedOddsMax: 5.00, selectionCap: 15, positiveEdgeRequired: false, redFlagProtection: true },
       sport1000: { targetOdds: 1000, hardTarget: false, minProbability: 80, maxSelections: 15, winnerFirst: true, pools: { iceHockey: ['hockey'], basketball: ['basketball'], handballVolleyball: ['handball','volleyball'] }, supportedMarkets: TELEGRAM_HIGH_ODDS_BET_TYPES, positiveEdgeRequired: false, redFlagProtection: true },
+      quickCash: {...quickCashConfig(),allSixSports:true,minimumProgress:'halfway',currentlyWinningRequired:true,
+        cron:'5 * * * *',todayCodes:true,endpoint:'/api/telegram/quick-cash'},
     },
     maxSelections: Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10))),
     scheduler: 'GitHub Actions',

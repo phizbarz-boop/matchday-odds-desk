@@ -34,8 +34,8 @@ function writeSnapshotFile(key, snapshot) {
 // store the payloads as shared snapshots. The prematch list request embeds every
 // configured market (marketId CSV), so all football kinds reuse the same cached
 // pages — seeding a whole sport costs about maxPages list requests, not one
-// request per market. This is what keeps Auto Builder/Telegram builds fast during
-// the day: they read these snapshots instead of calling SportyBet again.
+// request per market. These snapshots support background jobs and daily status;
+// user-requested builds and analyses read current SportyBet data independently.
 async function collectSportySnapshots({ hours, maxPages, fixtures }) {
   const snapshots = [];
   const add = (sport, kind, payload) => {
@@ -188,9 +188,8 @@ async function storeResult(payload, marketSnapshots = []) {
 
     await client.set('predictions:latest', JSON.stringify(finalPayload));
 
-    // Seed the shared SportyBet daily snapshot cache from data already paid for by
-    // this refresh. These keys deliberately do not include horizon/page count, so
-    // Analyzer/Auto Builder requests can reuse a broader refresh snapshot.
+    // Seed the shared SportyBet daily snapshot cache from this refresh.
+    // User-requested builds bypass these snapshots for current market availability.
     const snapshotTtl = Math.max(3600, parseInt(process.env.SPORTYBET_DAILY_SNAPSHOT_SECONDS || '93600', 10));
     for (const snap of marketSnapshots) {
       if (!snap?.payload || !Array.isArray(snap.payload.rows) || !snap.payload.rows.length) continue;

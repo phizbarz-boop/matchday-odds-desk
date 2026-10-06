@@ -151,7 +151,7 @@ test('standalone live page is removed and Auto Builder carries the match-status 
   assert.ok(!fs.existsSync(path.join(__dirname, '..', 'public', 'live.html')), 'public/live.html must be deleted');
   assert.ok(!/href="\/live\.html"/.test(indexSrc), 'header must not link to live.html');
   assert.match(indexSrc, /id="auto-live-mode"/);
-  assert.match(indexSrc, /Live only \(ongoing games\)/);
+  assert.match(indexSrc, /Live only \(halfway \+ winning\)/);
   assert.match(indexSrc, /state\.autoLiveMode=liveMode/);
   assert.match(indexSrc, /maxSelections,todayOnly,liveMode,betTypes,leagues/, 'auto-pick POST body must include liveMode');
   assert.match(indexSrc, /x\.live===true\?\{live:true,quickCash:/, 'booking selections must carry live flag');

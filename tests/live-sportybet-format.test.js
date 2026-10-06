@@ -82,7 +82,7 @@ test('Q4 Quick Cash reads the actual cumulative score and excludes tied games',(
   const events=extractUpcomingEvents(boards().basketball).events;
   const q4=flattenDetailedMarkets(events[0],{live:true,sport:'Basketball'}).find(r=>r.marketId==='219');
   assert.equal(lateStage(q4),true);assert.equal(winningSideSelection({...q4,betType:'basketball_winner'}),true);
-  assert.equal(lateStage({...q4,liveState:liveState(events[1])}),false);
+  assert.equal(winningSideSelection({...q4,liveState:liveState(events[1])}),false);
   const incomplete=flattenDetailedMarkets(events[1],{live:true,sport:'Basketball'});
   assert.equal(buildCandidates({basketballWinner:{rows:incomplete},sportScope:'basketball',minProbability:0}).length,0,'one inactive side cannot become a 100% estimate');
 });

@@ -20,7 +20,7 @@ function boards(){
       event('sr:match:live-format-future',{status:0,matchStatus:'Not start',setScore:'0:0',playedSeconds:'02:00'}),
     ]},
     {id:'sr:tournament:test2',name:'Live League B',categoryName:'Country B',events:[
-      event('sr:match:live-format-late',{playedSeconds:'82:30',markets:[result(),
+      event('sr:match:live-format-late',{playedSeconds:'82:30',cornerScore:'6:3',markets:[result(),
         market('166','Total Corners Over/Under',[outcome('12','Over 8.5',1.2),outcome('13','Under 8.5',5)],{specifier:'total=8.5'}),
         market('601','1X2 - 1UP',[outcome('1','Home',1.04),outcome('2','Draw',9),outcome('3','Away',27)]),
         market('128','1X2 & Over/Under',[outcome('1','Home and Over 2.5',2.5)])]}),

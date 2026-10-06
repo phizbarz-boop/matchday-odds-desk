@@ -59,9 +59,9 @@ test('terminal status wins over stale flags and kickoff alone is excluded',()=>{
 });
 test('Quick Cash requires late stage, non-tied score, and the selected leader',()=>{
  const r={...row('1','Home',1.2),live:true,betType:'home_win',liveState:{phase:'2nd half',minute:80,homeScore:2,awayScore:1}};
- assert.ok(winningSideSelection(r));assert.equal(winningSideSelection({...r,betType:'away_win'}),false);
+ assert.ok(winningSideSelection(r));assert.equal(winningSideSelection({...r,betType:'away_win',outcomeId:'3',outcomeDesc:'Away'}),false);
  assert.equal(lateStage({...r,liveState:{...r.liveState,minute:60}}),false);
- assert.equal(lateStage({...r,liveState:{...r.liveState,awayScore:2}}),false);
+ assert.equal(winningSideSelection({...r,liveState:{...r.liveState,awayScore:2}}),false);
  assert.equal(winningSideSelection({...r,betType:'over25',marketDesc:'Over/Under'}),false);
  assert.ok(lateStage({...r,sport:'Basketball',liveState:{phase:'4th quarter',homeScore:89,awayScore:80}}));
  assert.equal(lateStage({...r,sport:'Basketball',liveState:{phase:'3rd quarter',homeScore:89,awayScore:80}}),false);
@@ -75,7 +75,7 @@ test('fresh booking rejects finished matches and Quick Cash leader changes',asyn
 test('live detail fallback discovers offered corners and retains live score metadata',async()=>{
  direct.setFetchForTesting(async url=>{
   const u=new URL(url);
-  if(u.pathname.endsWith('/eventDetail'))return response({eventId:fixture.eventId,markets:[{id:'778',desc:'Corners Over/Under',specifier:'total=9.5',outcomes:[{id:'12',desc:'Over',odds:1.4},{id:'13',desc:'Under',odds:3}]}]});
+  if(u.searchParams.has('eventId'))return response({eventId:fixture.eventId,markets:[{id:'778',desc:'Corners Over/Under',specifier:'total=9.5',outcomes:[{id:'12',desc:'Over',odds:1.4},{id:'13',desc:'Under',odds:3}]}]});
   return response([{eventId:fixture.eventId,homeTeamName:fixture.home,awayTeamName:fixture.away,live:true,status:'2nd half',matchMinute:82,score:'2:1',markets:[]}]);
  });
  try {const p=await getLiveSportMarket('football','corners',{maxPages:1});assert.equal(p.rows.length,2);assert.ok(p.rows.every(x=>x.live));assert.equal(p.rows[0].liveState.minute,82);}finally{direct.setFetchForTesting(null);}
