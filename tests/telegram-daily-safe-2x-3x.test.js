@@ -109,7 +109,7 @@ test('the daily runner rejects an entirely below-80% candidate pool for every ti
   for (const ticket of result.results.slice(1)) assert.match(ticket.error, /No selections met the 80%/);
 });
 
-test('Today’s Codes shows SAFE and 2x to Free, with 3x restricted', () => {
+test('Today’s Codes shows SAFE and 2x to Free, with every other daily code locked', () => {
   const from = server.indexOf('function telegramDailyCodeVisibleForPlan(');
   const to = server.indexOf('function plot207TelegramHelpText(', from);
   const fromText = server.indexOf('function telegramDailyCodesText(');
@@ -120,14 +120,24 @@ test('Today’s Codes shows SAFE and 2x to Free, with 3x restricted', () => {
     {targetOdds:'1.30–5.00 SAFE',shareCode:'SAFE123'},
     {targetOdds:'2',shareCode:'TWO123'},
     {targetOdds:'3',shareCode:'THREE123'},
-    {targetOdds:'10',shareCode:'OLD123'},
+    {targetOdds:'1000 ICE HOCKEY',shareCode:'HOCKEY1000'},
+    {targetOdds:'1000 BASKETBALL',shareCode:'BASKET1000'},
+    {targetOdds:'1000 HANDBALL + VOLLEYBALL',shareCode:'HVB1000'},
   ]};
   const free = ctx.render(snapshot,{id:'free'});
   assert.match(free,/SAFE123/);
   assert.match(free,/TWO123/);
-  assert.doesNotMatch(free,/THREE123|OLD123/);
+  assert.doesNotMatch(free,/THREE123|HOCKEY1000|BASKET1000|HVB1000/);
   assert.match(free,/3x.*Pro\/Elite only/);
+  assert.match(free,/1000x ICE HOCKEY.*Pro\/Elite only/);
+  assert.match(free,/1000x BASKETBALL.*Pro\/Elite only/);
+  assert.match(free,/1000x HANDBALL \+ VOLLEYBALL.*Pro\/Elite only/);
   const pro=ctx.render(snapshot,{id:'pro'});
+  assert.match(pro,/SAFE123/);
+  assert.match(pro,/TWO123/);
   assert.match(pro,/THREE123/);
-  assert.doesNotMatch(pro,/OLD123/);
+  assert.match(pro,/HOCKEY1000/);
+  assert.match(pro,/BASKET1000/);
+  assert.match(pro,/HVB1000/);
+  assert.doesNotMatch(pro,/Pro\/Elite only/);
 });

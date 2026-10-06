@@ -174,8 +174,16 @@ and copy the request paths into these variables.
   directly from SportyBet like the other sports (all leagues and divisions,
   `SPORTYBET_MAX_PAGES=10` default). The old collector snapshots remain as an
   automatic fallback if the direct board returns nothing.
-- O/U 2.5 is intentionally excluded from the Auto Builder. The probability
-  model is untouched.
+- "Other / Special" category (opt-in per build, Elite-only on Telegram):
+  football Over 2.5 / Under 2.5 (the model's o25 Poisson line; Under is its
+  two-way complement on the same bookmaker market), football Correct Score
+  (the model's single most likely scoreline matched to the identical
+  bookmaker outcome — never a different scoreline), and Basketball / Ice
+  Hockey / Handball / Volleyball two-way handicaps (no-vig market
+  probability, exactly like the tennis set handicap). Website: the
+  ✨ Other / Special bet types master toggle in the Auto Builder bet-type
+  grid. Telegram bot: the ✨ Special Bet Types button in the Bet Types
+  keyboard. The probability model itself is untouched.
 
 Sport id overrides if SportyBet renumbers:
 
@@ -311,7 +319,7 @@ unsupported legs.
 
 The `Daily Predictions Refresh` job now also writes SportyBet market
 snapshots for every market the Auto Builder uses, for all six sports
-(football `1x2/gg/dc/dnb/ou05/ou15/ou45/ah/corners/first_half_team_corners/
+(football `1x2/gg/dc/dnb/ou05/ou15/ou45/ou25/cs/ah/corners/first_half_team_corners/
 home/away team goals`; basketball, hockey, handball, volleyball, tennis
 winner/totals/handicap/sets). Snapshots are written to Redis when configured
 and **always to `data/sporty-snapshots/*.json`**, because the refresh job

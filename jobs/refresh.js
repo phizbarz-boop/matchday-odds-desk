@@ -55,7 +55,7 @@ async function collectSportySnapshots({ hours, maxPages, fixtures }) {
       console.warn(`Snapshot skipped ${sport}/${kind}: no rows returned`);
     }
   };
-  const footballKinds = ['1x2','gg','dc','dnb','ou05','ou15','ou45','ah','corners','first_half_team_corners'];
+  const footballKinds = ['1x2','gg','dc','dnb','ou05','ou15','ou45','ou25','cs','ah','corners','first_half_team_corners'];
   for (const kind of footballKinds) {
     try { add('football', kind, await getFootballMarket(kind, { hours, maxPages })); }
     catch (err) { console.warn(`Snapshot seed football/${kind} failed: ${err.message}`); }
@@ -66,10 +66,10 @@ async function collectSportySnapshots({ hours, maxPages, fixtures }) {
     catch (err) { console.warn(`Snapshot seed football/${kind} failed: ${err.message}`); }
   }
   const otherSports = {
-    basketball: ['winner','totals'],
-    hockey: ['winner','totals'],
-    handball: ['winner','totals'],
-    volleyball: ['winner','totals','sets'],
+    basketball: ['winner','totals','handicap'],
+    hockey: ['winner','totals','handicap'],
+    handball: ['winner','totals','handicap'],
+    volleyball: ['winner','totals','sets','handicap'],
     tennis: ['winner','totals','handicap'],
   };
   for (const [sport, kinds] of Object.entries(otherSports)) {

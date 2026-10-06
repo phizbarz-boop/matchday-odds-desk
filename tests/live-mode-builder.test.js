@@ -166,7 +166,7 @@ test('daily refresh seeds snapshots for all six sports with file fallback', () =
   for (const sport of ['basketball', 'hockey', 'handball', 'volleyball', 'tennis']) {
     assert.ok(refreshSrc.includes(`${sport}: ['winner','totals'`), `refresh must seed ${sport} snapshots`);
   }
-  assert.match(refreshSrc, /'1x2','gg','dc','dnb','ou05','ou15','ou45','ah','corners','first_half_team_corners'/);
+  assert.match(refreshSrc, /'1x2','gg','dc','dnb','ou05','ou15','ou45','ou25','cs','ah','corners','first_half_team_corners'/);
   assert.match(refreshSrc, /'home_ou05','away_ou05','home_ou45','away_ou45'/);
   assert.match(refreshSrc, /function sportySnapshotKey\(sport, kind\)/, 'refresh must share the server snapshot key scheme');
   assert.match(refreshSrc, /writeSnapshotFile\(key, \{ \.\.\.snap\.payload/, 'no-Redis branch must write snapshot files');
