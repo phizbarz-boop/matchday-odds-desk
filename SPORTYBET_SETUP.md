@@ -17,11 +17,17 @@ SPORTYBET_PHONE=2348012345678
 SPORTYBET_PASSWORD=your_dummy_account_password
 ```
 
-Required for the probability model (unchanged):
+Football probabilities use SportyBet's displayed goal averages and H2H, collected
+by `jobs/sporty-football-statistics-collector.js` through the dummy session.
+Complete offered price sets supply labelled no-vig estimates when statistics are
+missing. No paid football data subscription or key is required.
 
-```text
-FOOTBALL_DATA_TOKEN=your_football_data_token
-```
+For the GitHub refresh workflow also set `SPORTYBET_PHONE` and
+`SPORTYBET_PASSWORD` as repository secrets. Keep `TELEGRAM_JOB_SECRET` the same
+on GitHub and Render so the collector can publish its snapshot. The workflow
+installs Playwright/Chromium. Manually: install Playwright, run
+`npx playwright install chromium`, then `node jobs/sporty-football-statistics-collector.js`
+before `npm run refresh`.
 
 Optional — only needed if diagnostics ever shows `SPORTYBET_GEO_BLOCKED`.
 SportyBet geo-blocks some server IPs; Render's were verified reachable (real
@@ -43,8 +49,6 @@ SPORTYBET_MAX_PAGES=10
 SPORTYBET_PAGE_SIZE=100
 SPORTYBET_BOOKINGS_PER_MINUTE=5
 SPORTYBET_KEEPALIVE_SECONDS=240
-H2H_PREVIOUS_SEASONS=1
-H2H_MAX_MEETINGS=8
 H2H_MAX_WEIGHT=0.18
 ```
 
@@ -285,54 +289,30 @@ variables above, redeploy, then open `/api/sportybet/diagnostics` and confirm
 Bump `SPORTYBET_CACHE_VERSION` (e.g. to `10`) on first deploy so no stale
 Parse-era cache entries are reused.
 
-## Live matches as an Auto Builder option
+## Live and Quick Cash
 
-Live (in-play) matches are an option inside the Auto Builder — there is no
-separate live page. Both surfaces expose it:
+Choose `Live only (ongoing games)` to scan current SportyBet markets using your
+selected bet types, minimum probability, edge, odds and selection limits.
+Upcoming and finished matches are excluded. Fresh event-detail reads can find
+live corner and team-total lines absent from the board's embedded markets.
 
-- **Web** — Auto Builder has a *Match status* selector:
-  `Prematch only (daily cache)` (default), `🔴 Live only (ongoing games)`, or
-  `Prematch + 🔴 Live`. The choice is sent as `liveMode` in the
-  `/api/sportybet/auto-pick` request body.
-- **Telegram bot** — the Auto Builder keyboard has a *Matches* button that
-  cycles `PREMATCH → LIVE ONLY → LIVE + PREMATCH`, and natural-language or
-  LLM ticket requests understand phrases like "live 5x", "in-play", "ongoing
-  games", or "live and prematch" (schema field `liveMode`).
+`Quick Cash (late live leaders)` uses the same filters with additional rules:
+football at 75+ minutes, basketball in Q4/overtime, hockey in the final
+period/overtime, and handball at 50+ minutes in the second half. A readable
+non-tied score is required. Picks must support the current leader in a winner,
+double-chance, DNB or handicap market. Unsupported/missing phase data is skipped.
+A final set cannot be inferred safely without the match format, so tennis and
+volleyball are currently excluded from Quick Cash; normal Live mode supports them.
 
-Live legs are scored by the same untouched probability model: football live
-rows reuse the saved daily predictions (which persist until the next 07:20
-WAT refresh even after kickoff), and the other sports use no-vig market
-probabilities — no model changes.
+Football live probabilities use current score plus remaining time with the
+SportyBet goal-rate model when all inputs exist. Missing historical inputs use
+labelled, complete no-vig price sets. Live corner totals use current offered
+prices rather than prematch corner expectations.
 
-**Booking safety:** every live leg is re-validated against a fresh, uncached
-live board immediately before a booking code is created (both the website
-"Generate Code" button and the Telegram bot). Suspended or settled legs are
-dropped and reported as `droppedLive`; if the live board cannot be checked,
-live legs are never booked blindly. Ticket output marks live legs with
-`🔴 LIVE` and lists any dropped selections.
+Live selections are checked against a fresh board before creating a booking
+code. Changed leaders, settled matches, suspended selections and removed
+markets are dropped. The Telegram Matches button also cycles through Quick
+Cash; natural-language requests such as "Quick Cash 5x" select it.
 
-The Booking Code Analyzer has its own opt-in: a *Live Games: ON/OFF* button
-(`includeLive`) that additionally scores ongoing in-play games when replacing
-unsupported legs.
-
-## Daily snapshot seeding (speed)
-
-The `Daily Predictions Refresh` job now also writes SportyBet market
-snapshots for every market the Auto Builder uses, for all six sports
-(football `1x2/gg/dc/dnb/ou05/ou15/ou45/ou25/cs/ah/corners/first_half_team_corners/
-home/away team goals`; basketball, hockey, handball, volleyball, tennis
-winner/totals/handicap/sets). Snapshots are written to Redis when configured
-and **always to `data/sporty-snapshots/*.json`**, because the refresh job
-runs as a separate process from the web server and the files are the shared
-fallback.
-
-After the daily refresh has run, Auto Builder / Analyzer / Telegram builds
-are served from these snapshots instead of hammering SportyBet, so first
-builds of the day are fast and the server stops repeatedly calling SportyBet.
-Live legs always bypass this cache (in-play odds change by the second).
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `SPORTYBET_SNAPSHOT_SEED` | `1` | Set `0` to disable snapshot seeding in the refresh job. |
-| `SPORTYBET_SNAPSHOT_DIR` | `data/sporty-snapshots` | Where snapshot JSON files are written. |
-| `DAILY_SPORT_REFRESH_MAX_PAGES` | `12` | Pages fetched per market during seeding. |
+This build creates SportyBet booking/share codes using the dummy account. It
+uses the existing booking flow and does not submit a monetary stake.

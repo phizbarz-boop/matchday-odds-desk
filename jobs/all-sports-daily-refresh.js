@@ -133,6 +133,9 @@ async function runCollector(sport, script, timeoutMinutes) {
   console.log(`[All Sports] Daily prediction refresh started`);
   console.log(`[All Sports] mode=${MODE}; startedAt=${STARTED_AT}; base=${BASE_URL}`);
 
+  await attempt('Football: dummy account statistics collector', () =>
+    runNode('jobs/sporty-football-statistics-collector.js', {MATCHDAY_BASE_URL:BASE_URL,TELEGRAM_JOB_SECRET}, 12*60*1000));
+
   // Start Football first. The endpoint intentionally returns immediately while
   // Render computes/persists the model in the background. We verify completion
   // after the other sports, making useful use of that time instead of polling idle.

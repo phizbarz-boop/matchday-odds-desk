@@ -1,3 +1,4 @@
+const {winningSideSelection,conditionFootballModel}=require('./lib/liveModel');
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
@@ -14,9 +15,8 @@ const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, SPECIAL_
 const { trackTelegramSlip, evaluateBooking } = require('./lib/slipTracker');
 const { watDateKey } = require('./lib/dailyScheduleGuard');
 const { SPORT_TIERS: TELEGRAM_SPORT_TIERS, selectTelegramMixedWithSportPriority } = require('./lib/telegramMixedSelector');
-const { buildRowsFromOdds, appendUncoveredRows, buildCornerModelsByEvent } = require('./lib/sportyOddsModel');
-const { matchSnapshot: matchHandballApiSportsSnapshot, apiKey: handballApiSportsKey } = require('./lib/apiSportsHandball');
-const { matchSnapshot: matchVolleyballApiSportsSnapshot, apiKey: volleyballApiSportsKey } = require('./lib/apiSportsVolleyball');
+const { enrichSportyFixtures, cleanPredictions, STATS_KEY, STATS_FILE } = require('./lib/sportyFootballModel');
+const { sanitizeStats } = require('./lib/sportyFootballStats');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
 
 let redisClient = null;
@@ -85,9 +85,6 @@ function flattenHandballEvents(events, kind='winner') {
           outcomeId:String(o?.outcomeId||''),
           outcomeDesc:String(o?.outcomeDesc||''),
           odds,
-          apiSportsMatched:!!e.apiSportsMatched,
-          apiSportsGameId:e.apiSportsGameId||null,
-          apiSportsMatchScore:e.apiSportsMatchScore||null,
         });
       }
     }
@@ -121,8 +118,6 @@ async function loadHandballMarket(kind='winner') {
     marketLabel:kind==='winner'?'1X2 / Match Winner':'Total Goals',
     fetchedAt:snap?.fetchedAt||null,
     collectorVersion:snap?.collectorVersion||'V4',
-    apiSportsMatched:Number(snap?.apiSportsMatched||0),
-    apiSportsTotal:Number(snap?.apiSportsTotal||0),
     totalReturned:rows.length,
     rows,
   };
@@ -168,9 +163,6 @@ function flattenVolleyballEvents(events, kind='winner') {
           outcomeId:String(o?.outcomeId||''),
           outcomeDesc:String(o?.outcomeDesc||''),
           odds,
-          apiSportsMatched:!!e.apiSportsMatched,
-          apiSportsGameId:e.apiSportsGameId||null,
-          apiSportsMatchScore:e.apiSportsMatchScore||null,
         });
       }
     }
@@ -208,8 +200,6 @@ async function loadVolleyballMarket(kind='winner') {
     marketLabel:kind==='winner'?'Match Winner':(kind==='sets'?'Total Sets':'Total Points'),
     fetchedAt:snap?.fetchedAt||null,
     collectorVersion:snap?.collectorVersion||'V3',
-    apiSportsMatched:Number(snap?.apiSportsMatched||0),
-    apiSportsTotal:Number(snap?.apiSportsTotal||0),
     totalReturned:rows.length,
     rows,
   };
@@ -400,7 +390,7 @@ async function loadTelegramDailyCodes(redis, dateKey) {
   if (redis) {
     try {
       const raw = await redis.get(telegramDailyCodesKey(dateKey));
-      if (raw) return JSON.parse(raw);
+      if (raw) return cleanPredictions(JSON.parse(raw));
     } catch (e) { console.warn('Daily codes Redis read failed:', e.message); }
   }
   return telegramDailyCodesMemory.get(dateKey) || { date: dateKey, generatedAt: null, codes: [] };
@@ -768,7 +758,7 @@ async function loadPredictions() {
     return { generatedAt: null, matches: [] };
   }
   if (fs.existsSync(DATA_FILE)) {
-    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    return cleanPredictions(JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')));
   }
   return { generatedAt: null, matches: [] };
 }
@@ -903,33 +893,41 @@ app.get('/api/predictions', async (req, res) => {
 
 
 
-app.get('/api/corners/diagnostics', async (req, res) => {
-  try{
-    const [pred,c,h]=await Promise.all([
-      loadPredictions(),
-      loadSportyBetMarket('corners'),
-      loadSportyBetMarket('first_half_team_corners')
-    ]);
-    const matches=Array.isArray(pred?.matches)?pred.matches:[];
-    const modeled=matches.filter(x=>Number(x?.corners?.totalLambda||0)>0);
-    res.json({
-      predictionMatches:matches.length,
-      matchesWithCornerModel:modeled.length,
-      sportyCornerRows:Array.isArray(c?.rows)?c.rows.length:0,
-      sportyFirstHalfCornerRows:Array.isArray(h?.rows)?h.rows.length:0,
-      sampleCornerModels:modeled.slice(0,5).map(x=>({
-        eventId:x.eventId||x.sportyEventId||null,
-        home:x.home,away:x.away,
-        totalLambda:x.corners?.totalLambda,
-        firstHalfHomeLambda:x.corners?.firstHalfHomeLambda,
-        firstHalfAwayLambda:x.corners?.firstHalfAwayLambda
-      }))
-    });
-  }catch(err){
-    res.status(500).json({error:'Corner diagnostics failed',detail:String(err.message||err).slice(0,500)});
-  }
+// Statistics captured from the match tracker shown on SportyBet's own page.
+app.post('/api/internal/football/statistics', express.json({limit:'2mb'}), async (req,res) => {
+  if (!authorizeTelegramJob(req)) return res.status(401).json({error:'unauthorized'});
+  try {
+    const events=(Array.isArray(req.body?.events)?req.body.events:[]).slice(0,2000).map(sanitizeStats).filter(Boolean);
+    if (!events.length) return res.status(422).json({error:'No usable SportyBet statistics supplied; previous snapshot retained'});
+    const client=await getRedis();
+    let previous={events:[]};
+    if(client){const raw=await client.get(STATS_KEY);if(raw)previous=JSON.parse(raw);}
+    else if(fs.existsSync(STATS_FILE))previous=JSON.parse(fs.readFileSync(STATS_FILE,'utf8'));
+    const merged=new Map((previous.events || []).filter(x=>Date.now()-Date.parse(x.capturedAt)<172800000).map(x=>[x.eventId,x]));
+    for(const e of events)merged.set(e.eventId,e);
+    const snapshot={source:'SportyBet displayed statistics',fetchedAt:new Date().toISOString(),events:[...merged.values()]};
+    if(client)await client.set(STATS_KEY,JSON.stringify(snapshot));
+    else{fs.mkdirSync(path.dirname(STATS_FILE),{recursive:true});fs.writeFileSync(STATS_FILE,JSON.stringify(snapshot));}
+    res.json({ok:true,accepted:events.length,events:snapshot.events.length,fetchedAt:snapshot.fetchedAt});
+  }catch(err){res.status(500).json({error:'Could not save SportyBet statistics',detail:err.message});}
 });
-
+app.get('/api/football/statistics/status',async(req,res)=>{
+  try{const client=await getRedis();const raw=client?await client.get(STATS_KEY):fs.existsSync(STATS_FILE)?fs.readFileSync(STATS_FILE,'utf8'):null;
+    const s=raw?JSON.parse(raw):{events:[]};res.json({source:'SportyBet',fetchedAt:s.fetchedAt || null,events:s.events.length});
+  }catch(err){res.status(500).json({error:err.message});}
+});
+app.get('/api/corners/test-live',async(req,res)=>{
+  try{const c=await loadSportyBetMarket('corners','football',{forceRefresh:true});
+    const candidates=buildCandidates({predictions:{matches:[]},footballMarkets:{corners:c},sportScope:'football',betTypes:['corners_over','corners_under'],minProbability:0,minEdge:-25});
+    res.json({source:'SportyBet direct',called:true,sportyCornerRows:c.rows.length,playableSelections:candidates.length,success:candidates.length>0,sample:candidates.slice(0,5)});
+  }catch(err){res.status(502).json({source:'SportyBet direct',error:err.message});}
+});
+app.get('/api/corners/diagnostics',async(req,res)=>{
+  try{const c=await loadSportyBetMarket('corners');const pred=await loadPredictions();
+    const candidates=buildCandidates({predictions:pred,footballMarkets:{corners:c},sportScope:'football',betTypes:['corners_over','corners_under'],minProbability:0,minEdge:-25});
+    res.json({source:'SportyBet direct',sportyCornerRows:c.rows.length,matchesWithCornerModel:pred.matches.filter(x=>x.corners?.totalLambda>0).length,playableSelections:candidates.length,sample:candidates.slice(0,5)});
+  }catch(err){res.status(502).json({error:err.message});}
+});
 
 // Live-ish SportyBet price layer, scraped directly from SportyBet (no Parse.bot).
 // Session credentials never reach the browser.
@@ -973,25 +971,10 @@ app.post('/api/internal/handball/snapshot', express.json({limit:'5mb'}), async (
     let events=raw;
     let matchInfo={matched:0,total:raw.length,datesQueried:[]};
 
-    // API-SPORTS is a matching/validation layer only. Handball probability remains
-    // the same no-vig SportyBet market model used by Basketball and Ice Hockey.
-    if(handballApiSportsKey()){
-      try{
-        const matched=await matchHandballApiSportsSnapshot(raw,{maxDates:5});
-        events=matched.events;
-        matchInfo={matched:matched.matched,total:matched.total,datesQueried:matched.datesQueried};
-      }catch(err){
-        console.warn('[Handball snapshot] API-SPORTS matching failed:',err.message);
-      }
-    }
-
-    const snapshot={
+        const snapshot={
       collectorVersion:'V4',
       fetchedAt:new Date().toISOString(),
       events,
-      apiSportsMatched:matchInfo.matched,
-      apiSportsTotal:matchInfo.total,
-      apiSportsDatesQueried:matchInfo.datesQueried,
     };
     await saveHandballSnapshot(snapshot);
     const winnerRows=flattenHandballEvents(events,'winner').length;
@@ -1052,25 +1035,10 @@ app.post('/api/internal/volleyball/snapshot', express.json({limit:'5mb'}), async
     let events=raw;
     let matchInfo={matched:0,total:raw.length,datesQueried:[]};
 
-    // Volleyball uses API-SPORTS only for fixture matching/validation.
-    // Probability is the same no-vig SportyBet model as Basketball, Hockey and Handball.
-    if(volleyballApiSportsKey()){
-      try{
-        const matched=await matchVolleyballApiSportsSnapshot(raw,{maxDates:8});
-        events=matched.events;
-        matchInfo={matched:matched.matched,total:matched.total,datesQueried:matched.datesQueried};
-      }catch(err){
-        console.warn('[Volleyball snapshot] API-SPORTS matching failed:',err.message);
-      }
-    }
-
-    const snapshot={
+        const snapshot={
       collectorVersion:'V3',
       fetchedAt:new Date().toISOString(),
       events,
-      apiSportsMatched:matchInfo.matched,
-      apiSportsTotal:matchInfo.total,
-      apiSportsDatesQueried:matchInfo.datesQueried,
     };
     await saveVolleyballSnapshot(snapshot);
 
@@ -1103,9 +1071,6 @@ app.get('/api/volleyball/status', async (req,res)=>{
       winnerRows:winner.rows.length,
       totalsRows:totals.rows.length,
       setRows:sets.rows.length,
-      apiSportsConfigured:!!volleyballApiSportsKey(),
-      apiSportsMatched:Number(snap?.apiSportsMatched||0),
-      apiSportsTotal:Number(snap?.apiSportsTotal||0),
       probabilityModel:'No-vig/de-margined SportyBet market probability — same as Basketball, Ice Hockey and Handball',
     });
   }catch(err){
@@ -1124,9 +1089,6 @@ app.get('/api/handball/status', async (req,res)=>{
       fixtures:Array.isArray(snap?.events)?snap.events.length:0,
       winnerRows:winner.rows.length,
       totalsRows:totals.rows.length,
-      apiSportsConfigured:!!handballApiSportsKey(),
-      apiSportsMatched:Number(snap?.apiSportsMatched||0),
-      apiSportsTotal:Number(snap?.apiSportsTotal||0),
       probabilityModel:'No-vig/de-margined SportyBet market probability — same as Basketball and Ice Hockey',
     });
   }catch(err){res.status(500).json({error:'handball status failed',detail:String(err.message||err)});}
@@ -1323,6 +1285,7 @@ function normalizeSportScope(value) {
 // predictions; other sports no-vig market probability).
 function normalizeLiveMode(value) {
   const v = String(value || 'prematch').toLowerCase().replace(/[\s_-]+/g, '');
+  if (['quickcash'].includes(v)) return 'quick_cash';
   if (['live', 'liveonly', 'inplay'].includes(v)) return 'live';
   if (['both', 'liveprematch', 'prematchlive', 'all'].includes(v)) return 'both';
   return 'prematch';
@@ -1355,69 +1318,26 @@ function fixtureKey(r) {
   return `${n(r?.home)}|${n(r?.away)}|${String(r?.kickoffUtc||'').slice(0,10)}`;
 }
 
-// Corner models now come from SportyBet itself: the corners O/U line quoted on
-// the board is inverted through a Poisson CDF (no external stats API). This
-// attaches those lambdas to existing prediction rows that lack a corner model.
-function addOddsCornerModels(predictions, fcorners, f1hteamcorners) {
-  const matches = Array.isArray(predictions?.matches) ? predictions.matches : [];
-  const cornerMap = buildCornerModelsByEvent([fcorners, f1hteamcorners]);
-  if (!cornerMap.size) {
-    console.warn('[SportyBet odds model] corner attach skipped: no de-viggable corner lines on the board');
-    return predictions;
-  }
-  let attached = 0;
-  for (const m of matches) {
-    if (Number(m?.corners?.totalLambda || 0) > 0) continue;
-    const hit = cornerMap.get(String(m?.eventId || m?.sportyEventId || '')) || cornerMap.get(fixtureKey(m));
-    if (hit) { m.corners = hit; attached++; }
-  }
-  console.log(`[SportyBet odds model] corner attach complete: ${attached} prediction rows received corner lambdas from SportyBet lines`);
-  return { ...predictions, matches };
+async function addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorners, hours) {
+  const rows=[...(f1x2?.rows || []),...(fcorners?.rows || [])];
+  const fresh=await enrichSportyFixtures(rows,{marketRows:rows});
+  const matches=new Map((predictions?.matches || []).map(r=>[String(r.eventId || r.sportyEventId),r]));
+  for(const r of fresh)matches.set(r.eventId,r);
+  return {...predictions,matches:[...matches.values()]};
 }
 
-// Live mode scores in-play football fixtures directly from the live board's own
-// prices: every live SportyBet football event the saved predictions do not cover
-// gets a no-vig odds model built from its live 1X2 / GG/NG / totals / correct
-// score / corners lines. Events without a live 1X2 market are simply left out of
-// the pool — no probability is ever invented for them.
-function modelLiveFootballFromOdds(predictions, liveFootballPayloads) {
-  const stats = { liveEvents: 0, uncovered: 0, modeled: 0, added: 0, reason: null };
-  const matches = Array.isArray(predictions?.matches) ? predictions.matches : [];
-  const coveredIds = new Set(matches.map(r => String(r?.eventId || r?.sportyEventId || '')).filter(Boolean));
-  const coveredKeys = new Set(matches.map(fixtureKey));
-
-  const seen = new Set();
-  for (const payload of liveFootballPayloads || []) {
-    for (const x of payload?.rows || []) {
-      if (x?.live !== true) continue;
-      const k = String(x.eventId || '') || `${x.home}|${x.away}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      stats.liveEvents++;
-      const eventId = String(x.eventId || '');
-      if (eventId && coveredIds.has(eventId)) continue;
-      if (coveredKeys.has(fixtureKey(x))) continue;
-      stats.uncovered++;
-    }
-  }
-  if (!stats.liveEvents) {
-    stats.reason = 'no_live_football_rows';
-    return { predictions, stats };
-  }
-  if (!stats.uncovered) {
-    stats.reason = 'all_live_fixtures_already_modeled';
-    return { predictions, stats };
-  }
-
-  const oddsRows = buildRowsFromOdds(liveFootballPayloads, { live: true });
-  stats.modeled = oddsRows.length;
-  const res = appendUncoveredRows(matches, oddsRows);
-  stats.added = res.stats.added;
-  if (!stats.modeled) stats.reason = 'no_usable_live_odds';
-  console.log(`[SportyBet odds model] live modeling complete: liveEvents=${stats.liveEvents}, uncovered=${stats.uncovered}, modeled=${stats.modeled}, added=${stats.added}`);
-  return { predictions: { ...(predictions || {}), matches: res.matches }, stats };
+async function addLiveFootballModels(predictions, liveFootballPayloads, {buildCorners=false}={}) {
+  const rows=(liveFootballPayloads || []).flatMap(p=>p?.rows || []).filter(r=>r.live===true);
+  const ids=new Set(rows.map(x=>String(x.eventId)));
+  const limit=Math.max(1,Math.min(1000,parseInt(process.env.SPORTYBET_LIVE_MODEL_MAX_EVENTS || '1000',10)));
+  const fresh=await enrichSportyFixtures(rows,{maxFixtures:limit,marketRows:rows});
+  // Live prices are normalized separately; old prematch rates must not be
+  // compared directly to live odds after the score/time has changed.
+  const matches=(predictions?.matches || []).filter(r=>!ids.has(String(r.eventId || r.sportyEventId)));
+  const stats={liveEvents:ids.size,uncovered:ids.size,requested:fresh.length,modeled:fresh.filter(x=>x.goalModelAvailable).length,added:fresh.length,fixtureOnly:0,reason:fresh.length?null:'no_live_football_rows'};
+  matches.push(...fresh.map(r=>conditionFootballModel(r,rows.find(x=>String(x.eventId)===r.eventId))));
+  return {predictions:{...predictions,matches},stats};
 }
-
 
 const AUTO_BET_TYPES_BY_SPORT = {
   football: ['home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under','over25','under25','correct_score'],
@@ -1445,7 +1365,7 @@ function normalizeAutoBetTypesForSports(sports, betTypes) {
 
 async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, marketCacheOnly = false, liveMode = 'prematch' } = {}) {
   const liveModeNorm = normalizeLiveMode(liveMode);
-  const wantsPrematch = liveModeNorm !== 'live';
+  const wantsPrematch = !['live','quick_cash'].includes(liveModeNorm);
   const wantsLive = liveModeNorm !== 'prematch';
   const selectedSports = normalizeSportScopes(Array.isArray(sports) && sports.length ? sports : sportScope);
   const selectedSet = new Set(selectedSports);
@@ -1461,10 +1381,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
   const effectiveBetTypes = normalizeAutoBetTypesForSports(selectedSports, betTypes);
   const requestedBetTypes = effectiveBetTypes.length ? new Set(effectiveBetTypes) : null;
   const wantsAny = ids => !requestedBetTypes || ids.some(id => requestedBetTypes.has(id));
-  // The 1X2 feed is loaded for EVERY football request, even when no 1X2 bet type
-  // is selected: the no-vig odds model that replaces the removed external stats
-  // API needs each event's 1X2 prices as the backbone of its model row.
-  const needF1x2 = wantsFootball;
+  const needF1x2 = wantsFootball && wantsAny(['home_win','draw','away_win','dc_1x','dc_x2']);
   const needFGg = wantsFootball && wantsAny(['gg_yes','ng_no']);
   const needFDc = wantsFootball && wantsAny(['dc_1x','dc_x2']);
   const needFDnb = wantsFootball && wantsAny(['dnb']);
@@ -1526,7 +1443,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
   // inspect exactly the fixtures the model knows about, avoiding a costly and
   // largely irrelevant sweep through the first games on the bookmaker site.
   let predictions = await safeMarket('football predictions', wantsFootball, () => loadPredictions(), { matches: [] });
-  autoMarketOptions.fixtures = Array.isArray(predictions?.matches) ? predictions.matches : [];
+  autoMarketOptions.fixtures = predictions?.matches?.length ? predictions.matches : null;
   let [f1x2, fgg, fdc, fdnb, fou05, fhomeou05, fawayou05, fhomeou45, fawayou45, fou15, fou45, fou25, fcs, fah, fcorners, f1hteamcorners, foneup, basketballWinner, basketballTotals, basketballHandicap, hockeyWinner, hockeyTotals, hockeyHandicap, handballWinner, handballTotals, handballHandicap, volleyballWinner, volleyballTotals, volleyballSets, volleyballHandicap, tennisWinner, tennisTotals, tennisHandicap] = await Promise.all([
     safeMarket('football 1X2', needF1x2 && wantsPrematch, () => loadSportyBetMarket('1x2', 'football', autoMarketOptions)),
     safeMarket('football GG/NG', needFGg && wantsPrematch, () => loadSportyBetMarket('gg', 'football', autoMarketOptions)),
@@ -1552,7 +1469,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     safeMarket('hockey totals', needHockeyTotals && wantsPrematch, () => loadSportyBetMarket('totals', 'hockey', autoMarketOptions)),
     safeMarket('hockey handicap', needHockeyHandicap && wantsPrematch, () => loadSportyBetMarket('handicap', 'hockey', autoMarketOptions)),
     // Handball/volleyball handicaps come from the SportyBet direct board (the
-    // API-Sports snapshot loaders only carry winner/totals/sets).
+    // SportyBet snapshot loaders only carry winner/totals/sets).
     safeMarket('handball winner', needHandballWinner && wantsPrematch, () => loadHandballMarket('winner')),
     safeMarket('handball totals', needHandballTotals && wantsPrematch, () => loadHandballMarket('totals')),
     safeMarket('handball handicap', needHandballHandicap && wantsPrematch, () => loadSportyBetMarket('handicap', 'handball', autoMarketOptions)),
@@ -1570,20 +1487,21 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
   // same payloads the probability engine already consumes. Live rows fully replace
   // the same event's stale prematch rows (mixing both would double-count outcomes
   // in the no-vig model and keep suspended prematch prices alive). Football legs
-  // are scored by the probability model: saved predictions first, then a no-vig
-  // model built from the live board's own prices for fixtures the daily snapshot
-  // does not cover; other sports use the same no-vig market probability as prematch.
+  // are scored by the probability model: saved predictions first, then on-demand
+  // SportyBet modeling for live fixtures the daily snapshot does not cover;
+  // other sports use the same no-vig market probability as prematch.
   let liveDiagnostics = null;
   if (wantsLive) {
     const liveMaxPages = Math.max(1, Math.min(20, parseInt(process.env.SPORTYBET_LIVE_MAX_PAGES || '5', 10)));
-    const liveOnly = liveModeNorm === 'live';
+    const liveOnly = ['live','quick_cash'].includes(liveModeNorm);
     liveDiagnostics = { mode: liveModeNorm, rows: {}, errors: {}, totalRows: 0, footballModels: null };
     const mergeLiveRows = (payload, liveRows) => {
       const base = liveOnly ? [] : (Array.isArray(payload?.rows) ? payload.rows : []);
       const liveEventIds = new Set(liveRows.map(r => String(r.eventId || '')).filter(Boolean));
       const kept = liveEventIds.size ? base.filter(r => !liveEventIds.has(String(r.eventId || ''))) : base;
       const rows = [...kept, ...liveRows];
-      return { ...(payload || {}), rows, totalReturned: rows.length, live: true, liveRows: liveRows.length };
+      const probabilityRows=liveRows.probabilityRows ? [...(liveOnly?[]:(payload?.probabilityRows || []).filter(r=>!liveEventIds.has(String(r.eventId)))),...liveRows.probabilityRows] : undefined;
+      return { ...(payload || {}), ...(probabilityRows?{probabilityRows}:{}), rows, totalReturned: rows.length, live: true, liveRows: liveRows.length };
     };
     const liveFetch = async (sport, kind, enabled) => {
       if (!enabled) return [];
@@ -1591,6 +1509,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
       try {
         const payload = await getLiveSportMarket(sport, kind, { maxPages: liveMaxPages });
         const rows = (payload.rows || []).map(r => ({ ...r, live: true }));
+        if(payload.probabilityRows)rows.probabilityRows=payload.probabilityRows.map(r=>({...r,live:true}));
         liveDiagnostics.rows[key] = rows.length;
         liveDiagnostics.totalRows += rows.length;
         return rows;
@@ -1639,48 +1558,29 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     }));
     console.log(`[Auto candidates] live scrape complete: totalRows=${liveDiagnostics.totalRows} (${Object.entries(liveDiagnostics.rows).map(([k, v]) => `${k}=${v}`).join(' ') || 'no markets requested'})`);
 
-    // Score live football fixtures directly from the live board's own prices:
-    // model any live event the saved predictions do not cover.
+    // Score live football fixtures directly with the probability model instead of
+    // depending on the daily snapshot cache: model any live event it does not cover.
     if (wantsFootball && liveDiagnostics.totalRows > 0) {
       try {
-        const result = modelLiveFootballFromOdds(
+        const result = await addLiveFootballModels(
           predictions,
           [f1x2, fgg, fdc, fdnb, fou05, fhomeou05, fawayou05, fhomeou45, fawayou45, fou15, fou45, fou25, fcs, fah, fcorners],
+          { buildCorners: cornerBetRequested(betTypes) },
         );
         predictions = result.predictions;
         liveDiagnostics.footballModels = result.stats;
       } catch (err) {
-        console.error('[SportyBet odds model] live modeling failed:', err.message);
+        console.error('[SportyBet] live on-demand modeling failed:', err.message);
         liveDiagnostics.footballModels = { reason: 'modeling_error', detail: String(err.message || err).slice(0, 160) };
       }
     }
   }
 
-  // Prematch coverage expansion: every SportyBet fixture the Poisson + H2H
-  // snapshot does not cover gets a no-vig odds model built from the bookmaker's
-  // own prices (1X2, GG/NG, goal lines, team totals, correct score, corners).
-  // Pure CPU on the already-loaded payloads — zero extra SportyBet calls.
-  if (wantsFootball && wantsPrematch) {
+  if (wantsFootball && !['live','quick_cash'].includes(liveModeNorm) && cornerBetRequested(betTypes)) {
     try {
-      const oddsRows = buildRowsFromOdds(
-        [f1x2, fgg, fdc, fdnb, fou05, fhomeou05, fawayou05, fhomeou45, fawayou45, fou15, fou45, fou25, fcs, fah, fcorners, f1hteamcorners, foneup],
-        { live: false },
-      );
-      const res = appendUncoveredRows(predictions?.matches || [], oddsRows);
-      if (res.stats.added) {
-        console.log(`[SportyBet odds model] prematch gap-fill: ${res.stats.added} fixtures modeled from SportyBet odds (${res.stats.alreadyCovered} already covered by Poisson + H2H)`);
-        predictions = { ...(predictions || {}), matches: res.matches };
-      }
+      predictions = await addOnDemandCornerModels(predictions, f1x2, fcorners, f1hteamcorners, marketHours);
     } catch (err) {
-      console.error('[SportyBet odds model] prematch gap-fill failed:', err.message);
-    }
-  }
-
-  if (wantsFootball && liveModeNorm !== 'live' && cornerBetRequested(betTypes)) {
-    try {
-      predictions = addOddsCornerModels(predictions, fcorners, f1hteamcorners);
-    } catch (err) {
-      console.error('[SportyBet odds model] corner attach failed:', err.message);
+      console.error('[SportyBet] on-demand corner enrichment failed:', err.message);
     }
   }
 
@@ -1734,6 +1634,10 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     if (sportName.includes('tennis')) return selectedSet.has('tennis');
     return false;
   });
+  if(liveModeNorm==='quick_cash') {
+    const filtered=candidates.filter(c=>c.live && winningSideSelection(c));
+    candidates.splice(0,candidates.length,...filtered.map(c=>({...c,quickCash:true})));
+  }
   // Preserve source diagnostics through the shared Website/Telegram pipeline.
   // No API credentials or raw bookmaker payloads are returned to the browser.
   candidates.teamGoalAvailability = teamGoalAvailability;
@@ -1854,8 +1758,9 @@ function findSavedPredictionForAnalyzerLeg(leg, predictions) {
 }
 
 function directSavedFootballAnalyzerCandidate(leg, prediction) {
-  if(!prediction || !Number.isFinite(Number(leg?.odds)) || Number(leg.odds)<=1) return null;
+  if(!prediction || prediction.goalModelAvailable === false || !Number.isFinite(Number(leg?.odds)) || Number(leg.odds)<=1) return null;
   const text=analyzerNormText(`${leg.marketDesc||''} ${leg.outcomeDesc||''} ${leg.specifier||''}`);
+  if(/corner|half|period|quarter|card/.test(text))return null;
   let probability=null, betType=null, probabilitySource=null;
 
   if(/over 0 5/.test(text) || /total 0 5/.test(text) && /over/.test(text)){
@@ -2348,6 +2253,7 @@ async function autoCornerDiagnostics(betTypes) {
       matchesWithCornerModel:matches.filter(x=>Number(x?.corners?.totalLambda||0)>0).length,
       sportyCornerRows:Array.isArray(c?.rows)?c.rows.length:0,
       sportyFirstHalfCornerRows:Array.isArray(h?.rows)?h.rows.length:0,
+      source:'SportyBet direct',
     };
   }catch(e){
     return {diagnosticError:String(e.message||e).slice(0,300)};
@@ -2954,7 +2860,7 @@ function telegramAiAccountText(user) {
 
 function telegramAiTicketText(result, booking, request, plan, droppedLive = []) {
   const liveCount = result.selections.filter(x => x.live === true).length;
-  const modeLabel = request.liveMode === 'live' ? '🔴 LIVE ONLY' : request.liveMode === 'both' ? 'PREMATCH + 🔴 LIVE' : 'PREMATCH';
+  const modeLabel = request.liveMode === 'quick_cash' ? 'QUICK CASH · LATE LIVE' : request.liveMode === 'live' ? '🔴 LIVE ONLY' : request.liveMode === 'both' ? 'PREMATCH + 🔴 LIVE' : 'PREMATCH';
   const lines = [
     `🤖 MATCHDAY AI — ${request.safe ? 'SAFE' : `${Number(request.targetOdds).toFixed(request.targetOdds < 2 ? 2 : 0)}x`} TICKET`,
     `${result.reachedTarget ? '✅ TARGET REACHED' : '🟡 CLOSEST AVAILABLE'} | ${String(request.sport || 'all').toUpperCase()} | ${modeLabel}`,
@@ -3082,10 +2988,10 @@ async function buildTelegramAiTicket(user, request) {
       livePart = ` Live board scrape returned ${ld.totalRows} rows.`;
       const fm = ld.footballModels;
       if (fm) {
-        if (fm.reason === 'no_usable_live_odds') livePart += ' Live football fixtures were on the board but had no usable live 1X2 prices to model.';
+        if (fm.reason === 'no_live_football_rows') livePart += ' No usable live football price rows were returned by SportyBet.';
         else if (fm.reason === 'all_live_fixtures_already_modeled') livePart += ' All live football fixtures already have a saved model — none passed your filters.';
         else if (fm.reason === 'no_live_football_rows') livePart += ' No live football rows were on the board for the selected markets.';
-        else livePart += ` Live football modeling: ${Number(fm.added || 0)} of ${Number(fm.uncovered || 0)} uncovered fixtures modeled from live SportyBet odds.`;
+        else livePart += ` Live football modeling: ${Number(fm.added || 0)} of ${Number(fm.uncovered || 0)} uncovered fixtures modeled on demand.`;
       }
       const failedLive = Object.keys(ld.errors || {});
       if (failedLive.length) livePart += ` Live fetch failed for: ${failedLive.join(', ')}.`;
@@ -3111,9 +3017,12 @@ async function buildTelegramAiTicket(user, request) {
     try {
       const check = await validateLiveSelections(liveLegs.map(x => ({
         eventId: x.eventId, marketId: x.marketId, outcomeId: x.outcomeId,
-        specifier: x.specifier || null, sport: x.sport,
+        specifier: x.specifier || null, sport: x.sport, quickCash:!!x.quickCash,betType:x.betType,
       })));
       droppedLive = check.dropped;
+      const current=new Map(check.valid.map(v=>[[String(v.eventId),String(v.marketId),String(v.outcomeId),String(v.specifier || '')].join('|'),v]));
+      result.selections=result.selections.map(x=>x.live && current.has([String(x.eventId),String(x.marketId),String(x.outcomeId),String(x.specifier || '')].join('|'))?{...x,odds:current.get([String(x.eventId),String(x.marketId),String(x.outcomeId),String(x.specifier || '')].join('|')).odds}:x);
+      result.combinedOdds=result.selections.reduce((n,x)=>n*Number(x.odds||1),1);
       if (check.valid.length !== liveLegs.length) {
         const validKeys = new Set(check.valid.map(v => [String(v.eventId), String(v.marketId), String(v.outcomeId), String(v.specifier || '')].join('|')));
         result.selections = result.selections.filter(x => x.live !== true || validKeys.has([String(x.eventId), String(x.marketId), String(x.outcomeId), String(x.specifier || '')].join('|')));
@@ -3277,7 +3186,7 @@ Current builder settings: ${JSON.stringify(b)}.
 Valid action values: chat, ticket, builder, plans, account, analyze.
 For ticket actions, only set fields the user clearly requested; the app merges them with current settings.
 Sport values: football, basketball, hockey, all. Do not bypass subscription restrictions.
-liveMode: set 'live' only when the user clearly asks for live/in-play/ongoing matches, 'both' when they ask for live plus prematch together; otherwise null (keep the user's current setting).
+liveMode: set 'quick_cash' for Quick Cash/late-stage leader requests; set 'live' only when the user clearly asks for live/in-play/ongoing matches, 'both' when they ask for live plus prematch together; otherwise null (keep the user's current setting).
 Bet IDs: home_win, draw, away_win, oneup, corners_over, corners_under, first_half_home_team_corners, first_half_away_team_corners, dc_1x, dc_x2, dnb, over05, home_over05, away_over05, home_under45, away_under45, over15, under45, over25, under25, correct_score, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, basketball_handicap_home, basketball_handicap_away, hockey_winner, hockey_over, hockey_under, hockey_handicap_home, hockey_handicap_away.
 If the user asks to build/rebuild/replace/remove selections but the requested transformation cannot be safely represented by these parameters, explain what can be changed and ask one concise question instead of pretending it was done.
 If discussing betting, do not promise wins or guaranteed profit.`;
@@ -3309,7 +3218,7 @@ If discussing betting, do not promise wins or guaranteed profit.`;
           maxSelections:{type:['integer','null']},
           safe:{type:['boolean','null']},
           todayOnly:{type:['boolean','null']},
-          liveMode:{type:['string','null'],enum:['prematch','live','both',null]},
+          liveMode:{type:['string','null'],enum:['prematch','live','both','quick_cash',null]},
           betTypes:{type:['array','null'],items:{type:'string'}},
           bookingCode:{type:['string','null']}
         },
@@ -3374,12 +3283,12 @@ async function handleTelegramAiUpdate(update) {
     else if (d === 'builder:maxgames') return sendTelegramAiMessageTo(chatId, '🔢 Select the maximum number of games the builder can use:', { reply_markup: telegramAiMaxGamesKeyboard(user) });
     else if (d === 'builder:today') { user.preferences.builder.todayOnly=!user.preferences.builder.todayOnly; await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)}); }
     else if (d === 'builder:live') {
-      const order=['prematch','live','both'];
+      const order=['prematch','live','both','quick_cash'];
       const cur=normalizeLiveMode(user.preferences.builder.liveMode);
       user.preferences.builder.liveMode=order[(order.indexOf(cur)+1)%order.length];
       await saveTelegramAiUser(redis,user);
       const mode=user.preferences.builder.liveMode;
-      const note=mode==='live'
+      const note=mode==='quick_cash'?'💵 QUICK CASH: late live matches with a current leader, filtered by your probability and selected winner/side markets. No result is guaranteed.':mode==='live'
         ?'🔴 LIVE ONLY: tickets are built exclusively from matches being played right now. Live odds are re-checked just before the code is created.'
         :mode==='both'
           ?'🔴+🟢 LIVE + PREMATCH: the builder may mix ongoing live matches with upcoming fixtures. Live legs are re-checked before booking.'
@@ -3590,7 +3499,7 @@ async function handleTelegramAiUpdate(update) {
     if(!Array.isArray(req.betTypes)||!req.betTypes.length)return sendTelegramAiMessageTo(chatId,'⚠️ Select at least one Bet Type before building.',{reply_markup:telegramAiBuilderKeyboard(user)});
     if(callbackAction==='safe'||callbackAction==='safer'){req.safe=true;req.targetOdds=5.00;req.minProbability=Math.max(90,Number(req.minProbability||0));req.maxMatchOdds=null;}
     if(callbackAction==='rebuild'&&user.lastBuilderRequest)req={...user.lastBuilderRequest,safe:false};
-    await sendTelegramAiMessageTo(chatId,`⏳ Scanning current SportyBet fixtures and applying your settings…\n${req.sport||'all'} · target ${req.safe?'SAFE 1.30–5.00':req.targetOdds+'x'} · ≥${req.minProbability}% · max ${req.maxMatchOdds||'no limit'} per match · ${normalizeLiveMode(req.liveMode)==='live'?'🔴 live only':normalizeLiveMode(req.liveMode)==='both'?'prematch + 🔴 live':'prematch only'}`);
+    await sendTelegramAiMessageTo(chatId,`⏳ Scanning current SportyBet fixtures and applying your settings…\n${req.sport||'all'} · target ${req.safe?'SAFE 1.30–5.00':req.targetOdds+'x'} · ≥${req.minProbability}% · max ${req.maxMatchOdds||'no limit'} per match · ${normalizeLiveMode(req.liveMode)==='quick_cash'?'Quick Cash':normalizeLiveMode(req.liveMode)==='live'?'🔴 live only':normalizeLiveMode(req.liveMode)==='both'?'prematch + 🔴 live':'prematch only'}`);
     const built=await buildTelegramAiTicket(user,req).catch(e=>({error:e.message}));
     if(built.locked)return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});
     if(built.error)return sendTelegramAiMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiBuilderKeyboard(user)});
@@ -3917,7 +3826,7 @@ app.post('/api/sportybet/book', express.json(), async (req, res) => {
       try {
         const check = await validateLiveSelections(liveLegs.map(s => ({
           eventId: s.eventId, marketId: s.marketId, outcomeId: s.outcomeId,
-          specifier: s.specifier || null, sport: s.sport || 'football',
+          specifier: s.specifier || null, sport: s.sport || 'football', quickCash:!!s.quickCash,betType:s.betType,
         })));
         droppedLive = check.dropped;
         bookable = [...prematchLegs, ...check.valid];
@@ -3967,7 +3876,7 @@ app.post('/api/sportybet/book', express.json(), async (req, res) => {
 });
 
 // Manual/scheduled trigger to run the refresh job (protected by a shared secret).
-// Pulling every league while respecting football-data.org's rate limit can take
+// Fetching direct SportyBet fixtures and full event markets can take
 // a couple of minutes, so this kicks the job off in the background and returns
 // immediately rather than holding the HTTP request open the whole time.
 app.post('/api/refresh/sport/:sport', express.json(), async (req, res) => {

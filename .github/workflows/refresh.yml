@@ -16,7 +16,7 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 85
+    timeout-minutes: 100
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,6 +37,10 @@ jobs:
 
       - name: Refresh and verify all sports
         env:
+          SPORTYBET_PHONE: ${{ secrets.SPORTYBET_PHONE }}
+          SPORTYBET_PASSWORD: ${{ secrets.SPORTYBET_PASSWORD }}
+          SPORTYBET_BOOTSTRAP_COOKIES: ${{ secrets.SPORTYBET_BOOTSTRAP_COOKIES }}
+          SPORTYBET_PROXY_URL: ${{ secrets.SPORTYBET_PROXY_URL }}
           REFRESH_SECRET: ${{ secrets.REFRESH_SECRET }}
           SPORTYSOCIAL_LOGIN_ID: ${{ secrets.SPORTYSOCIAL_LOGIN_ID }}
           SPORTYSOCIAL_PASSWORD: ${{ secrets.SPORTYSOCIAL_PASSWORD }}

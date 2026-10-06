@@ -52,7 +52,7 @@ test('live board scrape returns all bet types with live flag and real ids', asyn
     assert.ok(LIVE_PATHS.some(p => u.pathname.endsWith(p)), `unexpected live path ${u.pathname}`);
     assert.equal(u.searchParams.get('sportId'), SPORT_IDS.football);
     return jsonResponse([
-      {eventId:'sr:match:live1',homeTeamName:'Live FC',awayTeamName:'Real Test',estimateStartTime:Date.now()-1800000,
+      {eventId:'sr:match:live1',live:true,homeTeamName:'Live FC',awayTeamName:'Real Test',estimateStartTime:Date.now()-1800000,
        tournament:'Live League',
        markets:[market('1','1X2',[outcome('1','Home',null,2.10),outcome('2','Draw',null,2.90)]),
                 market('29','GG/NG',[outcome('1','GG',null,2.40)])]},
@@ -74,7 +74,7 @@ test('live booking validation drops suspended legs and keeps offered ones with f
     const u = new URL(url);
     assert.ok(LIVE_PATHS.some(p => u.pathname.endsWith(p)), `unexpected live path ${u.pathname}`);
     return jsonResponse([
-      {eventId:'sr:match:live1',homeTeamName:'Live FC',awayTeamName:'Real Test',
+      {eventId:'sr:match:live1',live:true,homeTeamName:'Live FC',awayTeamName:'Real Test',
        markets:[market('1','1X2',[outcome('1','Home',null,2.35)])]}, // away outcome suspended; odds moved 2.10 -> 2.35
     ]);
   });
@@ -99,8 +99,9 @@ test('live candidate list leads with the observed liveOrPrematchEvents path', ()
 
 test('isLiveEvent separates in-play events from prematch and finished ones', () => {
   const now = Date.now();
-  // Explicit flags win
+  // Finished status overrides a stale explicit flag
   assert.equal(isLiveEvent({ live: true }), true);
+  assert.equal(isLiveEvent({ live:true,status:'Finished' }),false);
   assert.equal(isLiveEvent({ inPlay: 1 }), true);
   assert.equal(isLiveEvent({ live: false, estimateStartTime: now - 60000 }), false);
   assert.equal(isLiveEvent({ live: '0', estimateStartTime: now - 60000 }), false);
@@ -111,11 +112,11 @@ test('isLiveEvent separates in-play events from prematch and finished ones', () 
   assert.equal(isLiveEvent({ status: 'Ended', estimateStartTime: now - 60000 }), false);
   assert.equal(isLiveEvent({ sportEventStatus: { status: 'Halftime' } }), true);
   // Kickoff fallback when no flag/status exists
-  assert.equal(isLiveEvent({ estimateStartTime: now - 30 * 60000 }), true, 'started 30 min ago = live');
+  assert.equal(isLiveEvent({ estimateStartTime: now - 30 * 60000 }), false, 'kickoff alone does not prove ongoing play');
   assert.equal(isLiveEvent({ estimateStartTime: now + 3600000 }), false, 'future kickoff = prematch');
   assert.equal(isLiveEvent({ estimateStartTime: now - 20 * 3600000 }), false, 'started 20h ago = stale/finished');
-  // No signal at all stays permissive (a live-only endpoint is unaffected)
-  assert.equal(isLiveEvent({ eventId: 'sr:match:x' }), true);
+  // No signal at all is excluded from ongoing-only mode
+  assert.equal(isLiveEvent({ eventId: 'sr:match:x' }), false);
 });
 
 test('mixed liveOrPrematch feed keeps only in-play events for live mode', async () => {
@@ -128,7 +129,7 @@ test('mixed liveOrPrematch feed keeps only in-play events for live mode', async 
     assert.equal(u.searchParams.get('sportId'), SPORT_IDS.basketball);
     return jsonResponse([
       // In-play: started 40 minutes ago
-      {eventId:'sr:match:live1',homeTeamName:'Live BC',awayTeamName:'Real Test',estimateStartTime:now-2400000,
+      {eventId:'sr:match:live1',live:true,homeTeamName:'Live BC',awayTeamName:'Real Test',estimateStartTime:now-2400000,
        tournament:'Live League',
        markets:[market('1','1X2',[outcome('1','Home',null,2.10)])]},
       // In-play via explicit status, no kickoff time
@@ -163,7 +164,7 @@ test('live booking validation drops legs whose match left the in-play board', as
       // Same event id, but now back on the board as a not-started (prematch) row
       {eventId:'sr:match:flip',homeTeamName:'Flip FC',awayTeamName:'Flop United',estimateStartTime:now+3600000,
        markets:[market('1','1X2',[outcome('1','Home',null,2.00)])]},
-      {eventId:'sr:match:live1',homeTeamName:'Live FC',awayTeamName:'Real Test',estimateStartTime:now-1200000,
+      {eventId:'sr:match:live1',live:true,homeTeamName:'Live FC',awayTeamName:'Real Test',estimateStartTime:now-1200000,
        markets:[market('1','1X2',[outcome('1','Home',null,2.35)])]},
     ]);
   });
@@ -193,13 +194,13 @@ test('live scan retries without the marketId param when it hides embedded live m
     if (hasMarketParam) {
       // Live feed embeds nothing when asked for the prematch market ids.
       return jsonResponse([
-        {eventId:'sr:match:r1',homeTeamName:'Retry HC',awayTeamName:'Param United',estimateStartTime:now-1200000,
+        {eventId:'sr:match:r1',live:true,homeTeamName:'Retry HC',awayTeamName:'Param United',estimateStartTime:now-1200000,
          tournament:'Live Hockey League',markets:[]},
       ]);
     }
     // The site's own live call shape (sportId only) returns default markets.
     return jsonResponse([
-      {eventId:'sr:match:r1',homeTeamName:'Retry HC',awayTeamName:'Param United',estimateStartTime:now-1200000,
+      {eventId:'sr:match:r1',live:true,homeTeamName:'Retry HC',awayTeamName:'Param United',estimateStartTime:now-1200000,
        tournament:'Live Hockey League',
        markets:[market('1','1X2',[outcome('1','Home',null,2.10),outcome('2','Draw',null,3.40)])]},
     ]);
@@ -246,7 +247,7 @@ test('live scan retries without marketId even when the param empties the whole b
     seenMarketParam.push(hasMarketParam);
     if (hasMarketParam) return jsonResponse([]); // param empties the board entirely
     return jsonResponse([
-      {eventId:'sr:match:hb1',homeTeamName:'Hand A',awayTeamName:'Hand B',estimateStartTime:Date.now()-1200000,
+      {eventId:'sr:match:hb1',live:true,homeTeamName:'Hand A',awayTeamName:'Hand B',estimateStartTime:Date.now()-1200000,
        tournament:'Live Handball',
        markets:[market('1','1X2',[outcome('1','Home',null,1.80),outcome('2','Draw',null,3.40)])]},
     ]);
@@ -273,7 +274,7 @@ test('live booking validation falls back to the default live feed when marketId 
     assert.equal(u.searchParams.get('sportId'), SPORT_IDS.handball);
     if (u.searchParams.get('marketId')) return jsonResponse([]);
     return jsonResponse([
-      {eventId:'sr:match:hbv',homeTeamName:'Val A',awayTeamName:'Val B',estimateStartTime:now-900000,
+      {eventId:'sr:match:hbv',live:true,homeTeamName:'Val A',awayTeamName:'Val B',estimateStartTime:now-900000,
        tournament:'Live Handball',
        markets:[market('1','1X2',[outcome('1','Home',null,2.05)])]},
     ]);

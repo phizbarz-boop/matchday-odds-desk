@@ -117,7 +117,7 @@ test('buildCandidates defaults prematch rows to live:false', () => {
 test('server normalizes live mode and threads it through the builder pipeline', () => {
   assert.match(serverSrc, /function normalizeLiveMode\(value\)/);
   assert.match(serverSrc, /liveMode\s*=\s*'prematch'\s*\}\s*=\s*\{\}/, 'loadAutoCandidates must accept liveMode');
-  assert.match(serverSrc, /const wantsPrematch = liveModeNorm !== 'live'/);
+  assert.match(serverSrc, /const wantsPrematch = !\['live','quick_cash'\]\.includes\(liveModeNorm\)/);
   assert.match(serverSrc, /const wantsLive = liveModeNorm !== 'prematch'/);
   assert.match(serverSrc, /if \(wantsLive\) \{/, 'live merge block must exist');
   assert.match(serverSrc, /liveCandidates: oddsSafe\.filter/, 'diagnostics must report live candidates');
@@ -154,7 +154,7 @@ test('standalone live page is removed and Auto Builder carries the match-status 
   assert.match(indexSrc, /Live only \(ongoing games\)/);
   assert.match(indexSrc, /state\.autoLiveMode=liveMode/);
   assert.match(indexSrc, /maxSelections,todayOnly,liveMode,betTypes,leagues/, 'auto-pick POST body must include liveMode');
-  assert.match(indexSrc, /\.\.\.\(x\.live===true\?\{live:true\}:\{\}\)/, 'booking selections must carry live flag');
+  assert.match(indexSrc, /x\.live===true\?\{live:true,quickCash:/, 'booking selections must carry live flag');
   assert.match(indexSrc, /🔴 LIVE /, 'slip rows must show the live badge');
   assert.match(indexSrc, /p\.droppedLive/, 'booking result must surface dropped live legs');
 });
@@ -166,7 +166,7 @@ test('daily refresh seeds snapshots for all six sports with file fallback', () =
   for (const sport of ['basketball', 'hockey', 'handball', 'volleyball', 'tennis']) {
     assert.ok(refreshSrc.includes(`${sport}: ['winner','totals'`), `refresh must seed ${sport} snapshots`);
   }
-  assert.match(refreshSrc, /'1x2','gg','dc','dnb','ou05','ou15','ou45','ou25','cs','ah','corners','first_half_team_corners'/);
+  assert.match(refreshSrc, /'1x2','gg','dc','dnb','ou05','ou15','ou45','ou25','cs','ah','corners'/);
   assert.match(refreshSrc, /'home_ou05','away_ou05','home_ou45','away_ou45'/);
   assert.match(refreshSrc, /function sportySnapshotKey\(sport, kind\)/, 'refresh must share the server snapshot key scheme');
   assert.match(refreshSrc, /writeSnapshotFile\(key, \{ \.\.\.snap\.payload/, 'no-Redis branch must write snapshot files');

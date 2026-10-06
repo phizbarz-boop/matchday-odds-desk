@@ -24,7 +24,7 @@
     `SPORTYBET_NOT_CONFIGURED`; `PARSE_TIMEOUT` by `SPORTYBET_TIMEOUT`.
   - New guarded routes: `GET /api/sportybet/diagnostics` and
     `POST /api/sportybet/session/relogin`.
-- `jobs/refresh.js`: API-Football fixture expansion no longer gated on
+- `jobs/refresh.js`: SportyBet fixture expansion no longer gated on
   `PARSE_API_KEY`.
 - `tests/team-goal-nigeria-lookup.test.js`: rewritten against the direct
   client using its injected fetch hook; added a prematch-flattening test.

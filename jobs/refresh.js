@@ -1,22 +1,13 @@
-// Daily job: pull fixtures + current-season form from football-data.org for the
-// configured leagues, compute Poisson probabilities, blend a capped H2H signal,
-// and store the result for the web service to serve.
-
+// SportyBet-only daily fixture, statistics and market refresh.
 const fs = require('fs');
 const path = require('path');
-const { LEAGUES, getStandings, getUpcomingMatches, getFinishedMatches } = require('../lib/footballData');
-const { teamStrength, predictMatch, summarizeH2H, blendPredictionWithH2H } = require('../lib/model');
 const { getFootballMarket, getSportMarket } = require('../lib/sportybet');
-const { buildRowsFromOdds, appendUncoveredRows, buildCornerModelsByEvent, fixtureKey } = require('../lib/sportyOddsModel');
+const { enrichSportyFixtures, cleanPredictions, MODEL_VERSION } = require('../lib/sportyFootballModel');
 
-const TOKEN = process.env.FOOTBALL_DATA_TOKEN;
-const LEAGUE_CODES = (process.env.LEAGUES || 'PL,PD,SA,BL1,FL1').split(',').map(s => s.trim());
 // Keep enough model fixtures for the Analyzer without forcing the normal SportyBet Auto Builder to scan the same horizon.
 const ANALYZER_DAYS = Math.max(7, Math.min(21, parseInt(process.env.ANALYZER_DAYS || '14', 10)));
 const DAYS_AHEAD = Math.max(parseInt(process.env.DAYS_AHEAD || '4', 10), parseInt(process.env.PREDICTION_DAYS_AHEAD || '21', 10));
-const H2H_PREVIOUS_SEASONS = Math.max(0, Math.min(3, parseInt(process.env.H2H_PREVIOUS_SEASONS || '1', 10)));
 const H2H_MAX_WEIGHT = Math.max(0, Math.min(0.35, parseFloat(process.env.H2H_MAX_WEIGHT || '0.18')));
-const H2H_MAX_MEETINGS = Math.max(1, Math.min(20, parseInt(process.env.H2H_MAX_MEETINGS || '8', 10)));
 const DATA_FILE = path.join(__dirname, '..', 'data', 'predictions.json');
 
 // Snapshot keys/files must match server.js exactly: the web process reads what
@@ -55,7 +46,7 @@ async function collectSportySnapshots({ hours, maxPages, fixtures }) {
       console.warn(`Snapshot skipped ${sport}/${kind}: no rows returned`);
     }
   };
-  const footballKinds = ['1x2','gg','dc','dnb','ou05','ou15','ou45','ou25','cs','ah','corners','first_half_team_corners'];
+  const footballKinds = ['1x2','gg','dc','dnb','ou05','ou15','ou45','ou25','cs','ah','corners'];
   for (const kind of footballKinds) {
     try { add('football', kind, await getFootballMarket(kind, { hours, maxPages })); }
     catch (err) { console.warn(`Snapshot seed football/${kind} failed: ${err.message}`); }
@@ -111,7 +102,7 @@ function hasUsablePrediction(row) {
 
 function mergeWithExistingPredictions(freshPayload, previousPayload) {
   const fresh = Array.isArray(freshPayload?.matches) ? freshPayload.matches : [];
-  const previous = Array.isArray(previousPayload?.matches) ? previousPayload.matches : [];
+  const previous = cleanPredictions(previousPayload).matches;
   const previousByKey = new Map(previous.map(row => [predictionCacheKey(row), row]));
   const freshKeys = new Set();
   const merged = [];
@@ -135,8 +126,6 @@ function mergeWithExistingPredictions(freshPayload, previousPayload) {
         kickoffUtc: row.kickoffUtc || old.kickoffUtc,
         eventId: row.eventId || old.eventId,
         sportyEventId: row.sportyEventId || old.sportyEventId,
-        apiFootballFixtureId: row.apiFootballFixtureId || old.apiFootballFixtureId,
-        apiFootballMatchConfidence: row.apiFootballMatchConfidence || old.apiFootballMatchConfidence,
         cacheCarryForward: true,
         cacheCarryForwardReason: 'fresh_fixture_had_no_usable_model',
       });
@@ -175,141 +164,6 @@ function mergeWithExistingPredictions(freshPayload, previousPayload) {
       mergedAt: new Date().toISOString(),
     },
   };
-}
-
-// European football seasons are represented by their starting year.
-function activeSeasonStartYear(now = new Date()) {
-  return now.getUTCMonth() >= 6 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
-}
-
-async function loadH2HHistory(code) {
-  const all = [];
-  // Current-season completed games are useful for repeat cup/league meetings.
-  try {
-    all.push(...await getFinishedMatches(code, TOKEN));
-  } catch (err) {
-    console.warn(`${code}: current-season H2H history unavailable: ${err.message}`);
-  }
-
-  const currentStart = activeSeasonStartYear();
-  for (let i = 1; i <= H2H_PREVIOUS_SEASONS; i++) {
-    try {
-      all.push(...await getFinishedMatches(code, TOKEN, currentStart - i));
-    } catch (err) {
-      // Historical seasons can be restricted by football-data.org plan. The model
-      // remains valid without them, so degrade gracefully rather than failing refresh.
-      console.warn(`${code}: season ${currentStart - i} H2H history unavailable: ${err.message}`);
-      if (err.status === 403) break;
-    }
-  }
-
-  const seen = new Set();
-  return all.filter(m => {
-    if (!m || seen.has(m.id)) return false;
-    seen.add(m.id);
-    return true;
-  });
-}
-
-async function buildLeague(code) {
-  const meta = LEAGUES[code];
-  if (!meta) throw new Error(`Unknown league code ${code}`);
-
-  const standings = await getStandings(code, TOKEN);
-  const teamNames = Object.keys(standings);
-  if (teamNames.length === 0) return [];
-
-  let totalGoals = 0, totalPlayed = 0;
-  for (const t of teamNames) {
-    totalGoals += standings[t].gf;
-    totalPlayed += standings[t].played;
-  }
-  const leagueAvg = totalPlayed > 0 ? totalGoals / totalPlayed : 1.35;
-
-  const strengths = {};
-  for (const name of teamNames) {
-    strengths[name] = teamStrength(standings[name], leagueAvg, leagueAvg);
-  }
-
-  const today = new Date();
-  const from = fmtDate(today);
-  const toDate = new Date(today);
-  toDate.setDate(toDate.getDate() + DAYS_AHEAD);
-  const to = fmtDate(toDate);
-
-  const fixtures = await getUpcomingMatches(code, TOKEN, from, to);
-  const history = await loadH2HHistory(code);
-
-  const results = [];
-  for (const fx of fixtures) {
-    const home = strengths[fx.homeTeam];
-    const away = strengths[fx.awayTeam];
-    if (!home || !away) continue;
-
-    const base = predictMatch(home, away, leagueAvg, leagueAvg, 1.15);
-    const h2h = summarizeH2H(history, fx.homeTeam, fx.awayTeam, H2H_MAX_MEETINGS);
-    const probs = blendPredictionWithH2H(base, h2h, H2H_MAX_WEIGHT);
-
-    results.push({
-      league: meta.name,
-      leagueCode: code,
-      home: fx.homeTeam,
-      away: fx.awayTeam,
-      kickoffUtc: fx.utcDate,
-      h: Math.round(probs.homeWin * 100),
-      d: Math.round(probs.draw * 100),
-      a: Math.round(probs.awayWin * 100),
-      btts: Math.round(probs.bttsYes * 100),
-      homeO05: Math.round(probs.homeOver05 * 100),
-      awayO05: Math.round(probs.awayOver05 * 100),
-      homeU45: Math.round(probs.homeUnder45 * 100),
-      awayU45: Math.round(probs.awayUnder45 * 100),
-      o05: Math.round(probs.over05 * 100),
-      o15: Math.round(probs.over15 * 100),
-      u45: Math.round(probs.under45 * 100),
-      o25: Math.round(probs.over25 * 100),
-      oneUpHome: Math.round((probs.oneUpHome || 0) * 100),
-      oneUpAway: Math.round((probs.oneUpAway || 0) * 100),
-      score: `${probs.topScore.h}-${probs.topScore.a}`,
-      scoreP: Math.round(probs.topScore.p * 100),
-      pick: pickLabel(probs),
-      pickProb: Math.round(Math.max(probs.homeWin, probs.draw, probs.awayWin) * 100),
-      base: {
-        h: Math.round(base.homeWin * 100),
-        d: Math.round(base.draw * 100),
-        a: Math.round(base.awayWin * 100),
-        btts: Math.round(base.bttsYes * 100),
-        homeO05: Math.round(base.homeOver05 * 100),
-        awayO05: Math.round(base.awayOver05 * 100),
-        homeU45: Math.round(base.homeUnder45 * 100),
-        awayU45: Math.round(base.awayUnder45 * 100),
-        o05: Math.round(base.over05 * 100),
-        o15: Math.round(base.over15 * 100),
-        u45: Math.round(base.under45 * 100),
-        o25: Math.round(base.over25 * 100),
-        oneUpHome: Math.round((base.oneUpHome || 0) * 100),
-        oneUpAway: Math.round((base.oneUpAway || 0) * 100),
-      },
-      h2h: {
-        meetings: h2h.meetings,
-        influencePct: Math.round((probs.h2hWeight || 0) * 100),
-        homeWinPct: h2h.meetings ? Math.round(h2h.homeWins * 100) : null,
-        drawPct: h2h.meetings ? Math.round(h2h.draws * 100) : null,
-        awayWinPct: h2h.meetings ? Math.round(h2h.awayWins * 100) : null,
-        bttsPct: h2h.meetings ? Math.round(h2h.bttsRate * 100) : null,
-        homeOver05Pct: h2h.meetings ? Math.round(h2h.homeOver05Rate * 100) : null,
-        awayOver05Pct: h2h.meetings ? Math.round(h2h.awayOver05Rate * 100) : null,
-        homeUnder45Pct: h2h.meetings ? Math.round(h2h.homeUnder45Rate * 100) : null,
-        awayUnder45Pct: h2h.meetings ? Math.round(h2h.awayUnder45Rate * 100) : null,
-        over05Pct: h2h.meetings ? Math.round(h2h.over05Rate * 100) : null,
-        over15Pct: h2h.meetings ? Math.round(h2h.over15Rate * 100) : null,
-        under45Pct: h2h.meetings ? Math.round(h2h.under45Rate * 100) : null,
-        over25Pct: h2h.meetings ? Math.round(h2h.over25Rate * 100) : null,
-        recent: h2h.samples.slice(0, 5),
-      },
-    });
-  }
-  return results;
 }
 
 async function storeResult(payload, marketSnapshots = []) {
@@ -375,84 +229,18 @@ async function storeResult(payload, marketSnapshots = []) {
 }
 
 async function main() {
-  const marketSnapshots = [];
-  const hasFootballData = !!TOKEN;
-  if (!hasFootballData) {
-    console.warn('FOOTBALL_DATA_TOKEN not set — Poisson + H2H league models skipped; SportyBet no-vig odds expansion will carry football coverage.');
-  }
-  let all = [];
-  if (hasFootballData) for (const code of LEAGUE_CODES) {
-    try {
-      const rows = await buildLeague(code);
-      all = all.concat(rows);
-      console.log(`${code}: ${rows.length} fixtures`);
-    } catch (err) {
-      console.error(`Failed to build ${code}:`, err.message);
-    }
-  }
-
-  all.sort((x, y) => y.pickProb - x.pickProb);
-
-  // Seed the daily SportyBet snapshots for EVERY Auto Builder market on all six
-  // sports. After this, Auto Builder, Analyzer and Telegram builds read the
-  // snapshots and stop hammering SportyBet all day.
+  const hours = Math.min(24*21,Math.max(24,DAYS_AHEAD*24));
+  const maxPages = Math.max(1,Math.min(20,parseInt(process.env.DAILY_SPORT_REFRESH_MAX_PAGES || process.env.ANALYZER_MAX_PAGES || '12',10)));
+  const fixtures = await getFootballMarket('1x2',{hours,maxPages});
+  if (!fixtures.rows?.length) throw new Error('SportyBet returned no football fixtures; existing predictions were retained.');
+  const all = await enrichSportyFixtures(fixtures.rows,{maxFixtures:Math.max(1,Number(process.env.SPORTYBET_FOOTBALL_MAX_FIXTURES || 1000))});
+  const marketSnapshots = [{sport:'football',kind:'1x2',hours,payload:fixtures}];
   if (String(process.env.SPORTYBET_SNAPSHOT_SEED || '1') !== '0') {
-    try {
-      const hours = Math.min(24 * 21, Math.max(24, DAYS_AHEAD * 24));
-      const maxPages = Math.max(1, Math.min(20, parseInt(process.env.DAILY_SPORT_REFRESH_MAX_PAGES || process.env.ANALYZER_MAX_PAGES || '12', 10)));
-      const seeded = await collectSportySnapshots({ hours, maxPages, fixtures: all });
-      marketSnapshots.push(...seeded);
-      console.log(`SportyBet daily snapshots collected: ${seeded.length} market feeds across all sports`);
-    } catch (err) {
-      console.error(`SportyBet snapshot collection failed: ${err.message}`);
-    }
+    marketSnapshots.push(...await collectSportySnapshots({hours,maxPages,fixtures:all}));
   }
-
-  // SportyBet odds expansion: every football fixture on the SportyBet board that
-  // the Poisson + H2H leagues do not cover gets a no-vig model built from the
-  // bookmaker's own prices (1X2, GG/NG, goal lines, team totals, correct score,
-  // corners). Pure CPU on the snapshots already collected above — no extra
-  // SportyBet calls, and no external stats API anywhere.
-  try {
-    const footballPayloads = marketSnapshots
-      .filter(s => s.sport === 'football')
-      .map(s => s.payload);
-    const oddsRows = buildRowsFromOdds(footballPayloads, { live: false });
-    const res = appendUncoveredRows(all, oddsRows);
-    all = res.matches;
-    console.log(`SportyBet odds expansion: ${res.stats.modeled} fixtures modeled from SportyBet odds, ${res.stats.added} added, ${res.stats.alreadyCovered} already covered by Poisson + H2H.`);
-    // Corner lambdas for the Poisson + H2H rows too: invert the corners O/U
-    // lines from the same snapshots (the odds rows above already carry theirs).
-    const cornerMap = buildCornerModelsByEvent(marketSnapshots
-      .filter(s => s.sport === 'football' && (s.kind === 'corners' || s.kind === 'first_half_team_corners'))
-      .map(s => s.payload));
-    let upgradedCorners = 0;
-    for (const m of all) {
-      if (Number(m?.corners?.totalLambda || 0) > 0) continue;
-      const hit = cornerMap.get(String(m?.eventId || m?.sportyEventId || '')) || cornerMap.get(fixtureKey(m));
-      if (hit) { m.corners = hit; upgradedCorners++; }
-    }
-    if (upgradedCorners) console.log(`SportyBet odds expansion: ${upgradedCorners} existing fixtures received corner models from SportyBet corner lines.`);
-  } catch (err) {
-    console.error(`SportyBet odds expansion failed: ${err.message}`);
-  }
-
-  all.sort((x, y) => y.pickProb - x.pickProb);
-
-  await storeResult({
-    generatedAt: new Date().toISOString(),
-    model: {
-      name: hasFootballData ? 'Poisson + H2H + SportyBet odds expansion' : 'SportyBet odds (no-vig)',
-      h2hMaxWeight: H2H_MAX_WEIGHT,
-      h2hPreviousSeasons: H2H_PREVIOUS_SEASONS,
-      h2hMaxMeetings: H2H_MAX_MEETINGS,
-    },
-    matches: all,
-  }, marketSnapshots);
-  console.log(`Done. ${all.length} total fixtures.`);
+  await storeResult({generatedAt:new Date().toISOString(),model:{name:'SportyBet displayed goal averages + Poisson/H2H; no-vig fallback',version:MODEL_VERSION,h2hMaxWeight:H2H_MAX_WEIGHT},matches:all},marketSnapshots);
+  console.log(`Done. ${all.length} SportyBet fixtures; ${all.filter(x=>x.goalModelAvailable).length} form models, ${all.filter(x=>x.marketModel).length} market estimates.`);
 }
 
-main().catch(err => {
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) main().catch(err=>{console.error(err.message);process.exitCode=1;});
+module.exports = {main, mergeWithExistingPredictions, collectSportySnapshots};
