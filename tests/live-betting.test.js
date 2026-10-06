@@ -228,3 +228,92 @@ test('live scan does not retry when the sport simply has no live events', async 
     assert.equal(calls, 1, 'no retry when nothing is live');
   } finally { direct.setFetchForTesting(null); }
 });
+
+test('live scan retries without marketId even when the param empties the whole board', async () => {
+  // Regression: on Render every live kind returned totalRows=0 with NO
+  // "N live events scanned" line — i.e. scannedEvents === 0. The site's own
+  // live call sends only sportId, so the marketId/page params are the prime
+  // suspect; the old retry required scannedEvents > 0 and could never fire.
+  // Handball keeps this on its own sportId cache key; the env override gives
+  // it a marketId so the retry path is exercised.
+  process.env.SPORTYBET_MARKET_IDS_HANDBALL = '1';
+  const seenMarketParam = [];
+  direct.setFetchForTesting(async url => {
+    const u = new URL(url);
+    assert.ok(LIVE_PATHS.some(p => u.pathname.endsWith(p)), `unexpected live path ${u.pathname}`);
+    assert.equal(u.searchParams.get('sportId'), SPORT_IDS.handball);
+    const hasMarketParam = !!u.searchParams.get('marketId');
+    seenMarketParam.push(hasMarketParam);
+    if (hasMarketParam) return jsonResponse([]); // param empties the board entirely
+    return jsonResponse([
+      {eventId:'sr:match:hb1',homeTeamName:'Hand A',awayTeamName:'Hand B',estimateStartTime:Date.now()-1200000,
+       tournament:'Live Handball',
+       markets:[market('1','1X2',[outcome('1','Home',null,1.80),outcome('2','Draw',null,3.40)])]},
+    ]);
+  });
+  try {
+    const res = await getLiveSportMarket('handball','winner',{maxPages:1});
+    assert.equal(res.rows.length, 2, 'default live feed must supply rows even when the marketId page was empty');
+    assert.ok(seenMarketParam.includes(true) && seenMarketParam.includes(false), 'must retry once without the marketId param');
+    assert.ok(seenMarketParam.indexOf(true) < seenMarketParam.lastIndexOf(false), 'marketId request comes first, retry second');
+  } finally {
+    delete process.env.SPORTYBET_MARKET_IDS_HANDBALL;
+    direct.setFetchForTesting(null);
+  }
+});
+
+test('live booking validation falls back to the default live feed when marketId empties the board', async () => {
+  // Same failure mode at booking time: without the fallback every live leg
+  // would be dropped as "no longer offered" even though it is still offered.
+  process.env.SPORTYBET_MARKET_IDS_HANDBALL = '1';
+  const now = Date.now();
+  direct.setFetchForTesting(async url => {
+    const u = new URL(url);
+    assert.ok(LIVE_PATHS.some(p => u.pathname.endsWith(p)), `unexpected live path ${u.pathname}`);
+    assert.equal(u.searchParams.get('sportId'), SPORT_IDS.handball);
+    if (u.searchParams.get('marketId')) return jsonResponse([]);
+    return jsonResponse([
+      {eventId:'sr:match:hbv',homeTeamName:'Val A',awayTeamName:'Val B',estimateStartTime:now-900000,
+       tournament:'Live Handball',
+       markets:[market('1','1X2',[outcome('1','Home',null,2.05)])]},
+    ]);
+  });
+  try {
+    const { valid, dropped } = await validateLiveSelections([
+      {sport:'handball',eventId:'sr:match:hbv',marketId:'1',outcomeId:'1'},
+    ], {maxPages:1});
+    assert.equal(valid.length, 1, 'leg validated via the default live feed');
+    assert.equal(valid[0].odds, 2.05, 'kept leg carries the current live price');
+    assert.equal(dropped.length, 0);
+  } finally {
+    delete process.env.SPORTYBET_MARKET_IDS_HANDBALL;
+    direct.setFetchForTesting(null);
+  }
+});
+
+test('live zero-event pages log the payload shape so the cause is visible in Render logs', async () => {
+  // Tennis keeps this on an unused live cache key in this process. The mock
+  // returns a business-error envelope wrapped in a 200/success HTTP body —
+  // exactly the silent-empty case that produced totalRows=0 with no clues.
+  direct.setFetchForTesting(async url => {
+    const u = new URL(url);
+    assert.ok(LIVE_PATHS.some(p => u.pathname.endsWith(p)), `unexpected live path ${u.pathname}`);
+    assert.equal(u.searchParams.get('sportId'), SPORT_IDS.tennis);
+    return jsonResponse({ bizCode: 19000, message: 'Invalid', data: {} });
+  });
+  const logs = [];
+  const origLog = console.log;
+  console.log = (...args) => { logs.push(args.join(' ')); };
+  try {
+    const res = await getLiveSportMarket('tennis','winner',{maxPages:1});
+    assert.equal(res.rows.length, 0);
+    assert.equal(res.scannedEvents, 0);
+    const line = logs.find(l => l.includes('[SportyBet live]') && l.includes('0 events extracted'));
+    assert.ok(line, 'zero-event pages must log the payload shape');
+    assert.ok(line.includes('sr:sport:5'), 'diagnostic names the sport id');
+    assert.ok(line.includes('bizCode=19000') || line.includes('Invalid'), 'diagnostic surfaces the error envelope');
+  } finally {
+    console.log = origLog;
+    direct.setFetchForTesting(null);
+  }
+});
