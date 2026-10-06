@@ -3,14 +3,20 @@
 SportyBet data no longer comes from the paid Parse.bot API. The server now talks
 **directly to SportyBet**:
 
-- Fixtures, markets and odds are scraped from SportyBet's own public web JSON
-  endpoints. No account and no API key are needed for reading data.
-- Booking-code creation logs in with your **dummy SportyBet account**. The
-  session is kept alive automatically (see below).
+- Fixtures, markets and odds come directly from SportyBet's web JSON endpoints.
+  Configuring the dummy account makes market reads require its session too.
+- Booking codes require your **dummy SportyBet account**. Refresh is attempted
+  automatically; a rejected refresh/password login needs session recovery.
 
 ## Render environment variables
 
-Required for booking codes (the dummy account):
+For the rejected login shown in the latest logs, use a fresh browser session
+as described in `SPORTYBET_SESSION_RECOVERY.md`. Set `SPORTYBET_BOOTSTRAP_COOKIES`
+on Render and restart/deploy. A changed bootstrap value replaces stale persisted
+tokens; reusing the same value preserves tokens already rotated by the server.
+
+Password credentials remain a fallback (the current encrypted password-login
+adapter is unverified and must not be assumed to work):
 
 ```text
 SPORTYBET_PHONE=2348012345678
@@ -34,9 +40,8 @@ installs Playwright/Chromium. Manually: install Playwright, run
 `npx playwright install chromium`, then `node jobs/sporty-football-statistics-collector.js`
 before `npm run refresh`.
 
-Optional — only needed if diagnostics ever shows `SPORTYBET_GEO_BLOCKED`.
-SportyBet geo-blocks some server IPs; Render's were verified reachable (real
-JSON responses, no 451 page), so no proxy is needed on Render today:
+Optional — only needed if diagnostics shows `SPORTYBET_GEO_BLOCKED`.
+Reachability depends on the server IP and SportyBet's current restrictions:
 
 ```text
 SPORTYBET_PROXY_URL=http://user:pass@your-nigeria-proxy:8080
@@ -59,21 +64,22 @@ H2H_MAX_WEIGHT=0.18
 
 ## How the session is kept alive
 
-1. On boot (and before the first booking) the server logs in the dummy account
-   with `SPORTYBET_PHONE` / `SPORTYBET_PASSWORD`.
+1. The server loads the saved dummy session, applying a changed browser
+   bootstrap value first. Expired credentials try refresh before password login.
 2. Cookies and the access token are persisted to Redis when `REDIS_URL` is set
    (recommended on Render, where the filesystem is wiped on every deploy),
    otherwise to `.sportybet-session.json`.
-3. A keep-alive ping runs every `SPORTYBET_KEEPALIVE_SECONDS` (default 240s),
-   refreshing cookies before they die.
-4. If SportyBet still invalidates the session server-side, the next request
-   gets a 401/403, the client **re-logs in silently** and retries once.
+3. A keep-alive ping runs every `SPORTYBET_KEEPALIVE_SECONDS` (default 240s).
+   Auto scans and bookings also verify the account, sharing one account check
+   per minute by default.
+4. HTTP 401/403 and HTTP-200 session error responses try refresh before login
+   and retry once. Concurrent requests share renewal; failed logins back off
+   for 60 seconds by default.
 
-Honest limit: no client can stop SportyBet from expiring sessions server-side.
-What this build guarantees is detection + automatic recovery, so expiry is
-never visible to users. If the account ever demands an SMS OTP at login,
-automatic renewal stops and diagnostics will say so — log in once from a
-browser on the same IP/proxy to clear it.
+SportyBet can expire or revoke sessions, require account verification, or reject
+the hosting IP. Renewal cannot guarantee permanent access. When recovery fails,
+Auto Analyser displays a dummy-session error and diagnostics retain the cause.
+Complete any account verification yourself through SportyBet's own sign-in form.
 
 ## Diagnostics and manual recovery
 
@@ -101,7 +107,7 @@ SPORTYBET_BASE_URL=https://www.sportybet.com/api/ng
 SPORTYBET_ENDPOINT_PREMATCH=/factsCenter/pcUpcomingEvents
 SPORTYBET_ENDPOINT_EVENT=/factsCenter/eventDetail
 SPORTYBET_ENDPOINT_LIVE=/factsCenter/liveOrPrematchEvents
-SPORTYBET_ENDPOINT_LOGIN=/users/login (default first probe; self-heals)
+SPORTYBET_ENDPOINT_LOGIN=/patron/accessToken (default first probe)
 SPORTYBET_ENDPOINT_USERINFO=/patron/account/info
 SPORTYBET_ENDPOINT_BOOK=/orders/share
 SPORTYBET_ENDPOINT_BOOKING_LOOKUP=/orders/share
@@ -110,7 +116,7 @@ SPORTYBET_ENDPOINT_BOOKING_LOOKUP=/orders/share
 Login self-heals too: SportyBet moved its account service under `/patron`
 (the site's own account-info call is `/api/ng/patron/account/info`), so on
 each login the app probes a small candidate list
-(`/users/login`, `/patron/accessToken` (observed on the site Oct 2026),
+(`/patron/accessToken`, `/users/login`,
 `/patron/login`, … — extend with
 `SPORTYBET_ENDPOINT_LOGIN_CANDIDATES`) and adopts the first path that answers
 with anything other than the gateway's 404. The adopted path is persisted
@@ -144,18 +150,17 @@ the dummy account): candidates are tried only when an actual login is needed,
 each candidate is POSTed once, geo/bot blocks abort probing immediately, and
 a fully-failed probe round backs off for 10 minutes.
 
-### The patron login flow (observed Oct 2026)
+### Password-login adapter
 
-The site's login is: `POST /api/ng/patron/cipher` (empty body) returns a
-one-time AES-128 key (`data.password`) plus a `ursId`; the app then encrypts
-`{"phone","password","ursId"}` with that key and POSTs the single base64 blob
-to `/api/ng/patron/accessToken`. Success sets `accessToken` / `refreshToken`
-cookies. Crypto variants can be tuned with `SPORTYBET_LOGIN_CIPHER_MODE`
-(`cbc` default, or `ecb`) and `SPORTYBET_LOGIN_IV` (`zero` default, or `key`).
+The legacy adapter calls `/patron/cipher` and encrypts its payload before
+posting to `/patron/accessToken`. Its default AES/CBC format has not been
+verified against the current SportyBet web bundle. A generic HTTP-200 login
+rejection does not prove which field or cipher is wrong. Do not repeatedly try
+different cipher settings/passwords. Use a browser-issued dummy session.
 
 ### Cookie bootstrap (simplest reliable session)
 
-If the encrypted login ever gives trouble, hand the server a browser session
+When password login is rejected, hand the server a browser session
 directly: in Firefox/Chrome DevTools → Storage/Application → Cookies →
 `www.sportybet.com`, copy `accessToken`, `refreshToken` and `deviceId`, and
 set one env var:
@@ -164,11 +169,12 @@ set one env var:
 SPORTYBET_BOOTSTRAP_COOKIES=accessToken=...; refreshToken=...; deviceId=...
 ```
 
-The keep-alive rotates the access token via `POST /api/ng/patron/refresh`
-(the refresh token lives 30 days and renews on every use), so a bootstrapped
-session stays alive indefinitely while the server runs. Bootstrap is only
-used when no persisted session exists; password login remains the fallback.
-`SPORTYBET_PHONE`/`SPORTYBET_PASSWORD` are optional in this mode.
+Refresh uses `POST /api/ng/patron/refresh` while SportyBet accepts the refresh
+cookie. A changed bootstrap replaces stale saved auth even if an old token is
+still present; an unchanged bootstrap does not replace newer rotated tokens.
+`SPORTYBET_PHONE`/`SPORTYBET_PASSWORD` are optional with a working browser
+session. Keep the cookie values private. The local session capture helper and
+recovery checks are documented in `SPORTYBET_SESSION_RECOVERY.md`.
 
 To find the current paths: open sportybet.com/ng in a browser, open DevTools →
 Network (check "Disable Cache"), log in / load a booking code / open a match,

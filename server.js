@@ -1315,7 +1315,7 @@ app.post('/api/sportybet/session/relogin', express.json(), async (req, res) => {
     return res.status(401).json({ error: 'Website access required' });
   }
   try {
-    const result = await sportyDirect.login({ force: true });
+    const result = await sportyDirect.login({ force: true, bypassBackoff: true });
     res.json({ ok: true, result, session: sportyDirect.sessionStatus() });
   } catch (err) {
     res.status(err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : 502).json({
@@ -1413,6 +1413,9 @@ function normalizeAutoBetTypesForSports(sports, betTypes) {
 
 async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch' } = {}) {
   return withFreshSportyRequest(async()=>{
+    // One failed dummy login is a session error, not dozens of empty markets.
+    // Check before the fan-out so Website and Telegram receive its real cause.
+    if (sportyDirect.sessionRequired()) await sportyDirect.ensureSession({validate:true});
     const liveModeNorm = normalizeLiveMode(liveMode);
     const wantsPrematch = !['live','quick_cash'].includes(liveModeNorm);
     const wantsLive = liveModeNorm !== 'prematch';
@@ -1482,6 +1485,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
       try {
         return await fn();
       } catch (err) {
+        if (err.code === 'SPORTYBET_AUTH_FAILED' || err.code === 'SPORTYBET_NOT_CONFIGURED') throw err;
         console.error(`[Auto candidates] ${label} unavailable: ${err.message}`);
         sourceErrors[label]=String(err.message||err).slice(0,160);
         return { ...emptyValue, rows: Array.isArray(emptyValue.rows) ? emptyValue.rows : [], error: err.message };
@@ -1564,6 +1568,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
           liveDiagnostics.totalRows += rows.length;
           return rows;
         } catch (err) {
+          if (err.code === 'SPORTYBET_AUTH_FAILED' || err.code === 'SPORTYBET_NOT_CONFIGURED') throw err;
           console.warn(`[Auto candidates] live ${key} unavailable: ${err.message}`);
           liveDiagnostics.rows[key] = 0;
           liveDiagnostics.errors[key] = String(err.message || err).slice(0, 160);
@@ -2336,12 +2341,15 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     });
   } catch (err) {
     console.error('SportyBet auto-pick error:', err.message);
-    const status = err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : 502;
+    const sessionFailed = err.code === 'SPORTYBET_AUTH_FAILED';
+    const status = sessionFailed || err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : 502;
     res.status(status).json({
-      error: err.code === 'SPORTYBET_NOT_CONFIGURED'
+      error: sessionFailed ? 'SportyBet dummy account session needs renewal' : err.code === 'SPORTYBET_NOT_CONFIGURED'
         ? 'SportyBet integration is not configured yet'
         : 'Failed to build automatic SportyBet slip',
-      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+      code: err.code || null,
+      detail: sessionFailed || process.env.NODE_ENV !== 'production' ? err.message : undefined,
+      retryAt: err.retryAt || undefined,
     });
   }
 });
@@ -2638,7 +2646,7 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
 
 async function runTelegramQuickCash(context) {
   return withFreshSportyRequest(()=>runHourlyPicks({
-    assertSession:()=>sportyDirect.ensureSession(),
+    assertSession:()=>sportyDirect.ensureSession({validate:true}),
     loadPool:()=>prepareAutoCandidatePool({sportScope:'all',liveMode:'live',minProbability:0,minEdge:-25,
       leagues:null,betTypes:Object.values(AUTO_BET_TYPES_BY_SPORT).flat(),todayOnly:false}),
     select:(pool,plan)=>selectAutoBet(pool,{targetOdds:plan.targetOdds,maxSelections:plan.maxSelections,trials:400}),
@@ -2665,7 +2673,7 @@ async function runTelegramQuickCash(context) {
 async function runTelegramPerformanceReport({redis,window,onPostingStart,shouldAbort}) {
   return withFreshSportyRequest(async()=>{
     const refreshed=await refreshTicketResults(redis,{getBooking:code=>getBooking(code,{fresh:true}),
-      getEvent:id=>sportyDirect.fetchEventDetail(id),assertSession:()=>sportyDirect.ensureSession(),shouldAbort,window});
+      getEvent:id=>sportyDirect.fetchEventDetail(id),assertSession:()=>sportyDirect.ensureSession({validate:true}),shouldAbort,window});
     const report=buildPerformanceReport(await listTrackedSlips(redis),window,refreshed.updatedTickets);
     if(shouldAbort())throw new Error('Telegram report cancelled before posting');
     await onPostingStart();

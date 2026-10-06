@@ -3,3 +3,4 @@ data/
 .env
 .DS_Store
 .sportybet-session.json
+.sportybet-bootstrap.env
