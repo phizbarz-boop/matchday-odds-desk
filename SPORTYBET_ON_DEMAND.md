@@ -17,7 +17,7 @@ Booking-code analysis reads the exact event IDs on the submitted ticket. It does
 
 ## What Daily Prediction Refresh still does
 
-The daily workflow collects SportyBet football statistics, calculates and persists a prediction snapshot, refreshes market/collector snapshots for the six sports, and verifies the saved results. Scheduled Telegram picks keep their existing schedule. These background jobs can maintain historical information and daily status; user requests work independently.
+The daily workflow collects SportyBet football statistics, calculates and persists a prediction snapshot, refreshes market/collector snapshots for the six sports, and verifies the saved results. Scheduled Telegram uses the retained morning SAFE, five hourly QC/live templates and a 12-hour result/ROI report; see `TELEGRAM_HOURLY_SPORT_QC_AND_ROI.md`. These background jobs can maintain historical information and daily status; user requests work independently.
 
 The website football dashboard requests `/api/predictions?source=current`. The default `/api/predictions` still exposes the saved daily snapshot so workflow completion checks remain meaningful.
 
@@ -34,6 +34,6 @@ The website football dashboard requests `/api/predictions?source=current`. The d
 
 Deploy the updated source using the existing server settings. No new required environment variables or paid data key are needed. Keep the dummy SportyBet credentials for session-backed reads and booking/share codes.
 
-161 Node regression tests passed, and syntax checks passed for all 51 source/test JavaScript files plus the inline website script. Tests cover changed odds, newly added games, old snapshots, all six sports, tennis/volleyball totals, pagination, suspended markets, exact imported fixtures, missing historical statistics, live/Quick Cash validation, hourly scheduling and Today’s Codes.
+200 Node regression tests passed, and syntax checks passed for all 58 source/test JavaScript files plus the inline website script. Tests cover changed odds, newly added games, old snapshots, all six sports, tennis/volleyball totals, pagination, suspended markets, exact imported fixtures, missing historical statistics, live/Quick Cash validation, hourly scheduling and Today’s Codes.
 
 Fresh read-only requests returned current SportyBet fixtures for all six sports. A real local HTTP Auto Analyser request produced 125 candidates at a 70% minimum probability and built eight selections with no source errors. Authenticated statistics collection and real booking creation have not been exercised in this workspace; booking-code flow tests use a mocked share-code service.

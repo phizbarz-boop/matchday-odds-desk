@@ -12,13 +12,15 @@ const { getFootballMarket, getSportMarket, getLiveSportMarket, validateLiveSelec
 const { buildCandidates, selectAutoBet, passesRedFlagFilter } = require('./lib/autoPicker');
 const { sendTelegramMessage, sendTelegramMessageTo, telegramRequest, sendTelegramAiMessageTo, telegramAiRequest } = require('./lib/telegram');
 const { PLANS: TELEGRAM_AI_PLANS, ALL_BET_IDS: TELEGRAM_AI_ALL_BET_IDS, SPECIAL_BET_IDS: TELEGRAM_SPECIAL_BET_IDS, allowedBetIdsForPlan: telegramAiAllowedBetIdsForPlan, getUser: getTelegramAiUser, saveUser: saveTelegramAiUser, getPlan: getTelegramAiPlan, consume: consumeTelegramAiUsage, activatePlan: activateTelegramAiPlan, addExtraTickets: addTelegramAiExtraTickets, hasTicketCredit: telegramAiHasTicketCredit, parseNaturalRequest: parseTelegramAiRequest, planKeyboard: telegramAiPlanKeyboard, ticketLimitKeyboard: telegramAiTicketLimitKeyboard, mainKeyboard: telegramAiMainKeyboard, builderSummary: telegramAiBuilderSummary, builderKeyboard: telegramAiBuilderKeyboard, sportKeyboard: telegramAiSportKeyboard, targetKeyboard: telegramAiTargetKeyboard, probabilityKeyboard: telegramAiProbabilityKeyboard, maxOddKeyboard: telegramAiMaxOddKeyboard, edgeKeyboard: telegramAiEdgeKeyboard, maxGamesKeyboard: telegramAiMaxGamesKeyboard, marketsKeyboard: telegramAiMarketsKeyboard, analyzerSummary: telegramAiAnalyzerSummary, analyzerKeyboard: telegramAiAnalyzerKeyboard, analyzerAnalysisKeyboard: telegramAiAnalyzerAnalysisKeyboard, analyzerProbKeyboard: telegramAiAnalyzerProbKeyboard, analyzerHorizonKeyboard: telegramAiAnalyzerHorizonKeyboard, resultKeyboard: telegramAiResultKeyboard, plansText: telegramAiPlansText } = require('./lib/telegramAiBot');
-const { trackTelegramSlip, evaluateBooking } = require('./lib/slipTracker');
+const { trackTelegramSlip, evaluateBooking, listTrackedSlips, updateTrackedTicket } = require('./lib/slipTracker');
 const { watDateKey } = require('./lib/dailyScheduleGuard');
-const { SPORT_TIERS: TELEGRAM_SPORT_TIERS, selectTelegramMixedWithSportPriority } = require('./lib/telegramMixedSelector');
+const { selectTelegramMixedWithSportPriority } = require('./lib/telegramMixedSelector');
 const { enrichSportyFixtures, cleanPredictions, STATS_KEY, STATS_FILE } = require('./lib/sportyFootballModel');
 const {sportyRequest,withFreshSportyRequest,memoSportyRead}=require('./lib/sportyRequest');
 const { sanitizeStats } = require('./lib/sportyFootballStats');
-const {registerTelegramQuickCashRoute,quickCashConfig}=require('./lib/telegramQuickCash');
+const {registerTelegramQuickCashRoute}=require('./lib/telegramQuickCash');
+const {hourlyPlans,runHourlyPicks}=require('./lib/telegramHourlyPicks');
+const {refreshTicketResults,buildPerformanceReport,performanceText,registerTelegramPerformanceRoute}=require('./lib/telegramPerformance');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
 
 let redisClient = null;
@@ -294,7 +296,7 @@ function telegramDailyCodeVisibleForPlan(planId, label) {
   const plan = String(planId || 'free').toLowerCase();
   if (plan !== 'free') return true;
   const key = String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  return key.includes('safe') || key === '2' || key.startsWith('qc') || key.includes('quickcash');
+  return key.includes('safe') || key.startsWith('qc') || key.startsWith('live') || key.includes('quickcash');
 }
 
 
@@ -327,11 +329,12 @@ function plot207TelegramHelpText(plan = null) {
     'A SAFE pick is still a prediction, not a guaranteed win.',
     '',
     '🎟 TODAY’S CODES',
-    'This shows SportyBet booking codes from Daily Auto Picks and hourly Quick Cash (QC).',
-    '• Free: SAFE, 2x and hourly QC codes.',
+    'This shows SportyBet codes from the morning SAFE pick and five hourly live tickets.',
+    '• Free: SAFE and all hourly QC / Live 85% codes.',
     '• Pro: all available daily codes.',
     '• Elite: all available daily codes.',
-    'QC scans current late-stage live games every hour at 0% minimum probability. New QC codes are added to Today’s Codes with their WAT time.',
+    'Hourly QC: Ice Hockey, Basketball, Handball + Volleyball, and Football — each at 0%. Live All Sports uses 85% and all supported bet types. Every live leg must be halfway and currently winning; QC must also be late-stage.',
+    'New hourly codes appear in Today’s Codes with their category and WAT hour. At 00:10 and 12:10 WAT, results show winners, closest/worst tickets and hypothetical ₦100-per-ticket ROI.',
     '',
     '🔎 ANALYZE CODE',
     'Use this to check an existing SportyBet booking code.',
@@ -401,31 +404,32 @@ async function loadTelegramDailyCodes(redis, dateKey) {
     try { quickCash=(await redis.hVals(`telegram:quick-cash:codes:${dateKey}`)).map(row=>JSON.parse(row)); }
     catch(e){console.warn('Quick Cash codes Redis read failed:',e.message);}
   }
-  return {...snapshot,codes:[...(Array.isArray(snapshot.codes)?snapshot.codes:[]),...quickCash.filter(c=>c.shareCode)]};
+  return {...snapshot,codes:[...(Array.isArray(snapshot.codes)?snapshot.codes:[]),...quickCash.filter(c=>c.shareCode)]
+    .filter(c=>/safe|^(?:QC|LIVE)\b/i.test(String(c.targetOdds||'')))};
 }
 
-async function saveTelegramQuickCashCode(redis,dateKey,hourKey,booking,result) {
-  const code={targetOdds:`QC · ${hourKey.slice(11)}:00 WAT`,liveMode:'quick_cash',minProbability:0,
+async function saveTelegramQuickCashCode(redis,dateKey,hourKey,booking,result,plan) {
+  const field=`${hourKey}:${plan.id}`;
+  const code={targetOdds:`${plan.label} · ${hourKey.slice(11)}:00 WAT`,planId:plan.id,liveMode:plan.liveMode,minProbability:plan.minProbability,
     combinedOdds:Number(result.combinedOdds),shareCode:String(booking.shareCode),hourKey,generatedAt:new Date().toISOString()};
   // QC owns separate hash fields: a daily run cannot erase hourly history,
   // and simultaneous daily/hourly writes cannot overwrite one another.
   const key=`telegram:quick-cash:codes:${dateKey}`;
-  await redis.hSet(key,hourKey,JSON.stringify(code));
+  await redis.hSet(key,field,JSON.stringify(code));
   await redis.expire(key,172800);
   if(!telegramQuickCashCodesMemory.has(dateKey))telegramQuickCashCodesMemory.set(dateKey,new Map());
-  telegramQuickCashCodesMemory.get(dateKey).set(hourKey,code);
+  telegramQuickCashCodesMemory.get(dateKey).set(field,code);
   return code;
 }
 
 function telegramDailyCodesText(snapshot, plan) {
-  const codes = Array.isArray(snapshot?.codes) ? snapshot.codes : [];
+  const codes = (Array.isArray(snapshot?.codes) ? snapshot.codes : []).filter(c=>/safe|^(?:QC|LIVE)\b/i.test(String(c.targetOdds||'')));
   const isFree = plan?.id === 'free';
   const lines = ['🎟 TODAY’S AUTO-PICK CODES', '', `Date: ${snapshot?.date || fixtureDateKeyInTimeZone(new Date(), 'Africa/Lagos')} (WAT)`, ''];
   if (!codes.length) {
     lines.push('No Auto Pick codes have been generated yet today.');
   } else {
-    // Show EVERY code the daily pick run stored: SAFE, 2x, 3x and the 1000x
-    // sport tickets (Ice Hockey, Basketball, Handball + Volleyball).
+    // Retired 2x/3x/1000 sport templates are not shown after the update.
     const labelFor = target => {
       const raw = String(target || '');
       if (/safe/i.test(raw)) return 'SAFE 1.30–5.00';
@@ -436,9 +440,7 @@ function telegramDailyCodesText(snapshot, plan) {
     const priority = target => {
       const raw = String(target || '');
       if (/safe/i.test(raw)) return 0;
-      if (raw === '2') return 1;
-      if (raw === '3') return 2;
-      return 3;
+      return 1;
     };
     const sorted = codes.slice().sort((a, b) => priority(a.targetOdds) - priority(b.targetOdds)||(b.hourKey||'').localeCompare(a.hourKey||''));
     for (const row of sorted) {
@@ -452,8 +454,8 @@ function telegramDailyCodesText(snapshot, plan) {
     }
   }
   lines.push('', 'Codes only — game selections are not shown here.');
-  lines.push('QC = hourly live Quick Cash · minimum probability 0% · newest QC first.');
-  if (isFree) lines.push('Free access: SAFE + 2x + QC. Upgrade to Pro or Elite to reveal every other daily code.');
+  lines.push('Hourly: 4 sport-specific QC tickets at 0% + Live All Sports at 85% · newest hour first.');
+  if (isFree) lines.push('Free access: SAFE and every hourly QC / Live 85% code.');
   return lines.join('\n');
 }
 
@@ -2391,21 +2393,6 @@ const TELEGRAM_SAFE_SPORT_TIERS = [
   ['handball','volleyball'],
 ];
 
-// Scheduled 2x/3x tickets: Ice Hockey + Basketball + Tennis first; only add
-// Handball + Volleyball if the preferred group cannot complete the target.
-const TELEGRAM_2X3X_SPORT_TIERS = [
-  ['hockey','basketball','tennis'],
-  ['handball','volleyball'],
-];
-
-// Additional high-odds scheduled tickets. These are strict sport pools with a
-// 1000x goal, but 1000x is NOT a hard publish requirement: when today's >=80%
-// pool cannot reach 1000 within 15 unique fixtures, publish the best available
-// combination instead. Winner markets are still tried first.
-const TELEGRAM_HOCKEY_ONLY_SPORT_TIERS = [['hockey']];
-const TELEGRAM_BASKETBALL_ONLY_SPORT_TIERS = [['basketball']];
-const TELEGRAM_HANDBALL_VOLLEYBALL_SPORT_TIERS = [['handball','volleyball']];
-
 function selectTelegramSafeWithPriority(plan, candidates, maxSelections) {
   const targetPlan = { ...plan, targetOdds: plan.minOdds };
   const picked = selectTelegramMixedWithSportPriority(targetPlan, candidates, maxSelections, {
@@ -2421,8 +2408,7 @@ function selectTelegramSafeWithPriority(plan, candidates, maxSelections) {
   return picked;
 }
 
-// Match-winner classification is retained for diagnostics. SAFE, 2x and 3x
-// are all eligible for the supported markets below.
+// Morning SAFE tries winners first, then the supported supplemental markets.
 // The website and interactive Telegram AI Builder remain unchanged.
 const TELEGRAM_WINNER_BET_TYPES = [
   'home_win', 'away_win',
@@ -2435,8 +2421,7 @@ function isTelegramWinnerSelection(candidate) {
   return !/^(draw|tie|x)$/i.test(String(candidate?.outcomeDesc || '').trim());
 }
 
-// Existing supported markets are eligible for SAFE, 2x and 3x.
-// Scheduled thresholds: 1.30 SAFE >=85%; 2x/3x >=80%. Red-flag protection remains enabled.
+// Supplemental markets for the morning SAFE ticket (85% minimum).
 const TELEGRAM_FALLBACK_BET_TYPES = [
   'draw', 'dc_1x', 'dc_x2', 'dnb', 'over05', 'home_over05', 'away_over05', 'home_under45', 'away_under45', 'over15', 'under45',
   'gg_yes', 'ng_no', 'ah_0', 'ah_plus025', 'ah_minus025',
@@ -2478,23 +2463,16 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
     throw err;
   };
   assertNotCancelled();
-  // SAFE, 2x and 3x use all six sports with hockey/basketball first.
+  // Morning SAFE remains; every other scheduled template now runs hourly.
   const sportScope = 'all';
   const maxSelections = Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10)));
   const leagues = process.env.TELEGRAM_FOOTBALL_LEAGUES
     ? process.env.TELEGRAM_FOOTBALL_LEAGUES.split(',').map(x => x.trim()).filter(Boolean)
     : null;
 
-  // Scheduled Telegram plans only. Interactive AI Builder and website retain
-  // their independent, user-selected odds choices. Scheduled probability floors are
-  // 85% for 1.30 SAFE and 80% for every other scheduled ticket.
+  // Interactive AI Builder and website retain their user-selected odds choices.
   const plans = [
     { label: '1.30–5.00 SAFE', targetOdds: 1.30, minProbability: 85, minOdds: 1.30, maxOdds: 5.00, maxSelections: 15 },
-    { label: '2', targetOdds: 2, minProbability: 80, mixedMarkets: true, allSports: true, maxSelections: 20 },
-    { label: '3', targetOdds: 3, minProbability: 80, mixedMarkets: true, allSports: true, maxSelections: 20 },
-    { label: '1000 ICE HOCKEY', targetOdds: 1000, minProbability: 80, maxSelections: 15, flexibleTarget: true, sportScopeLabel: 'ice hockey', sportTiers: TELEGRAM_HOCKEY_ONLY_SPORT_TIERS },
-    { label: '1000 BASKETBALL', targetOdds: 1000, minProbability: 80, maxSelections: 15, flexibleTarget: true, sportScopeLabel: 'basketball', sportTiers: TELEGRAM_BASKETBALL_ONLY_SPORT_TIERS },
-    { label: '1000 HANDBALL + VOLLEYBALL', targetOdds: 1000, minProbability: 80, maxSelections: 15, flexibleTarget: true, sportScopeLabel: 'handball + volleyball', sportTiers: TELEGRAM_HANDBALL_VOLLEYBALL_SPORT_TIERS },
   ];
 
   // One current market scan covers all six sports for every target.
@@ -2532,8 +2510,8 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
   await sendTelegramMessage([
     '🤖 PLOT207 SPORTS • DAILY PICKS',
     `📅 ${watToday} (WAT)`,
-    '🎯 SAFE • 2x • 3x',
-    '🚀 1000 target • Ice Hockey • Basketball • Handball + Volleyball',
+    '🎯 Morning SAFE · 1.30–5.00 · minimum probability 85%',
+    '💵 Separate QC 0% and Live All Sports 85% tickets run hourly.',
     'Probabilities are estimates, not guarantees.',
   ].join('\n'));
 
@@ -2553,28 +2531,12 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
       continue;
     }
 
-    const picked = isSafePlan
-      ? selectTelegramSafeWithPriority(plan, planCandidates, planMaxSelections)
-      : selectTelegramMixedWithSportPriority(plan, planCandidates, planMaxSelections, {
-          sportTiers: plan.sportTiers || TELEGRAM_2X3X_SPORT_TIERS,
-          isWinner: isTelegramWinnerSelection,
-        });
+    const picked = selectTelegramSafeWithPriority(plan, planCandidates, planMaxSelections);
     const result = picked.result;
 
     if (!result.selections.length) {
       output.push({ targetOdds: plan.label, error: 'No eligible combination found' });
       await sendTelegramMessage(`⚠️ Could not build the ${plan.label} odds slip from the qualifying selections.`);
-      continue;
-    }
-
-    // 2x/3x remain hard targets. The three sport-specific 1000x plans are
-    // flexible: if today's >=80% pool cannot reach 1000x within 15 legs, send
-    // the best available combination and clearly show its actual combined odds.
-    if (!isSafePlan && !plan.flexibleTarget && (!result.reachedTarget || !Number.isFinite(Number(result.combinedOdds)) ||
-        Number(result.combinedOdds) < plan.targetOdds)) {
-      output.push({ targetOdds: plan.label, combinedOdds: result.combinedOdds,
-        error: `No qualifying combination reached ${plan.label}x` });
-      await sendTelegramMessage(`⚠️ ${plan.label}x set NOT GENERATED — no qualifying combination reached ${plan.label}x.`);
       continue;
     }
 
@@ -2674,49 +2636,42 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
 
 
 
-async function runTelegramQuickCash({redis,hourKey,dateKey,onPostingStart=()=>{},shouldAbort=()=>false}) {
+async function runTelegramQuickCash(context) {
+  return withFreshSportyRequest(()=>runHourlyPicks({
+    assertSession:()=>sportyDirect.ensureSession(),
+    loadPool:()=>prepareAutoCandidatePool({sportScope:'all',liveMode:'live',minProbability:0,minEdge:-25,
+      leagues:null,betTypes:Object.values(AUTO_BET_TYPES_BY_SPORT).flat(),todayOnly:false}),
+    select:(pool,plan)=>selectAutoBet(pool,{targetOdds:plan.targetOdds,maxSelections:plan.maxSelections,trials:400}),
+    validate:async(selections,plan)=>{
+      const current=await validateLiveSelections(selections,{maxPages:Math.max(1,Math.min(20,Number(process.env.SPORTYBET_LIVE_MAX_PAGES)||5))});
+      if(!current.valid.length)return current;
+      // Rebuild the chosen market probabilities from a new board read, so an
+      // old 85% estimate cannot survive an odds/score change at booking time.
+      const fresh=await withFreshSportyRequest(()=>prepareAutoCandidatePool({
+        sportScope:current.valid.map(c=>String(c.sport).toLowerCase().includes('hockey')?'hockey':String(c.sport).toLowerCase()),
+        liveMode:plan.liveMode,minProbability:0,minEdge:-25,leagues:null,
+        betTypes:[...new Set(current.valid.map(c=>c.betType))],todayOnly:false,
+      }),{reset:true});
+      const key=c=>[c.eventId,c.marketId,c.outcomeId,c.specifier||'',c.betType].join('|');
+      const offered=new Map(fresh.candidates.map(c=>[key(c),c]));
+      return {valid:current.valid.filter(c=>offered.has(key(c))).map(c=>({...c,...offered.get(key(c)),
+        quickCash:plan.liveMode==='quick_cash',liveValidatedAt:new Date().toISOString()})),dropped:current.dropped};
+    },
+    combine:telegramCombinedResult,book:bookBet,saveCode:saveTelegramQuickCashCode,
+    track:trackTelegramSlip,updateTrack:updateTrackedTicket,send:sendTelegramMessage,
+  },context));
+}
+
+async function runTelegramPerformanceReport({redis,window,onPostingStart,shouldAbort}) {
   return withFreshSportyRequest(async()=>{
-    const checkCancelled=()=>{
-      if(shouldAbort()){const err=new Error('Quick Cash cancelled before Telegram posting');err.code='TELEGRAM_CANCELLED_BEFORE_POST';throw err;}
-    };
-    checkCancelled();
-    const config=quickCashConfig();
-    const betTypes=Object.values(AUTO_BET_TYPES_BY_SPORT).flat();
-    const prepared=await prepareAutoCandidatePool({sportScope:'all',liveMode:'quick_cash',
-      minProbability:0,minEdge:-25,leagues:null,betTypes,todayOnly:false});
-    checkCancelled();
-    const pool=prepared.candidates;
-    const empty=reason=>({sent:false,skipped:true,reason,liveMode:'quick_cash',minProbability:0,candidateCount:pool.length});
-    if(!pool.length){
-      const errors={...prepared.diagnostics.sourceErrors,...prepared.diagnostics.liveDiagnostics?.errors};
-      if(Object.keys(errors).length)throw new Error('Current SportyBet live reads failed: '+Object.keys(errors).join(', '));
-      return empty('no_eligible_live_games');
-    }
-    const selected=selectAutoBet(pool,{targetOdds:config.targetOdds,maxSelections:config.maxSelections,trials:400});
-    if(!selected.selections.length)return empty('no_eligible_combination');
-    // Always perform a second current read before creating an hourly live code.
-    const current=await validateLiveSelections(selected.selections,{maxPages:Math.max(1,Math.min(20,Number(process.env.SPORTYBET_LIVE_MAX_PAGES)||5))});
-    checkCancelled();
-    const result=telegramCombinedResult(current.valid,config.targetOdds,pool.length);
-    if(!result.selections.length)return empty('live_selections_changed_before_booking');
-    const booking=await bookBet(result.selections.map(s=>({eventId:s.eventId,marketId:s.marketId,outcomeId:s.outcomeId,...(s.specifier?{specifier:s.specifier}:{})})));
-    if(!booking?.shareCode)throw new Error('SportyBet did not return a Quick Cash booking code');
-    if(booking.unavailableOutcomes?.length)throw new Error('SportyBet removed selections while creating the Quick Cash code; retry the current board');
-    checkCancelled();
-    await saveTelegramQuickCashCode(redis,dateKey,hourKey,booking,result);
-    checkCancelled();
+    const refreshed=await refreshTicketResults(redis,{getBooking:code=>getBooking(code,{fresh:true}),
+      getEvent:id=>sportyDirect.fetchEventDetail(id),assertSession:()=>sportyDirect.ensureSession(),shouldAbort,window});
+    const report=buildPerformanceReport(await listTrackedSlips(redis),window,refreshed.updatedTickets);
+    if(shouldAbort())throw new Error('Telegram report cancelled before posting');
     await onPostingStart();
-    const lines=['💵 PLOT207 SPORTS • HOURLY QUICK CASH',`${dateKey} · ${hourKey.slice(11)}:00 WAT`,
-      'Minimum probability: 0%','Late live matches · at least halfway · selection currently winning',
-      `Games: ${result.selections.length} · Combined odds: ${result.combinedOdds.toFixed(2)}`,''];
-    result.selections.forEach((s,i)=>lines.push(`${i+1}. ${s.home} vs ${s.away}\n   ${s.outcomeDesc} — ${s.marketDesc} @ ${Number(s.odds).toFixed(2)} · ${Number(s.probability).toFixed(1)}%`));
-    lines.push('',`SportyBet code: ${booking.shareCode}`,...(booking.shareURL?[booking.shareURL]:[]),
-      'Added to 🎟 Today’s Codes. Live scores and market availability can change.');
-    await sendTelegramMessage(lines.join('\n'));
-    await trackTelegramSlip(redis,{shareCode:booking.shareCode,shareURL:booking.shareURL,targetOdds:`QC ${hourKey.slice(11)}:00 WAT`,
-      combinedOdds:result.combinedOdds,sportScope:'all live',selections:result.selections});
-    return {sent:true,liveMode:'quick_cash',minProbability:0,shareCode:booking.shareCode,combinedOdds:result.combinedOdds,
-      selections:result.selections.length,candidateCount:pool.length,droppedLive:current.dropped.length,reachedTarget:result.reachedTarget};
+    const note=refreshed.errors?'\nSportyBet could not confirm some results on this check; unresolved stakes remain pending.':'';
+    await sendTelegramMessage(performanceText(report)+note);
+    return {sent:true,refreshed,report};
   });
 }
 
@@ -3645,18 +3600,20 @@ app.post('/api/telegram/bot/setup', express.json(), async (req, res) => {
 });
 
 registerTelegramQuickCashRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runQuickCash:runTelegramQuickCash});
+registerTelegramPerformanceRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runReport:runTelegramPerformanceReport});
 
 app.get('/api/telegram/status', (req, res) => {
   res.json({
     configured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID && process.env.TELEGRAM_JOB_SECRET),
-    targets: ['1.30-5.00 SAFE', 2, 3, '1000 ICE HOCKEY', '1000 BASKETBALL', '1000 HANDBALL + VOLLEYBALL'],
+    targets: ['1.30-5.00 SAFE',...hourlyPlans().map(p=>p.label)],
     sportScope: 'all',
     rules: {
-      regular: { minProbabilityByTarget: { '2':80, '3':80 }, winnerOnly: false, targets: [2,3], selectionCaps: { '2':20, '3':20 }, supportedMarkets: TELEGRAM_HIGH_ODDS_BET_TYPES, prioritySports: TELEGRAM_2X3X_SPORT_TIERS, primaryPrioritySports: ['hockey','basketball','tennis'], allSixSports: false, positiveEdgeRequired: false, redFlagProtection: true },
-      safe: { minProbability: 85, winnerOnly: false, supportedMarkets: TELEGRAM_HIGH_ODDS_BET_TYPES, prioritySports: TELEGRAM_SAFE_SPORT_TIERS, primaryPrioritySports: ['hockey','basketball'], combinedOddsMin: 1.30, combinedOddsMax: 5.00, selectionCap: 15, positiveEdgeRequired: false, redFlagProtection: true },
-      sport1000: { targetOdds: 1000, hardTarget: false, minProbability: 80, maxSelections: 15, winnerFirst: true, pools: { iceHockey: ['hockey'], basketball: ['basketball'], handballVolleyball: ['handball','volleyball'] }, supportedMarkets: TELEGRAM_HIGH_ODDS_BET_TYPES, positiveEdgeRequired: false, redFlagProtection: true },
-      quickCash: {...quickCashConfig(),allSixSports:true,minimumProgress:'halfway',currentlyWinningRequired:true,
-        cron:'5 * * * *',todayCodes:true,endpoint:'/api/telegram/quick-cash'},
+      safe: {minProbability:85,combinedOddsMin:1.30,combinedOddsMax:5.00,selectionCap:15,
+        cron:'25 7 * * *',redFlagProtection:true},
+      hourly: {plans:hourlyPlans(),supportedMarkets:AUTO_BET_TYPES_BY_SPORT,minimumProgress:'halfway',
+        currentlyWinningRequired:true,dummySessionRequired:true,cron:'5 * * * *',todayCodes:true,endpoint:'/api/telegram/quick-cash'},
+      performance: {intervalHours:12,stakePerTicket:100,currency:'NGN',cron:'10 11,23 * * *',
+        endpoint:'/api/telegram/performance-report',roiBasis:'settled and priced tickets; unresolved stake shown separately'},
     },
     maxSelections: Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10))),
     scheduler: 'GitHub Actions',

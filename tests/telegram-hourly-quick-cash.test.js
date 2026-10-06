@@ -58,3 +58,9 @@ test('disconnect before posting cancels QC and releases the unfinished hour',asy
   const pending=h.request();await ready;pending.res.disconnect();release();await pending.done;
   assert.equal(posts,0);assert.equal(await h.redis.exists('telegram:quick-cash:once:2026-10-06T17'),0);
 });
+test('a partial five-plan result reports failure and permits retries protected by individual ticket locks',async()=>{
+  let calls=0;const h=harness(async({onPostingStart})=>{calls++;await onPostingStart();return {sent:true,ticketsSent:1,retryable:calls===1};});
+  const first=h.request();await first.done;assert.equal(first.res.statusCode,502);
+  assert.equal(await h.redis.exists('telegram:quick-cash:once:2026-10-06T17'),0);
+  const retry=h.request();await retry.done;assert.equal(retry.res.statusCode,200);assert.equal(calls,2);
+});

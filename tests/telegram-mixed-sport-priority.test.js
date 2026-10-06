@@ -81,23 +81,10 @@ test('non-winner markets are allowed only after winner-only pools cannot reach t
   assert.ok(selected.result.selections.some(c => !isWinner(c)));
 });
 
-test('daily Telegram configuration includes capped flexible 1000 sport tickets', () => {
+test('daily scheduled configuration retains SAFE without the retired 2x/3x/1000 templates', () => {
   const source = fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
   const plans = source.match(/const plans = \[([\s\S]*?)\n  \];/);
-  assert.ok(plans, 'daily ticket plan must be defined');
-  const planText = plans[1];
-  assert.match(planText, /label: '1\.30–5\.00 SAFE', targetOdds: 1\.30, minProbability: 85, minOdds: 1\.30, maxOdds: 5\.00, maxSelections: 15/);
-  assert.match(planText, /label: '2', targetOdds: 2, minProbability: 80, mixedMarkets: true, allSports: true, maxSelections: 20/);
-  assert.match(planText, /label: '3', targetOdds: 3, minProbability: 80, mixedMarkets: true, allSports: true, maxSelections: 20/);
-  assert.match(planText, /label: '1000 ICE HOCKEY', targetOdds: 1000, minProbability: 80, maxSelections: 15, flexibleTarget: true/);
-  assert.match(planText, /label: '1000 BASKETBALL', targetOdds: 1000, minProbability: 80, maxSelections: 15, flexibleTarget: true/);
-  assert.match(planText, /label: '1000 HANDBALL \+ VOLLEYBALL', targetOdds: 1000, minProbability: 80, maxSelections: 15, flexibleTarget: true/);
-  assert.match(source, /const TELEGRAM_HOCKEY_ONLY_SPORT_TIERS = \[\['hockey'\]\]/);
-  assert.match(source, /const TELEGRAM_BASKETBALL_ONLY_SPORT_TIERS = \[\['basketball'\]\]/);
-  assert.match(source, /const TELEGRAM_HANDBALL_VOLLEYBALL_SPORT_TIERS = \[\['handball','volleyball'\]\]/);
-  assert.match(source, /const TELEGRAM_SAFE_SPORT_TIERS = \[\s*\['hockey','basketball'\],\s*\['tennis'\],\s*\['handball','volleyball'\],/);
-  assert.match(source, /const TELEGRAM_2X3X_SPORT_TIERS = \[\s*\['hockey','basketball','tennis'\],\s*\['handball','volleyball'\],/);
-  assert.match(source, /isWinner: isTelegramWinnerSelection/);
-  assert.doesNotMatch(source.match(/const TELEGRAM_2X3X_SPORT_TIERS = \[([\s\S]*?)\];/)[0], /football/);
-  assert.doesNotMatch(planText, /label: '(?:10|20|10000)'/);
+  assert.ok(plans);
+  assert.match(plans[1], /label: '1\.30–5\.00 SAFE'.*minProbability: 85/);
+  assert.doesNotMatch(plans[1], /label: '(?:2|3|1000)/);
 });

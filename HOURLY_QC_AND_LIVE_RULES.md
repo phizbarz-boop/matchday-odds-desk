@@ -1,23 +1,12 @@
 # Hourly Quick Cash and live selection rules
 
-## Scheduled Quick Cash
+## Scheduled Quick Cash and reporting
 
-The new `telegram-quick-cash.yml` GitHub Actions workflow requests `/api/telegram/quick-cash` every hour at :05 WAT. It reads current SportyBet live markets, applies a **0% minimum probability**, builds a fresh booking/share code, and sends the ticket to the configured Telegram chat. It creates no monetary wager.
+Current schedules, ticket categories, installation and result calculations are documented in [TELEGRAM_HOURLY_SPORT_QC_AND_ROI.md](TELEGRAM_HOURLY_SPORT_QC_AND_ROI.md).
 
-The hourly QC ticket uses a flexible 2.00 combined-odds target and up to 15 unique fixtures by default. It sends the available qualifying combination even when that target is not reached. Optional server settings:
+The hourly job at :05 WAT creates separate QC Ice Hockey, QC Basketball, QC Handball + Volleyball and QC Football tickets at 0%, plus Live All Sports at 85%. The old scheduled 2x/3x/1000 sport templates are removed. The morning SAFE remains at 08:25 WAT. Every hourly code is added to Today’s Codes under its category and hour.
 
-- `TELEGRAM_QC_TARGET_ODDS`: combined-odds target; default `2`.
-- `TELEGRAM_QC_MAX_SELECTIONS`: maximum selections; default `15`, capped at SportyBet's 40-selection limit.
-
-The existing `TELEGRAM_JOB_SECRET` GitHub secret and server setting authenticate the job. The configured Telegram bot/chat, dummy SportyBet booking session and shared `REDIS_URL` are also used. No new required secrets or paid data key are introduced.
-
-After pushing and redeploying, the hourly workflow is available under **Actions → Plot207 Telegram Hourly Quick Cash**. **Run workflow** can test the current hour. Scheduled and manual requests share the hourly duplicate-send guard. GitHub Actions can delay scheduled starts; the ticket reads current data when the job actually runs.
-
-## Today’s Codes
-
-Every successfully generated QC code is stored with its WAT hour in a separate Redis hash and merged into the Telegram bot's **Today’s Codes** list. Daily reruns cannot erase QC history. QC codes are visible on Free, Pro and Elite, with the newest QC hour first. Existing daily codes retain their plan rules.
-
-If no eligible games remain, the job records a skip without sending an empty ticket. It tries current games again next hour. If a failure or workflow cancellation occurs before Telegram posting, the hourly lock is released for retry. Once posting begins, the lock is kept because delivery may be ambiguous.
+At 00:10 and 12:10 WAT, a result report identifies winners, closest/worst fully resolved losing tickets and hypothetical ₦100-per-sent-ticket ROI, with unresolved stakes shown separately.
 
 ## Website and interactive Telegram live rules
 
@@ -32,10 +21,10 @@ QC adds its late-stage rule: football 75+ minutes in regulation, basketball Q4/o
 
 Winner markets follow the current leader; draw/double-chance selections follow their exact outcome; DNB and handicap pushes do not count as wins. Handicaps use the offered home/away line, rather than merely checking the leading team. Totals compare current goals, points, games or played sets with the line; an under is currently qualifying only while its current total remains below that line. Such a selection can still lose later. Corners require actual corner counts. Missing score/progress/line data, incomplete set scores and unsupported period/combined markets exclude a selection.
 
-The selected user probability settings remain active on interactive website and Telegram builds. Only the scheduled hourly QC ticket fixes its minimum at 0%. No probability threshold overrides the halfway, currently-winning, availability or red-flag checks.
+The selected user probability settings remain active on interactive website and Telegram builds. The four scheduled hourly QC tickets fix their minimum at 0%; scheduled Live All Sports uses 85%. No probability threshold overrides the halfway, currently-winning, availability or red-flag checks.
 
 All live selections are checked against a second current SportyBet read immediately before code generation. Suspended/settled markets, inactive outcomes, ended matches, changed leaders and uncovered handicap lines are dropped.
 
 ## Validation
 
-161 Node tests passed, including HTTP flows through the real server with mocked upstream services. Checks cover hourly deduplication, cancellation/retry, no-game skips, 0% scheduled probability, booking generation, Telegram posting, Today’s Codes visibility/history, early-match exclusion, score changes before booking, handicap orientation, totals, match formats from offered score markets and missing set/corner data. These tests do not send real Telegram messages or create real SportyBet bookings.
+200 Node tests pass, including HTTP flows through the real server with mocked upstream services. See the current hourly/report document for coverage and deployment verification. Real Telegram delivery and authenticated SportyBet booking creation have not been exercised here.

@@ -1,31 +1,31 @@
-name: Plot207 Telegram Hourly QC and Live Picks
+name: Plot207 Telegram 12-Hour Results and ROI
 
 on:
   schedule:
-    # Every hour at :05 WAT (also :05 UTC). Avoid the busy top of the hour.
-    - cron: '5 * * * *'
+    # 12:10 and 00:10 WAT: review the preceding completed 12-hour window.
+    - cron: '10 11,23 * * *'
   workflow_dispatch: {}
 
 permissions:
   contents: read
 
 concurrency:
-  group: plot207-telegram-hourly-quick-cash
+  group: plot207-telegram-performance-report
   cancel-in-progress: false
 
 jobs:
-  quick-cash:
+  report:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
-      - name: Generate four current sport QC tickets and Live All Sports 85%
+      - name: Check SportyBet results and send the 100-naira performance report
         env:
           TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
           MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
         run: |
           test -n "$TELEGRAM_JOB_SECRET" || (echo 'Missing GitHub secret TELEGRAM_JOB_SECRET' && exit 1)
-          curl --fail-with-body --show-error --silent --max-time 780 \
-            -X POST "$MATCHDAY_BASE_URL/api/telegram/quick-cash" \
+          curl --fail-with-body --show-error --silent --max-time 1680 \
+            -X POST "$MATCHDAY_BASE_URL/api/telegram/performance-report" \
             -H 'Content-Type: application/json' \
             -H "x-telegram-job-secret: $TELEGRAM_JOB_SECRET" \
             --data '{}' -w '\nHTTP_STATUS:%{http_code}\n'
