@@ -15,7 +15,6 @@ hourly Telegram job use this shared session.
    SPORTYBET_PHONE=<dummy-account mobile number>
    SPORTYBET_PASSWORD=<dummy-account password>
    SPORTYBET_LOGIN_METHOD=browser
-   PLAYWRIGHT_BROWSERS_PATH=0
    ```
 
    Browser login is the default. The Nigeria form supplies +234 separately;
@@ -26,13 +25,15 @@ hourly Telegram job use this shared session.
 3. Use Node 20 or newer. Set the **Build Command** to:
 
    ```bash
-   npm ci && npm run browser:download
+   npm install
    ```
 
-   Keep the **Start Command** as `npm start`. The browser is downloaded into
-   the installed package because `PLAYWRIGHT_BROWSERS_PATH=0` is set for both
-   build and runtime. No browser download or manual cookie capture is required
-   during an ordinary renewal.
+   Keep the **Start Command** as `npm start`. `npm ci` also works. Both run the
+   project's postinstall step to download the pinned Chromium browser. Build
+   and runtime default to `PLAYWRIGHT_BROWSERS_PATH=0`, placing the browser
+   inside the deployed package; an explicit prepared-browser path is retained.
+   A failed browser installation fails the build. No browser download or manual
+   cookie capture is required during an ordinary renewal.
 4. Save/redeploy. Check `/api/sportybet/diagnostics`, then run Auto Analyser or
    the existing authenticated manual Telegram job on your deployment.
 
@@ -58,6 +59,9 @@ existing setup details remain in [TELEGRAM_DIRECT_HOURLY.md](TELEGRAM_DIRECT_HOU
 - Refresh every 20 minutes, or within five minutes of a known access-token
   expiry. Rotated access and refresh tokens are saved automatically, including
   credentials returned in the response body rather than Set-Cookie headers.
+- If the configured refresh route returns 404 or 405, retain a still-accepted
+  session and stop calling that route until the process restarts. An expired
+  or rejected session then recovers through the configured browser sign-in.
 - After an expired/revoked session cannot refresh, launch one browser, open
   SportyBet's own login form, enter the configured dummy credentials once and
   verify the account before exporting its session cookies.
@@ -88,6 +92,8 @@ requiresUserAction: false
 an existing accepted session does not need to log in again. `loggedIn` alone
 is a local credential check, so also assess the recent verification timestamp
 and successful data probe. Diagnostics never include credential values.
+`refreshEndpointUnavailable: true` records a missing or unsupported refresh
+route. Browser recovery remains configured independently of that route.
 
 SportyBet can request an OTP/CAPTCHA, reject a password/account, block access
 from the server or change its form. Recovery stops at a verification prompt
@@ -118,19 +124,20 @@ After downloading this ZIP into Downloads:
 ```bash
 cd ~/Documents &&
 session_dir=$(mktemp -d /tmp/plot207-session.XXXXXX) &&
-unzip -q ~/Downloads/matchday-odds-desk-auto-session-recovery.zip -d "$session_dir" &&
+unzip -q ~/Downloads/matchday-odds-desk-render-session-fix.zip -d "$session_dir" &&
 rsync -a --delete --exclude=.git --exclude='.env*' --exclude=node_modules --exclude=data --exclude='.sportybet-*' "$session_dir/matchday-odds-desk/" matchday-odds-desk/ &&
 cd matchday-odds-desk &&
 git add -A &&
-git commit -m "Automate SportyBet dummy-session recovery" &&
+git commit -m "Install browser recovery during builds and handle unavailable SportyBet refresh" &&
 git push origin main
 ```
 
 ## Validation
 
-All 258 Node tests pass. Syntax checks pass for 68 JavaScript files and the
-inline website script; all four touched workflows parse, the npm lockfile
-passes `npm ci --dry-run`, and `git diff --check` passes.
+The full Node test suite covers session recovery, build installation, public
+cache collection, hourly QC/live tickets and next-12-hour ticket packs.
+See [RENDER_BUILD_AND_SESSION_FIX.md](RENDER_BUILD_AND_SESSION_FIX.md) for this
+update's checks and the meaning of the deployment logs.
 
 Focused tests exercise expiry, proactive refresh, rotated refresh tokens,
 concurrent recovery, rejected sign-in, private persistence and restart reuse.

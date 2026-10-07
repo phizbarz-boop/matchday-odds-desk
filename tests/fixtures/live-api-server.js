@@ -1,4 +1,7 @@
 'use strict';
+// Each fixture enables only the automation it exercises.
+process.env.SPORTYBET_PUBLIC_CACHE_ENABLED='false';
+process.env.TELEGRAM_NEXT12H_ENABLED='false';
 const assert=require('node:assert/strict');
 const express=require('express');
 const {boards}=require('./sportybet-live-format');

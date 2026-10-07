@@ -5,7 +5,9 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev \
+COPY jobs/install-sporty-browser.js ./jobs/install-sporty-browser.js
+COPY lib/sportyBrowserRuntime.js ./lib/sportyBrowserRuntime.js
+RUN npm ci --omit=dev --ignore-scripts \
     && npm run browser:install \
     && chmod -R a+rX /ms-playwright
 

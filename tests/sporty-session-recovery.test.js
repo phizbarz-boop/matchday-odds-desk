@@ -17,6 +17,7 @@ function client(t, env = {}, saved) {
   const vars = {REDIS_URL:'', SPORTYBET_PHONE:'', SPORTYBET_PASSWORD:'', SPORTYBET_BOOTSTRAP_COOKIES:'',
     SPORTYBET_PROXY_URL:'', HTTPS_PROXY:'', SPORTYBET_LOGIN_METHOD:'api', SPORTYBET_LOGIN_EXTRA:'', SPORTYBET_ENDPOINT_LOGIN:'/patron/login',
     SPORTYBET_ENDPOINT_LOGIN_CANDIDATES:'', SPORTYBET_ENDPOINT_USERINFO:'',
+    SPORTYBET_ENDPOINT_REFRESH:'/patron/refresh',
     SPORTYBET_SESSION_FILE:path.join(folder, 'session.json'), ...env};
   const prior = Object.fromEntries(Object.keys(vars).map(name => [name, process.env[name]]));
   Object.assign(process.env, vars);
@@ -303,6 +304,59 @@ test('a transient proactive refresh failure preserves a still-accepted session a
   await direct.maintainSession();await direct.maintainSession();
   assert.equal(refreshes,1);assert.equal(direct.hasAuthenticatedSession(),true);assert.equal(direct.sessionStatus().lastKeepAliveOk,true);
   assert.match(direct.sessionStatus().lastRefreshError,/Service temporarily unavailable/);
+});
+for (const status of [404,405]) test(`an unavailable refresh route (${status}) is attempted once while a working session is retained`,async t=>{
+  const {direct}=client(t,browserCredentials,{loggedInAt:new Date(Date.now()-3600000).toISOString(),cookies:[
+    ['accessToken',{value:'accepted-current-session',expiresAt:Date.now()+3600000}],['refreshToken',{value:'refresh',expiresAt:null}],
+  ]});let refreshes=0,logins=0,checks=0;
+  direct.setBrowserLoginForTesting(async()=>{logins++;return browserResult();});
+  direct.setFetchForTesting(async url=>{
+    if (url.endsWith('/patron/refresh')) {refreshes++;return response({status,error:'Not Found',path:'/refresh'},[],status);}
+    checks++;return response({bizCode:10000,data:{userId:'dummy'}});
+  });
+  await direct.maintainSession();
+  await Promise.all(Array.from({length:32},()=>direct.refreshSession()));
+  await direct.maintainSession();
+  assert.equal(refreshes,1);assert.equal(logins,0);assert.equal(checks,1);
+  assert.equal(direct.hasAuthenticatedSession(),true);assert.equal(direct.sessionStatus().lastKeepAliveOk,true);
+  assert.equal(direct.sessionStatus().refreshEndpointUnavailable,true);
+  assert.equal(direct.refreshDue(Date.now()+86400000),false);
+  assert.doesNotMatch(JSON.stringify(direct.sessionStatus()),/accepted-current-session|mock-password/);
+});
+test('32 requests share browser recovery when an expired session has a missing refresh endpoint',async t=>{
+  const expired=jwt(Math.floor(Date.now()/1000)-60);
+  const {direct}=client(t,browserCredentials,{token:expired,cookies:[
+    ['accessToken',{value:expired,expiresAt:null}],['refreshToken',{value:'refresh',expiresAt:null}],
+  ]});let refreshes=0,logins=0;
+  direct.setFetchForTesting(async url=>{assert.ok(url.endsWith('/patron/refresh'));refreshes++;return response({status:404,path:'/refresh'},[],404);});
+  direct.setBrowserLoginForTesting(async()=>{logins++;return browserResult();});
+  await Promise.all(Array.from({length:32},()=>direct.ensureSession({validate:true})));
+  assert.equal(refreshes,1);assert.equal(logins,1);assert.equal(direct.hasAuthenticatedSession(),true);
+  assert.equal(direct.sessionStatus().refreshEndpointUnavailable,true);assert.equal(direct.sessionStatus().lastLoginMethod,'browser');
+});
+test('account rejection recovers through the browser after a proactive refresh route was disabled',async t=>{
+  const {direct}=client(t,browserCredentials,{loggedInAt:new Date(Date.now()-3600000).toISOString(),cookies:[
+    ['accessToken',{value:'rejected-old-session',expiresAt:Date.now()+3600000}],['refreshToken',{value:'refresh',expiresAt:null}],
+  ]});let refreshes=0,logins=0,checks=0;
+  direct.setBrowserLoginForTesting(async()=>{logins++;return browserResult();});
+  direct.setFetchForTesting(async(url,options)=>{
+    if(url.endsWith('/patron/refresh')){refreshes++;return response({status:404,path:'/refresh'},[],404);}
+    checks++;
+    return options.headers.Cookie.includes('accessToken=rejected-old-session')?response({message:'Unauthorized'},[],401):
+      response({bizCode:10000,data:{userId:'dummy'}});
+  });
+  await direct.maintainSession();
+  assert.equal(refreshes,1);assert.equal(logins,1);assert.equal(checks,2);
+  assert.equal(direct.sessionStatus().lastKeepAliveOk,true);assert.equal(direct.hasAuthenticatedSession(),true);
+});
+test('a temporary 500 refresh failure remains retryable and does not disable the route',async t=>{
+  const {direct}=client(t,{}, {cookies:[['accessToken',{value:'current',expiresAt:Date.now()+3600000}],['refreshToken',{value:'refresh',expiresAt:null}]]});
+  let refreshes=0;
+  direct.setFetchForTesting(async()=>++refreshes===1?response({message:'Temporary failure'},[],500):
+    response({bizCode:10000,data:{accessToken:'recovered-token'}}));
+  assert.equal(await direct.refreshSession(),false);assert.equal(direct.sessionStatus().refreshEndpointUnavailable,false);
+  assert.equal(direct.refreshDue(Date.now()+86400000),true);
+  assert.equal(await direct.refreshSession(),true);assert.equal(refreshes,2);assert.equal(direct.hasAuthenticatedSession(),true);
 });
 test('browser verification stops automatic sign-in and prevents repeated password attempts',async t=>{
   const {direct}=client(t,browserCredentials);let attempts=0;

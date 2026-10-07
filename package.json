@@ -6,8 +6,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "browser:download": "playwright install chromium",
-    "browser:install": "playwright install --with-deps chromium",
+    "postinstall": "node jobs/install-sporty-browser.js",
+    "browser:download": "node jobs/install-sporty-browser.js",
+    "browser:install": "node jobs/install-sporty-browser.js --with-deps",
     "refresh": "node jobs/refresh.js"
   },
   "dependencies": {

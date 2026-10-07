@@ -2,6 +2,7 @@
 // Read the statistics panel on actual SportyBet match pages with the existing
 // dummy session. The collector never stakes a bet or uses an outside provider.
 const fs=require('fs');
+require('../lib/sportyBrowserRuntime').configureBrowserPath();
 const {chromium}=require('playwright');
 const direct=require('../lib/sportybetDirect');
 const {getFootballMarket,getLiveSportMarket}=require('../lib/sportybet');

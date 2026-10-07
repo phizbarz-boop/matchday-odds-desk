@@ -24,6 +24,7 @@ function bootstrapLine(cookies, now = Date.now()) {
 
 async function main() {
   if (!process.stdin.isTTY) throw new Error('Run this helper in your own interactive terminal.');
+  require('../lib/sportyBrowserRuntime').configureBrowserPath();
   let chromium;
   try { ({chromium} = require('playwright')); }
   catch { throw new Error('Install the local helper dependency: npm install --no-save --package-lock=false playwright, then npx playwright install chromium.'); }

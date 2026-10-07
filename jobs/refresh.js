@@ -228,17 +228,14 @@ async function storeResult(payload, marketSnapshots = []) {
 }
 
 async function main() {
-  const hours = Math.min(24*21,Math.max(24,DAYS_AHEAD*24));
-  const maxPages = Math.max(1,Math.min(20,parseInt(process.env.DAILY_SPORT_REFRESH_MAX_PAGES || process.env.ANALYZER_MAX_PAGES || '12',10)));
-  const fixtures = await getFootballMarket('1x2',{hours,maxPages});
-  if (!fixtures.rows?.length) throw new Error('SportyBet returned no football fixtures; existing predictions were retained.');
-  const all = await enrichSportyFixtures(fixtures.rows,{maxFixtures:Math.max(1,Number(process.env.SPORTYBET_FOOTBALL_MAX_FIXTURES || 1000))});
-  const marketSnapshots = [{sport:'football',kind:'1x2',hours,payload:fixtures}];
-  if (String(process.env.SPORTYBET_SNAPSHOT_SEED || '1') !== '0') {
-    marketSnapshots.push(...await collectSportySnapshots({hours,maxPages,fixtures:all}));
-  }
-  await storeResult({generatedAt:new Date().toISOString(),model:{name:'SportyBet displayed goal averages + Poisson/H2H; no-vig fallback',version:MODEL_VERSION,h2hMaxWeight:H2H_MAX_WEIGHT},matches:all},marketSnapshots);
-  console.log(`Done. ${all.length} SportyBet fixtures; ${all.filter(x=>x.goalModelAvailable).length} form models, ${all.filter(x=>x.marketModel).length} market estimates.`);
+  let redis;
+  try{
+    if(process.env.REDIS_URL){redis=require('redis').createClient({url:process.env.REDIS_URL});redis.on('error',()=>{});await redis.connect();}
+    const cache=require('../lib/sportyPublicCache').createPublicCache({getRedis:async()=>redis||null});
+    const result=await cache.refresh();
+    const sports=result.catalog?.sports||{};
+    console.log(`Public SportyBet cache saved: ${Object.values(sports).reduce((n,data)=>n+data.fixtures.length,0)} fixtures across ${Object.keys(sports).length} sports; no dummy login used.`);
+  }finally{if(redis?.isOpen)await redis.quit();}
 }
 
 if (require.main === module) main().catch(err=>{console.error(err.message);process.exitCode=1;});

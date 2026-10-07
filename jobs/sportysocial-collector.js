@@ -5,6 +5,7 @@
  * are sent to Matchday. This script does not place bets or access balances.
  * It does not bypass CAPTCHA, OTP, or other verification challenges.
  */
+require('../lib/sportyBrowserRuntime').configureBrowserPath();
 const { chromium } = require('playwright');
 
 const BASE = 'https://www.sportybet.com';

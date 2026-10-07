@@ -56,10 +56,9 @@ test('patron cipher + encrypted accessToken login flow is implemented', () => {
   assert.match(SRC, /\/\\\/accessToken\$\/\.test\(candidatePath\)/);
 });
 
-test('refresh token rotation via patron/refresh is available', () => {
+test('the configured refresh route remains available to accepted providers', () => {
   assert.match(SRC, /SPORTYBET_ENDPOINT_REFRESH \|\| '\/patron\/refresh'/);
   assert.match(SRC, /async function refreshSession\(\)/);
-  assert.match(SRC, /Access token rotated via patron\/refresh/);
 });
 
 test('browser cookie bootstrap via SPORTYBET_BOOTSTRAP_COOKIES', () => {

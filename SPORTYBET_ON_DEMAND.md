@@ -17,7 +17,7 @@ Booking-code analysis reads the exact event IDs on the submitted ticket. It does
 
 ## What Daily Prediction Refresh still does
 
-The daily workflow collects SportyBet football statistics, calculates and persists a prediction snapshot, refreshes market/collector snapshots for the six sports, and verifies the saved results. Scheduled Telegram uses the retained morning SAFE, five hourly QC/live templates and a 12-hour result/ROI report; see `TELEGRAM_HOURLY_SPORT_QC_AND_ROI.md`. These background jobs can maintain historical information and daily status; user requests work independently.
+The app now collects public SportyBet upcoming fixtures and full event markets for all six supported sports at 06:30, 12:30 and 17:30 WAT, saving the catalogue and football prediction snapshot without dummy login. Six extra next-12-hours Telegram targets run at 07:00 and 18:00 WAT. Existing SAFE, hourly QC/live and 12-hour result/ROI jobs continue. See `PUBLIC_CACHE_AND_NEXT12H_PICKS.md` for data, selection and delivery rules. Historical collectors remain optional manual tools; user requests work independently of the cache schedule.
 
 The website football dashboard requests `/api/predictions?source=current`. The default `/api/predictions` still exposes the saved daily snapshot so workflow completion checks remain meaningful.
 

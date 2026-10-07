@@ -1,6 +1,7 @@
 
 const fs = require('fs');
 const path = require('path');
+require('../lib/sportyBrowserRuntime').configureBrowserPath();
 const { chromium } = require('playwright');
 
 const LOGIN_ID = process.env.SPORTYSOCIAL_LOGIN_ID || '';

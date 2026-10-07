@@ -130,7 +130,17 @@ test('no eligible live games completes the hour and the next hour reads again',a
   let builds=0;const h=protectedHarness(async()=>{builds++;return {sent:false,skipped:true,reason:'no_eligible_live_games'};});
   h.scheduler.start();h.setClock('2026-10-06T16:05:00Z');await h.scheduler.tick();await h.scheduler.tick();
   assert.equal(builds,1);assert.equal(h.scheduler.status().lastRun.reason,'no_eligible_live_games');
+  assert.ok(h.logs.some(line=>line.includes('sent=0; outcome=no_eligible_live_games')));
   h.setClock('2026-10-06T17:05:00Z');await h.scheduler.tick();assert.equal(builds,2);h.scheduler.stop();
+});
+
+test('empty hourly logs identify skipped or failed categories without revealing raw booking errors',async()=>{
+  const h=harness({date:'2026-10-06T16:25:00Z',runJob:async()=>({statusCode:502,body:{retryable:true,
+    results:[{id:'qc_football',skipped:true,reason:'no_eligible_live_games'},
+      {id:'qc_basketball',error:'private-credential-bearing-upstream-error'}]}})});
+  h.scheduler.start();await flush();
+  assert.ok(h.logs.some(line=>line.includes('qc_football=no_eligible_live_games, qc_basketball=failed')));
+  assert.equal(h.logs.some(line=>line.includes('private-credential-bearing')),false);h.scheduler.stop();
 });
 
 test('an unexpected runner rejection is caught and retries without killing the hourly clock',async()=>{

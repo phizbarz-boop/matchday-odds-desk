@@ -1,6 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),http=require('node:http');
 const {browserLogin}=require('../lib/sportyBrowserLogin');
+require('../lib/sportyBrowserRuntime').configureBrowserPath();
 const {chromium}=require('playwright');
 const testChromium={launch:options=>chromium.launch({...options,
   ...(process.env.PLOT207_TEST_BROWSER_EXECUTABLE?{executablePath:process.env.PLOT207_TEST_BROWSER_EXECUTABLE}:{})})};
