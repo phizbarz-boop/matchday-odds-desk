@@ -16,13 +16,10 @@ const { trackTelegramSlip, evaluateBooking, listTrackedSlips, updateTrackedTicke
 const { watDateKey } = require('./lib/dailyScheduleGuard');
 const { selectTelegramMixedWithSportPriority } = require('./lib/telegramMixedSelector');
 const { enrichSportyFixtures, cleanPredictions, STATS_KEY, STATS_FILE } = require('./lib/sportyFootballModel');
-const {sportyRequest,withFreshSportyRequest,withPublicSportyRequest,memoSportyRead}=require('./lib/sportyRequest');
+const {sportyRequest,withFreshSportyRequest,memoSportyRead}=require('./lib/sportyRequest');
 const { sanitizeStats } = require('./lib/sportyFootballStats');
 const {createTelegramQuickCashJob,registerTelegramQuickCashRoute,watHourKey}=require('./lib/telegramQuickCash');
 const {createTelegramHourlyScheduler}=require('./lib/telegramHourlyScheduler');
-const {createPublicCache,publicCandidates,validatePublicSelections,marketInputs}=require('./lib/sportyPublicCache');
-const {createWatScheduler,createWatSlotJob,watParts}=require('./lib/watScheduler');
-const {PLANS:NEXT12H_PLANS,runNext12hPicks}=require('./lib/telegramNext12h');
 const {hourlyPlans,runHourlyPicks}=require('./lib/telegramHourlyPicks');
 const {refreshTicketResults,buildPerformanceReport,performanceText,registerTelegramPerformanceRoute}=require('./lib/telegramPerformance');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
@@ -288,7 +285,6 @@ const bookingMemoryRate = new Map();
 const telegramSendMemory = new Map();
 const telegramDailyCodesMemory = new Map();
 const telegramQuickCashCodesMemory = new Map();
-const telegramNext12hCodesMemory = new Map();
 let handballSnapshotMemory = null;
 const HANDBALL_SNAPSHOT_REDIS_KEY = 'sportybet:handball:v4:snapshot';
 let volleyballSnapshotMemory = null;
@@ -301,7 +297,7 @@ function telegramDailyCodeVisibleForPlan(planId, label) {
   const plan = String(planId || 'free').toLowerCase();
   if (plan !== 'free') return true;
   const key = String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  return key.includes('safe') || key.startsWith('qc') || key.startsWith('live') || key.startsWith('next12h') || key.includes('quickcash');
+  return key.includes('safe') || key.startsWith('qc') || key.startsWith('live') || key.includes('quickcash');
 }
 
 
@@ -401,7 +397,6 @@ async function saveTelegramDailyCodes(redis, dateKey, payload) {
 async function loadTelegramDailyCodes(redis, dateKey) {
   let snapshot=telegramDailyCodesMemory.get(dateKey)||{date:dateKey,generatedAt:null,codes:[]};
   let quickCash=[...(telegramQuickCashCodesMemory.get(dateKey)?.values()||[])];
-  let next12h=[...(telegramNext12hCodesMemory.get(dateKey)?.values()||[])];
   if (redis) {
     try {
       const raw = await redis.get(telegramDailyCodesKey(dateKey));
@@ -409,22 +404,9 @@ async function loadTelegramDailyCodes(redis, dateKey) {
     } catch (e) { console.warn('Daily codes Redis read failed:', e.message); }
     try { quickCash=(await redis.hVals(`telegram:quick-cash:codes:${dateKey}`)).map(row=>JSON.parse(row)); }
     catch(e){console.warn('Quick Cash codes Redis read failed:',e.message);}
-    try { next12h=(await redis.hVals(`telegram:next12h:codes:${dateKey}`)).map(row=>JSON.parse(row)); }
-    catch(e){console.warn('Next 12h codes Redis read failed:',e.message);}
   }
-  return {...snapshot,codes:[...(Array.isArray(snapshot.codes)?snapshot.codes:[]),...quickCash,...next12h].filter(c=>c.shareCode)
-    .filter(c=>/safe|^(?:QC|LIVE|NEXT 12H)\b/i.test(String(c.targetOdds||'')))};
-}
-
-async function saveTelegramNext12hCode(redis,dateKey,slotKey,plan,booking,combinedOdds) {
-  const field=`${slotKey}:${plan.id}`,slot=slotKey.startsWith('manual:')?'MANUAL':slotKey.slice(11)+' WAT';
-  const code={targetOdds:`NEXT 12H · ${plan.label} · ${slot}`,planId:plan.id,slotKey,combinedOdds:Number(combinedOdds),
-    shareCode:String(booking.shareCode),generatedAt:new Date().toISOString()};
-  await redis.hSet(`telegram:next12h:codes:${dateKey}`,field,JSON.stringify(code));
-  await redis.expire(`telegram:next12h:codes:${dateKey}`,172800);
-  if(!telegramNext12hCodesMemory.has(dateKey))telegramNext12hCodesMemory.set(dateKey,new Map());
-  telegramNext12hCodesMemory.get(dateKey).set(field,code);
-  return code;
+  return {...snapshot,codes:[...(Array.isArray(snapshot.codes)?snapshot.codes:[]),...quickCash.filter(c=>c.shareCode)]
+    .filter(c=>/safe|^(?:QC|LIVE)\b/i.test(String(c.targetOdds||'')))};
 }
 
 async function saveTelegramQuickCashCode(redis,dateKey,hourKey,booking,result,plan,{runKey=hourKey,runMode='scheduled'}={}) {
@@ -442,7 +424,7 @@ async function saveTelegramQuickCashCode(redis,dateKey,hourKey,booking,result,pl
 }
 
 function telegramDailyCodesText(snapshot, plan) {
-  const codes = (Array.isArray(snapshot?.codes) ? snapshot.codes : []).filter(c=>/safe|^(?:QC|LIVE|NEXT 12H)\b/i.test(String(c.targetOdds||'')));
+  const codes = (Array.isArray(snapshot?.codes) ? snapshot.codes : []).filter(c=>/safe|^(?:QC|LIVE)\b/i.test(String(c.targetOdds||'')));
   const isFree = plan?.id === 'free';
   const lines = ['🎟 TODAY’S AUTO-PICK CODES', '', `Date: ${snapshot?.date || fixtureDateKeyInTimeZone(new Date(), 'Africa/Lagos')} (WAT)`, ''];
   if (!codes.length) {
@@ -564,7 +546,7 @@ function telegramManualSlipText(payload) {
   return lines.join('\n');
 }
 
-function filterUpcomingSportyPayload(payload, { nowMs = Date.now(), kickoffBufferSeconds = 60, maxHours = Infinity } = {}) {
+function filterUpcomingSportyPayload(payload, { nowMs = Date.now(), kickoffBufferSeconds = 60 } = {}) {
   if (!payload || !Array.isArray(payload.rows)) return payload;
   const cutoff = nowMs + Math.max(0, Number(kickoffBufferSeconds) || 0) * 1000;
   let validKickoff = 0, missingOrInvalidKickoff = 0, pastOrStarted = 0;
@@ -582,7 +564,7 @@ function filterUpcomingSportyPayload(payload, { nowMs = Date.now(), kickoffBuffe
       pastOrStarted++;
       return false;
     }
-    return kickoffMs <= nowMs + maxHours * 3600000;
+    return true;
   });
   console.log(`[SportyBet filter] raw=${payload.rows.length} validKickoff=${validKickoff} missingKickoffKept=${missingOrInvalidKickoff} pastOrStartedRemoved=${pastOrStarted} returned=${rows.length}`);
   return {
@@ -704,12 +686,6 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   // Background jobs can reuse a 21-day Daily Refresh snapshot. User requests
   // already returned through the direct path above.
   if (!forceRefresh) {
-    const catalog=await publicCache.read(),data=catalog?.sports?.[sport];
-    if(data&&nowMs-Date.parse(data.fetchedAt)<=18*3600000) {
-      const inputs=marketInputs({...catalog,generatedAt:data.fetchedAt});
-      const field=sport==='football'?inputs.footballMarkets[kind]:inputs[sport+({winner:'Winner',totals:'Totals',handicap:'Handicap',sets:'Sets'}[kind]||'')];
-      if(field)return filterUpcomingSportyPayload({...field,readMode:'public-cache',source:catalog.source},{nowMs,kickoffBufferSeconds,maxHours:hours});
-    }
     const snapshot = await readSportySnapshot(client, sport, kind, hours, nowMs, kickoffBufferSeconds);
     if (snapshot) {
       console.log(`[SportyBet snapshot] HIT ${sport}/${kind} requested=${hours}h snapshot=${snapshot.snapshotHours}h rows=${snapshot.rows.length}`);
@@ -808,8 +784,6 @@ async function allowBookingRequest(req) {
 }
 
 async function loadPredictions() {
-  const catalog=await publicCache.read();
-  if(catalog)return require('./lib/sportyPublicCache').publicPredictions(catalog);
   const client = await getRedis();
   if (client) {
     const raw = await client.get('predictions:latest');
@@ -954,7 +928,7 @@ app.use('/api/sportybet',(req,res,next)=>{
 app.get('/api/predictions', async (req, res) => {
   try {
     if(req.query.source==='current') {
-      const payload=await withPublicSportyRequest(async()=>{
+      const payload=await withFreshSportyRequest(async()=>{
         const market=await loadSportyBetMarket('1x2');
         return currentFootballPredictions([market]);
       });
@@ -3639,22 +3613,6 @@ app.post('/api/telegram/bot/setup', express.json(), async (req, res) => {
 
 const telegramHourlyJob=createTelegramQuickCashJob({getRedis,runQuickCash:runTelegramQuickCash});
 const telegramHourlyScheduler=createTelegramHourlyScheduler({runJob:telegramHourlyJob});
-const publicCache=createPublicCache({getRedis});
-const publicCacheJob=createWatSlotJob({namespace:'sportybet:public-refresh',getRedis,run:async({signal})=>{
-  const result=await publicCache.refresh({signal});
-  return {ok:!result.skipped,retryable:Boolean(result.skipped),reason:result.reason||null,source:'SportyBet public website feeds',loginRequired:false};
-}});
-const publicCacheScheduler=createWatScheduler({name:'SportyBet public refresh',times:['06:30','12:30','17:30'],runJob:publicCacheJob,
-  enabled:!['false','0','off'].includes(String(process.env.SPORTYBET_PUBLIC_CACHE_ENABLED||'true').toLowerCase()),maxRunMilliseconds:3300000});
-const next12hJob=createWatSlotJob({namespace:'telegram:next12h',getRedis,run:context=>runNext12hPicks({
-  now:()=>new Date(),loadPool:async({signal})=>publicCandidates(await publicCache.usable({signal})),
-  validate:validatePublicSelections,assertSession:()=>sportyDirect.ensureSession({validate:true}),
-  book:selections=>bookBet(selections.map(row=>({eventId:row.eventId,marketId:row.marketId,outcomeId:row.outcomeId,...(row.specifier?{specifier:row.specifier}:{})}))),
-  send:(text,{signal})=>sendTelegramMessage(text,{}, {signal}),track:trackTelegramSlip,updateTrack:updateTrackedTicket,saveCode:saveTelegramNext12hCode,
-},context)});
-const next12hScheduler=createWatScheduler({name:'Telegram next 12h',times:['07:00','18:00'],runJob:next12hJob,catchupMinutes:60,maxRunMilliseconds:780000,
-  enabled:!['false','0','off'].includes(String(process.env.TELEGRAM_NEXT12H_ENABLED||'true').toLowerCase()),
-  configured:Boolean(process.env.REDIS_URL&&process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID)});
 registerTelegramQuickCashRoute(app,{express,authorize:authorizeTelegramJob,runJob:telegramHourlyJob});
 registerTelegramPerformanceRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runReport:runTelegramPerformanceReport});
 
@@ -3676,7 +3634,7 @@ app.get('/api/telegram/quick-cash/run-status',async(req,res)=>{
 app.get('/api/telegram/status', (req, res) => {
   res.json({
     configured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID && process.env.TELEGRAM_JOB_SECRET),
-    targets: ['1.30-5.00 SAFE',...hourlyPlans().map(p=>p.label),...NEXT12H_PLANS.map(p=>'NEXT 12H '+p.label)],
+    targets: ['1.30-5.00 SAFE',...hourlyPlans().map(p=>p.label)],
     sportScope: 'all',
     rules: {
       safe: {minProbability:85,combinedOddsMin:1.30,combinedOddsMax:5.00,selectionCap:15,
@@ -3688,12 +3646,8 @@ app.get('/api/telegram/status', (req, res) => {
         endpoint:'/api/telegram/performance-report',roiBasis:'settled and priced tickets; unresolved stake shown separately'},
     },
     maxSelections: Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10))),
-    scheduler: 'App server for hourly QC/live and twice-daily next-12h picks; GitHub Actions for morning SAFE and 12-hour reports',
+    scheduler: 'App server for hourly QC/live; GitHub Actions for morning SAFE and 12-hour reports',
     hourlyScheduler:telegramHourlyScheduler.status(),
-    next12hScheduler:next12hScheduler.status(),
-    next12hRules:{targets:NEXT12H_PLANS,times:['07:00','18:00'],timezone:'Africa/Lagos',horizonHours:12,
-      maxSelections:40,exclusiveMatches:true,exclusiveBetTypes:true,repeatProbabilityThreshold:90,maxRepeatTickets:3,
-      dataSource:'SportyBet public cache',dummySessionForBooking:true},
     aiBot: {
       enabled: String(process.env.TELEGRAM_AI_ENABLED || 'true').toLowerCase() !== 'false',
       tokenConfigured: Boolean(process.env.TELEGRAM_AI_BOT_TOKEN),
@@ -3978,12 +3932,11 @@ app.post('/api/refresh/sport/:sport', express.json(), async (req, res) => {
 
   try {
     for (const market of markets) {
-      const payload = await withPublicSportyRequest(()=>loadSportyBetMarket(market, sport, {
+      const payload = await loadSportyBetMarket(market, sport, {
         hours,
         maxPages,
         forceRefresh: true,
-      }));
-      await writeSportySnapshot(await getRedis(),sport,market,payload,hours);
+      });
       results[market] = {
         rows: Array.isArray(payload?.rows) ? payload.rows.length : 0,
         fetchedAt: payload?.fetchedAt || null,
@@ -4013,43 +3966,32 @@ app.post('/api/refresh/sport/:sport', express.json(), async (req, res) => {
   }
 });
 
-app.get('/api/sportybet/public-cache/status',async(req,res)=>{
-  try{await publicCache.read();res.json({...publicCache.status(),scheduler:publicCacheScheduler.status()});}
-  catch(error){res.status(503).json({error:'Public cache status unavailable'});}
-});
-app.post('/api/telegram/next-12h-picks',express.json(),async(req,res)=>{
-  if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});
-  const now=new Date(),parts=watParts(now),manual=req.headers['x-matchday-run-mode']==='manual';
-  const slotTime=parts.minute>=18*60?'18:00':'07:00';
-  const scheduledMinute=slotTime==='18:00'?18*60:7*60;
-  if(!manual&&(parts.minute<scheduledMinute||parts.minute-scheduledMinute>60))return res.json({skipped:true,reason:'outside_next12h_slot',times:['07:00','18:00'],timezone:'Africa/Lagos'});
-  const requestId=String(req.headers['x-matchday-run-id']||'').trim();
-  if(manual&&requestId&&!/^[a-zA-Z0-9_-]{1,160}$/.test(requestId))return res.status(400).json({error:'Invalid manual run ID'});
-  const slotKey=manual?'manual:'+crypto.createHash('sha256').update(requestId||crypto.randomUUID()).digest('hex').slice(0,24):parts.date+'T'+slotTime;
-  const controller=new AbortController();res.once('close',()=>{if(!res.writableEnded)controller.abort();});
-  const result=await next12hJob({slotKey,dateKey:parts.date,slotTime:manual?'MANUAL':slotTime,signal:controller.signal});
-  if(!res.destroyed)res.status(result.statusCode).json(result.body);
-});
-
 app.post('/api/refresh', express.json(), (req, res) => {
   if (!process.env.REFRESH_SECRET || req.headers['x-refresh-secret'] !== process.env.REFRESH_SECRET) {
     return res.status(401).json({ error: 'unauthorized' });
   }
   const manual = req.headers['x-matchday-run-mode'] === 'manual';
-  // The app owns the three daily refresh slots. This protected endpoint is
-  // also available for an intentional manual refresh.
-  void publicCache.refresh().catch(error=>console.error('Public SportyBet refresh failed:',error.message));
-  return res.json({ ok: true, started: true, mode: manual ? 'manual' : 'scheduled',source:'SportyBet public website feeds',loginRequired:false,
-    message: 'Public SportyBet refresh started; check /api/sportybet/public-cache/status for completion.' });
+  // Accept authenticated refresh requests even when GitHub starts late.
+  // GitHub cron schedules the requested time; server authentication remains mandatory.
+  // Manual requests are explicitly permitted for recovery if scheduled refresh failed.
+  const { spawn } = require('child_process');
+  const child = spawn('node', [path.join(__dirname, 'jobs', 'refresh.js')], {
+    env: process.env,
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  child.stdout.on('data', d => console.log(d.toString().trim()));
+  child.stderr.on('data', d => console.error(d.toString().trim()));
+  child.on('error', error => console.error('Refresh process failed to spawn:', error.message));
+  child.on('exit', code => console.log(`refresh job exited with code ${code}`));
+  child.unref();
+  return res.json({ ok: true, started: true, mode: manual ? 'manual' : 'scheduled', message: 'Refresh started in the background; GitHub Actions checks /api/predictions for completion.' });
 });
 
 const httpServer=app.listen(PORT, () => {
   console.log(`Matchday site listening on :${PORT}`);
   telegramHourlyScheduler.start();
-  publicCacheScheduler.start();next12hScheduler.start();
-  sportyDirect.startKeepAlive();
 });
-const stopSchedulers=()=>{telegramHourlyScheduler.stop();publicCacheScheduler.stop();next12hScheduler.stop();};
-httpServer.once('close',stopSchedulers);
-process.once('SIGTERM',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});
-process.once('SIGINT',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});
+httpServer.once('close',()=>telegramHourlyScheduler.stop());
+process.once('SIGTERM',()=>{telegramHourlyScheduler.stop();httpServer.close(()=>process.exit(0));});
+process.once('SIGINT',()=>{telegramHourlyScheduler.stop();httpServer.close(()=>process.exit(0));});

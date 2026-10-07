@@ -1,7 +1,4 @@
 'use strict';
-// Each fixture enables only the automation it exercises.
-process.env.SPORTYBET_PUBLIC_CACHE_ENABLED='false';
-process.env.TELEGRAM_NEXT12H_ENABLED='false';
 const assert=require('node:assert/strict'),express=require('express');
 const {fakeRedis}=require('./fake-redis');
 const redis=fakeRedis();

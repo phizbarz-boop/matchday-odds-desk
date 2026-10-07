@@ -1,31 +1,65 @@
-name: Plot207 Public SportyBet Prediction Cache
+name: Plot207 All Sports Daily Predictions
 
 on:
-  # The app server refreshes at 06:30, 12:30 and 17:30 WAT.
-  workflow_dispatch: {}
+  workflow_dispatch:
+  schedule:
+    # Nigeria (WAT) is UTC+1: 07:20 WAT daily.
+    - cron: '20 6 * * *'
 
 permissions:
   contents: read
 
 concurrency:
-  group: plot207-public-sportybet-refresh
+  group: plot207-all-sports-daily-predictions
   cancel-in-progress: false
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 100
     steps:
-      - name: Start public fixture and market cache refresh
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npm run browser:install
+
+      - name: Refresh and verify all sports
         env:
+          SPORTYBET_PHONE: ${{ secrets.SPORTYBET_PHONE }}
+          SPORTYBET_PASSWORD: ${{ secrets.SPORTYBET_PASSWORD }}
+          SPORTYBET_BOOTSTRAP_COOKIES: ${{ secrets.SPORTYBET_BOOTSTRAP_COOKIES }}
+          SPORTYBET_PROXY_URL: ${{ secrets.SPORTYBET_PROXY_URL }}
           REFRESH_SECRET: ${{ secrets.REFRESH_SECRET }}
-          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
+          SPORTYSOCIAL_LOGIN_ID: ${{ secrets.SPORTYSOCIAL_LOGIN_ID }}
+          SPORTYSOCIAL_PASSWORD: ${{ secrets.SPORTYSOCIAL_PASSWORD }}
+          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
+          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL }}
+          GH_EVENT_NAME: ${{ github.event_name }}
         run: |
-          test -n "$REFRESH_SECRET" || (echo 'Missing GitHub secret REFRESH_SECRET' && exit 1)
-          curl --fail-with-body --show-error --silent --max-time 120 \
-            -X POST "$MATCHDAY_BASE_URL/api/refresh" \
-            -H 'Content-Type: application/json' \
-            -H "x-refresh-secret: $REFRESH_SECRET" \
-            -H 'x-matchday-run-mode: manual' --data '{}'
-          curl --fail-with-body --show-error --silent --max-time 30 \
-            "$MATCHDAY_BASE_URL/api/sportybet/public-cache/status"
+          test -n "$REFRESH_SECRET" || (echo "Missing GitHub secret REFRESH_SECRET" && exit 1)
+          test -n "$SPORTYSOCIAL_LOGIN_ID" || (echo "Missing GitHub secret SPORTYSOCIAL_LOGIN_ID" && exit 1)
+          test -n "$SPORTYSOCIAL_PASSWORD" || (echo "Missing GitHub secret SPORTYSOCIAL_PASSWORD" && exit 1)
+          test -n "$TELEGRAM_JOB_SECRET" || (echo "Missing GitHub secret TELEGRAM_JOB_SECRET" && exit 1)
+          node jobs/all-sports-daily-refresh.js
+
+      - name: Upload safe collector diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-sports-refresh-diagnostics
+          path: |
+            handball-discovery-v2/
+            volleyball-discovery-v1/
+            tennis-discovery-v4/
+          if-no-files-found: ignore
+          retention-days: 3
