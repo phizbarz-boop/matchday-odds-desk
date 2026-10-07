@@ -1,5 +1,7 @@
 # Run all Telegram pick types manually at any time
 
+> Current update: hourly Telegram QC/live generation and its workflow are removed. Website live/QC, SAFE, next-12-hours picks and result reports remain. This earlier guide records the previous hourly implementation. See [SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md](SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md).
+
 **Matchday Telegram Auto Picks → Run workflow** now runs the morning SAFE
 template and the five hourly templates immediately. A manual trigger is not
 restricted to 08:25 or the direct server's hourly schedule. The previous workflow only called

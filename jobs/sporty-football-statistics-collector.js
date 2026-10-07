@@ -1,19 +1,16 @@
 'use strict';
-// Read the statistics panel on actual SportyBet match pages with the existing
-// dummy session. The collector never stakes a bet or uses an outside provider.
+// Read the public statistics panel on actual SportyBet match pages. The
+// collector never loads dummy credentials or uses an outside provider.
 const fs=require('fs');
 require('../lib/sportyBrowserRuntime').configureBrowserPath();
 const {chromium}=require('playwright');
-const direct=require('../lib/sportybetDirect');
 const {getFootballMarket,getLiveSportMarket}=require('../lib/sportybet');
 const {parseDisplayedStats,sanitizeStats}=require('../lib/sportyFootballStats');
 const {STATS_FILE}=require('../lib/sportyFootballModel');
 async function main(){
-  await direct.ensureSession();
   const browser=await chromium.launch({headless:true});
   try {
     const context=await browser.newContext({locale:'en-NG'});
-    await context.addCookies([...direct._session.cookies].filter(([,v])=>!v.expiresAt || v.expiresAt>Date.now()).map(([name,v])=>({name,value:v.value,domain:'.sportybet.com',path:'/',secure:true,httpOnly:true})));
     const [prematch,live]=await Promise.allSettled([getFootballMarket('1x2',{hours:504,maxPages:10}),getLiveSportMarket('football','1x2',{maxPages:5})]);
     const fixtures=new Map([prematch,live].filter(x=>x.status==='fulfilled').flatMap(x=>x.value.rows||[]).map(x=>[String(x.eventId),x]));
     const page=await context.newPage(), links=new Map();

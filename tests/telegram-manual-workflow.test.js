@@ -45,27 +45,23 @@ async function dispatch(steps,h,event,{cancelled=false}={}) {
   return executed;
 }
 
-test('manual daily workflow calls SAFE and the hourly live endpoint even when SAFE fails',async t=>{
+test('manual daily workflow calls only SAFE and never the retired hourly endpoint',async t=>{
   const {steps,text}=workflow('telegram-picks.yml'),h=await harness(t,true);
-  assert.match(steps[1].condition,/workflow_dispatch/);assert.match(steps[1].condition,/!cancelled\(\)/);
-  assert.match(text,/timeout-minutes: 35/);
+  assert.equal(steps.length,1);assert.doesNotMatch(text,/api\/telegram\/quick-cash/);
   const results=await dispatch(steps,h,'workflow_dispatch');
-  assert.equal(results.length,2);assert.notEqual(results[0].code,0);assert.equal(results[1].code,0,results[1].stderr);
-  assert.deepEqual(h.calls,[{path:'/api/telegram/daily-picks',mode:'manual',id:undefined},
-    {path:'/api/telegram/quick-cash',mode:'manual',id:'12345-2'}]);
+  assert.equal(results.length,1);assert.notEqual(results[0].code,0);
+  assert.deepEqual(h.calls,[{path:'/api/telegram/daily-picks',mode:'manual',id:undefined}]);
 });
 
-test('daily cron calls only SAFE; cancelling skips the manual live step',async t=>{
+test('daily cron still sends SAFE',async t=>{
   const {steps}=workflow('telegram-picks.yml'),h=await harness(t);
   const results=await dispatch(steps,h,'schedule');assert.equal(results.length,1);assert.equal(results[0].code,0);
   assert.deepEqual(h.calls,[{path:'/api/telegram/daily-picks',mode:'scheduled',id:undefined}]);
-  assert.equal(vm.runInNewContext(steps[1].condition,{github:{event_name:'workflow_dispatch'},cancelled:()=>true}),false);
 });
 
-test('hourly workflow is manual-only and requests a fresh protected batch',async t=>{
-  const {steps,text}=workflow('telegram-quick-cash.yml'),h=await harness(t);
-  assert.doesNotMatch(text,/\bschedule:|\bcron:/);
-  const results=await dispatch(steps,h,'workflow_dispatch');
-  assert.equal(results.length,1);assert.equal(results[0].code,0,results[0].stderr);
-  assert.deepEqual(h.calls,[{path:'/api/telegram/quick-cash',mode:'manual',id:'12345-2'}]);
+test('hourly workflow is removed while next-12h picks and 12-hour reports remain',()=>{
+  const root=path.join(__dirname,'../.github/workflows');
+  assert.equal(fs.existsSync(path.join(root,'telegram-quick-cash.yml')),false);
+  assert.match(workflow('telegram-next-12h.yml').text,/api\/telegram\/next-12h-picks/);
+  assert.match(workflow('telegram-performance.yml').text,/cron: '10 11,23 \* \* \*'/);
 });

@@ -7,7 +7,7 @@ const express = require('express');
 const {direct, SPORT_IDS, extractUpcomingEvents} = require('../../lib/sportybet');
 const {boards} = require('./sportybet-live-format');
 const fixture = boards();
-const state = {logins:0, ciphers:0, accountChecks:0, marketReads:0, bookings:0};
+const state = {logins:0, ciphers:0, accountChecks:0, marketReads:0, bookings:0, lookupReads:0};
 const automated=process.env.SESSION_TEST_MODE==='automated';
 const pageCheckFailure=process.env.SESSION_TEST_MODE==='page-check-failure';
 const browserFailure=process.env.SESSION_TEST_MODE==='browser-failure'||pageCheckFailure;
@@ -42,11 +42,19 @@ direct.setFetchForTesting(async (url, options) => {
     state.logins++;
     return response({bizCode:12000, innerMsg:'Mock failure', message:'Looks like we’re having trouble on our end. Please try again later.'});
   }
-  if(browserFailure&&endpoint.includes('/factsCenter/')){
-    assert.equal(options.headers.Cookie,undefined);assert.equal(options.headers.authorization,undefined);
-    state.marketReads++;return response(bySportId.get(parsed.searchParams.get('sportId'))||fixture.football);
+  if(endpoint.includes('/factsCenter/') || endpoint.endsWith('/orders/share') && options.method==='GET'){
+    for(const key of Object.keys(options.headers))assert.doesNotMatch(key,/^(cookie|authorization|token|accessToken|refreshToken|device-id)$/i);
+    if(endpoint.endsWith('/orders/share')) {
+      state.lookupReads++;
+      const event=extractUpcomingEvents(fixture.football).events[0];
+      return response({bizCode:10000,data:{outcomes:[{sport:'Football',eventId:event.eventId,marketId:'1',marketDesc:'1X2',outcomeId:'1',outcomeDesc:'Home',odds:1.05}]}});
+    }
+    state.marketReads++;
+    const id=parsed.searchParams.get('eventId');
+    if(id)return response({bizCode:10000,data:Object.values(fixture).flatMap(payload=>extractUpcomingEvents(payload).events).find(event=>event.eventId===id)||{}});
+    return response(bySportId.get(parsed.searchParams.get('sportId'))||fixture.football);
   }
-  assert.equal(successful, true, 'A rejected login must stop the market scan');
+  assert.equal(successful, true, 'Only successful dummy authentication can create a booking');
   assert.match(options.headers.Cookie, /accessToken=fresh-browser-token/);
   assert.match(options.headers.Cookie, /deviceId=fresh-device/);
   assert.equal(options.headers.authorization, undefined, 'A stale persisted bearer token must be removed');
@@ -56,14 +64,7 @@ direct.setFetchForTesting(async (url, options) => {
   if (endpoint.endsWith('/orders/share')) {
     state.bookings++; return response({bizCode:10000, data:{shareCode:'SESSION-TEST-CODE'}});
   }
-  assert.ok(endpoint.includes('/factsCenter/'));
-  state.marketReads++;
-  const id = parsed.searchParams.get('eventId');
-  if (id) {
-    const event = Object.values(fixture).flatMap(payload => extractUpcomingEvents(payload)).find(e => e.eventId === id);
-    return response({bizCode:10000, data:event || {}});
-  }
-  return response(bySportId.get(parsed.searchParams.get('sportId')) || {bizCode:10000, data:[]});
+  assert.fail('Unexpected private endpoint: '+endpoint);
 });
 const listen = express.application.listen;
 express.application.listen = function (...args) {

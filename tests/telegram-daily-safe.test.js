@@ -65,7 +65,7 @@ test('below-85% candidates do not generate the morning SAFE ticket', async () =>
   assert.match(result.results[0].error, /No selections met the 85%/);
 });
 
-test('Today’s Codes reveals the five hourly categories and hides retired tickets', () => {
+test('Today’s Codes retains previously sent QC/live codes and hides retired 2x/3x templates', () => {
   const from = server.indexOf('function telegramDailyCodeVisibleForPlan(');
   const to = server.indexOf('function plot207TelegramHelpText(', from);
   const fromText = server.indexOf('function telegramDailyCodesText(');

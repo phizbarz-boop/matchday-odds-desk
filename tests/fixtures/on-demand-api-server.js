@@ -43,8 +43,9 @@ function currentEvent(sport){
     ]};
 }
 const response=data=>({ok:true,status:200,headers:{get:k=>k==='content-type'?'application/json':null,getSetCookie:()=>[]},text:async()=>JSON.stringify(data)});
-direct.setFetchForTesting(async url=>{
+direct.setFetchForTesting(async(url,options)=>{
   const u=new URL(url);
+  for(const name of Object.keys(options.headers))assert.doesNotMatch(name,/^(cookie|authorization|token|accessToken|refreshToken|device-?id)$/i);
   assert.ok(u.pathname.includes('/factsCenter/'),'fixture must only read sports data');
   state.reads++;
   if(state.fail)throw new Error('Fixture SportyBet source unavailable');
@@ -70,5 +71,5 @@ direct.lookupBooking=async(_code,options)=>{
 };
 const listen=express.application.listen;
 express.application.listen=function(...args){const server=listen.apply(this,args);server.on('listening',()=>process.send({port:server.address().port}));return server;};
-process.on('message',m=>{if(m.type==='state'){Object.assign(state,m.change||{});process.send({id:m.id,state:{...state}});}});
+process.on('message',m=>{if(m.type==='state'){Object.assign(state,m.change||{});process.send({id:m.id,state:{...state,sessionLoaded:direct._session.loaded}});}});
 require('../../server');

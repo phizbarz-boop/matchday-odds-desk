@@ -4,7 +4,7 @@ SportyBet data no longer comes from the paid Parse.bot API. The server now talks
 **directly to SportyBet**:
 
 - Fixtures, markets and odds come directly from SportyBet's web JSON endpoints.
-  Configuring the dummy account makes market reads require its session too.
+  They stay public even when dummy-account credentials are configured.
 - Booking codes require your **dummy SportyBet account**. Tokens refresh
   automatically, with website-form sign-in when refresh cannot recover them.
 
@@ -28,7 +28,7 @@ website's own login request; the legacy encrypted API adapter is opt-in only.
 Normal token expiry no longer requires copying bootstrap cookies.
 
 Football probabilities use SportyBet's displayed goal averages and H2H, collected
-by `jobs/sporty-football-statistics-collector.js` through the dummy session.
+by `jobs/sporty-football-statistics-collector.js` from public match pages.
 Complete offered price sets supply labelled no-vig estimates when statistics are
 missing. No paid football data subscription or key is required.
 
@@ -42,7 +42,7 @@ The manual GitHub public-refresh workflow needs `REFRESH_SECRET`, not dummy
 account or collector credentials. Keep `TELEGRAM_JOB_SECRET` the same on GitHub
 and Render for protected manual Telegram jobs. Optional historical football
 statistics collection still uses `node jobs/sporty-football-statistics-collector.js`
-and a configured dummy session; it is not required by `npm run refresh`.
+in a fresh public browser context; it is not required by `npm run refresh`.
 
 Optional — only needed if diagnostics shows `SPORTYBET_GEO_BLOCKED`.
 Reachability depends on the server IP and SportyBet's current restrictions:
@@ -62,30 +62,16 @@ SPORTYBET_HOURS=120
 SPORTYBET_MAX_PAGES=10
 SPORTYBET_PAGE_SIZE=100
 SPORTYBET_BOOKINGS_PER_MINUTE=5
-SPORTYBET_KEEPALIVE_SECONDS=240
 H2H_MAX_WEIGHT=0.18
 ```
 
-## How the session is kept alive
+## Booking-only session recovery
 
-1. The server loads the saved dummy session, applying a changed optional
-   bootstrap value first. Expired credentials try refresh before website-form
-   sign-in with the configured dummy phone/password.
-2. Cookies and the access token are persisted to Redis when `REDIS_URL` is set
-   (recommended on Render, where the filesystem is wiped on every deploy),
-   otherwise to `.sportybet-session.json`.
-3. Maintenance runs every `SPORTYBET_KEEPALIVE_SECONDS` (default 240s).
-   Tokens refresh every 20 minutes, or within five minutes of a known expiry.
-   Auto scans and bookings also verify the account, sharing one account check
-   per minute by default.
-4. HTTP 401/403 and HTTP-200 session error responses try refresh before login
-   and retry once. Concurrent requests share renewal; transient failed logins
-   back off for 60 seconds and verification/rejected sign-in for 15 minutes.
+Public reads do not load dummy credentials or require a session. The website does not attempt a startup login or start periodic account maintenance.
 
-SportyBet can expire or revoke sessions, require account verification, or reject
-the hosting IP. Renewal cannot guarantee permanent access. When recovery fails,
-Auto Analyser displays a dummy-session error and diagnostics retain the cause.
-Complete any account verification yourself through SportyBet's own sign-in form.
+When a booking code is requested, the server loads the saved private session, verifies it and refreshes or signs in through SportyBet's own form when required. Rotated credentials are saved to Redis when configured, or the private local session file. Concurrent booking requests share verification and recovery. A failed sign-in has a cooldown and appears in booking diagnostics; public analysis remains usable.
+
+See [SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md](SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md) for current behavior and installation. Hourly Telegram QC/live picks are removed; SAFE, next-12-hours picks and result reports remain.
 
 ## Diagnostics and manual recovery
 
@@ -101,7 +87,7 @@ Both are guarded by the website access cookie when `WEBSITE_ACCESS_CODE` is set.
 SportyBet has renamed its internal routes before (the prematch list moved to
 `pcUpcomingEvents`). The client therefore keeps a **candidate list per route
 and probes it automatically**: the first path that answers with JSON is adopted
-and remembered (in the persisted session), and a later 404 on that path drops
+and remembered in memory for public reads, and a later 404 on that path drops
 it and re-probes — route renames self-heal without a deploy. The diagnostics
 endpoint shows `resolvedEndpoints` (what is in use) and `endpointCandidates`
 (the probe order).
@@ -128,8 +114,8 @@ each login the app probes a small candidate list
 with anything other than the gateway's 404. The adopted path is persisted
 with the session. If every candidate 404s, login backs off for
 `SPORTYBET_RESOLUTION_RETRY_MS` (default 10 minutes) instead of retrying on
-every keep-alive tick; pin the real path with `SPORTYBET_ENDPOINT_LOGIN` to
-skip probing entirely. The keep-alive ping (`SPORTYBET_ENDPOINT_USERINFO`)
+every booking request; pin the real path with `SPORTYBET_ENDPOINT_LOGIN` to
+skip probing entirely. The booking-time account check (`SPORTYBET_ENDPOINT_USERINFO`)
 resolves the same way via `SPORTYBET_ENDPOINT_USERINFO_CANDIDATES`.
 
 List requests use the parameter naming observed on the site's own calls
@@ -222,8 +208,8 @@ SPORTYBET_SPORT_ID_VOLLEYBALL=sr:sport:23
 ## Live / in-play betting
 
 The site has a **Live Betting** page (`/live.html`, behind the same website
-access code) that scrapes the SportyBet live board through the dummy-account
-session and creates booking codes for live selections only.
+access code) that reads the public SportyBet live board. The dummy account is
+used only to create booking codes after live selections are rechecked.
 
 ```text
 GET  /api/sportybet/live/odds?sport=football&market=all

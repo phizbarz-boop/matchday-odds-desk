@@ -60,7 +60,7 @@ test('results read SportyBet afresh, deduplicate common events and keep unresolv
   let bookings=0,events=0,sessions=0;
   const result=await refreshTicketResults(redis,{assertSession:async()=>{sessions++;},getBooking:async()=>{bookings++;return {outcomes:[]};},
     getEvent:async()=>{events++;return {data:{eventId:'e',matchStatus:'FT',setScore:'2:0'}};}});
-  assert.equal(result.checked,2);assert.equal(sessions,1);assert.equal(bookings,1);assert.equal(events,1);
+  assert.equal(result.checked,2);assert.equal(sessions,0);assert.equal(bookings,1);assert.equal(events,1);
   assert.ok((await listTrackedSlips(redis)).every(s=>s.status==='won'&&s.lastStatusDetail.returnMultiplier===2));
   await trackTelegramSlip(redis,{ticketId:'pending',shareCode:'XYZ123',selections:[{...selection,eventId:'unknown'}]});
   await refreshTicketResults(redis,{assertSession:async()=>{},getBooking:async()=>{throw Error('not available');},getEvent:async()=>({data:{}})});
@@ -72,10 +72,11 @@ test('official voids and half settlements adjust the returned price without read
     {...selection,settlement:'HALF_WON'},{...selection,eventId:'v',settlement:'VOID'}]}),getEvent:async()=>{throw Error('should not read');}});
   assert.equal(result.errors,0);const ticket=(await listTrackedSlips(redis))[0];assert.equal(ticket.lastStatusDetail.returnMultiplier,1.5);
 });
-test('missing dummy session leaves every unconfirmed result pending for reporting',async()=>{
+test('public ticket results work when dummy authentication is unavailable',async()=>{
   const redis=fakeRedis();await trackTelegramSlip(redis,{shareCode:'ABC123',selections:[selection]});
-  const result=await refreshTicketResults(redis,{assertSession:async()=>{throw Error('expired');},getBooking:async()=>assert.fail('anonymous fallback forbidden')});
-  assert.equal(result.sessionUnavailable,true);assert.equal((await listTrackedSlips(redis))[0].status,'pending');
+  const result=await refreshTicketResults(redis,{assertSession:async()=>assert.fail('result reads must not sign in'),
+    getBooking:async()=>({outcomes:[]}),getEvent:async()=>({data:{eventId:'e',matchStatus:'FT',setScore:'2:0'}})});
+  assert.equal(result.checked,1);assert.equal(result.errors,0);assert.equal((await listTrackedSlips(redis))[0].status,'won');
 });
 test('result scan limits preserve unchecked tickets and continue on the next report',async()=>{
   const redis=fakeRedis();for(let i=0;i<3;i++)await trackTelegramSlip(redis,{shareCode:'CODE'+i,selections:[selection]});

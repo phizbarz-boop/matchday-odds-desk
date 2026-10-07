@@ -2,8 +2,8 @@
 
 The server renews accepted sessions and signs back in through SportyBet's own
 Nigeria login form when refresh is rejected. Normal expiry no longer requires
-copying browser cookies into Render. Website analysis, bookings and the direct
-hourly Telegram job use this shared session.
+copying browser cookies into Render. This recovery is used only when creating
+booking codes. Analysis and result reads use public SportyBet data.
 
 ## One-time Render setup
 
@@ -35,7 +35,7 @@ hourly Telegram job use this shared session.
    A failed browser installation fails the build. No browser download or manual
    cookie capture is required during an ordinary renewal.
 4. Save/redeploy. Check `/api/sportybet/diagnostics`, then run Auto Analyser or
-   the existing authenticated manual Telegram job on your deployment.
+   create a booking code to exercise account recovery on your deployment.
 
 If the native Render runtime is missing Chromium system libraries, use the
 included `Dockerfile` and `.dockerignore`: it installs the pinned Playwright
@@ -47,32 +47,24 @@ use `./Dockerfile`, and let its `CMD` start the app. Remove the native
 Keep the same dummy-account, Redis and Telegram environment values. The Docker
 image has not been built on your Render deployment here.
 
-An always-running service is required for background session maintenance and
-hourly Telegram delivery. Keep persistent Redis enabled so renewed credentials,
-ticket history and duplicate-protection records survive deployments. The
-existing setup details remain in [TELEGRAM_DIRECT_HOURLY.md](TELEGRAM_DIRECT_HOURLY.md).
+Keep persistent Redis enabled so renewed credentials, ticket history and duplicate-protection records survive deployments. Scheduled public refreshes and next-12-hours Telegram picks require the application to stay running. Hourly QC/live Telegram picks have been removed.
 
 ## What runs automatically
 
-- Load the saved session from Redis, or the private local session file.
-- Check the account shortly after startup, then every four minutes by default.
-- Refresh every 20 minutes, or within five minutes of a known access-token
-  expiry. Rotated access and refresh tokens are saved automatically, including
-  credentials returned in the response body rather than Set-Cookie headers.
+- When a code is being created, load the saved session from Redis or the private local file and check the account. Public reads and startup never initiate this recovery.
+- At booking, refresh an expired/rejected or aging session before browser sign-in. Rotated access and refresh tokens are saved automatically, including credentials returned in the response body rather than Set-Cookie headers.
 - If the configured refresh route returns 404 or 405, retain a still-accepted
   session and stop calling that route until the process restarts. An expired
   or rejected session then recovers through the configured browser sign-in.
 - After an expired/revoked session cannot refresh, launch one browser, open
   SportyBet's own login form, enter the configured dummy credentials once and
   verify the account before exporting its session cookies.
-- Share recovery across simultaneous market reads and jobs. Retry a rejected
+- Share recovery across simultaneous bookings. Retry a rejected
   authenticated request once with the recovered session.
 - Persist the recovered session. Ordinary restarts reuse it without cookie
   copying or another password submission.
 
-The browser adapter does not place a wager. Existing booking-code generation
-and the hourly QC/live Telegram rules continue through the same application
-jobs. No new GitHub hourly dependency is introduced.
+The browser adapter does not place a wager. Website and retained Telegram booking-code generation use the same recovery. Public reads continue without it.
 
 ## Diagnostics and exceptions
 
@@ -84,7 +76,9 @@ automaticReloginConfigured: true
 lastLoginMethod: "browser"
 lastAuthenticatedAt: <recent successful account verification>
 lastRefreshAt: <recent accepted refresh or login>
-lastKeepAliveOk: true
+backgroundLoginEnabled: false
+authenticationScope: "booking"
+dataReadAccess: "public"
 requiresUserAction: false
 ```
 
@@ -114,7 +108,6 @@ Automation cannot promise uninterrupted access when the provider denies it.
 Optional server tuning:
 
 ```text
-SPORTYBET_KEEPALIVE_SECONDS=240
 SPORTYBET_REFRESH_SECONDS=1200
 SPORTYBET_REFRESH_MARGIN_SECONDS=300
 SPORTYBET_LOGIN_RETRY_MS=60000
@@ -133,20 +126,19 @@ After downloading this ZIP into Downloads:
 ```bash
 cd ~/Documents &&
 session_dir=$(mktemp -d /tmp/plot207-session.XXXXXX) &&
-unzip -q ~/Downloads/matchday-odds-desk-page-check-fix.zip -d "$session_dir" &&
+unzip -q ~/Downloads/matchday-odds-desk-public-booking-only.zip -d "$session_dir" &&
 rsync -a --delete --exclude=.git --exclude='.env*' --exclude=node_modules --exclude=data --exclude='.sportybet-*' "$session_dir/matchday-odds-desk/" matchday-odds-desk/ &&
 cd matchday-odds-desk &&
 git add -A &&
-git commit -m "Fix SportyBet page-check timeout during automatic sign-in" &&
+git commit -m "Use public SportyBet reads and remove hourly Telegram picks" &&
 git push origin main
 ```
 
 ## Validation
 
 The full Node test suite covers session recovery, build installation, public
-cache collection, hourly QC/live tickets and next-12-hour ticket packs.
-See [SPORTYBET_PAGE_CHECK_FIX.md](SPORTYBET_PAGE_CHECK_FIX.md) for this
-update's checks and the meaning of the deployment logs.
+cache collection, removed hourly QC/live schedules and retained next-12-hour ticket packs.
+See [SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md](SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md) for this update's checks and installation.
 
 Focused tests exercise expiry, proactive refresh, rotated refresh tokens,
 concurrent recovery, rejected sign-in, private persistence and restart reuse.

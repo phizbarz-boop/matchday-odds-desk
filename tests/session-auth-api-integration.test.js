@@ -42,63 +42,79 @@ async function server(t, mode) {
 }
 const request = {sports:['football'], liveMode:'quick_cash', minProbability:0, targetOdds:1.05, maxSelections:1, betTypes:['home_win']};
 
-test('production Auto Analyser reports one shared login failure instead of empty markets', async t => {
-  const api = await server(t, 'rejected');
-  const result = await api.post('/api/sportybet/auto-pick', request);
-  assert.equal(result.status, 503, JSON.stringify(result.body));
-  assert.equal(result.body.code, 'SPORTYBET_AUTH_FAILED');
-  assert.match(result.body.error, /dummy account session needs renewal/);
-  assert.match(result.body.detail, /bizCode 12000/);
-  assert.doesNotMatch(result.body.detail, /mock-test-password|2348000000000/);
-  assert.equal(result.body.cornerDiagnostics, undefined);
-  const retry = await api.post('/api/sportybet/auto-pick', request);
-  assert.equal(retry.status, 503);
-  assert.ok(retry.body.retryAt);
-  assert.deepEqual(await api.state(), {logins:1, ciphers:1, accountChecks:0, marketReads:0, bookings:0});
+function assertPublicOnly(state) {
+  assert.equal(state.logins,0);assert.equal(state.ciphers,0);assert.equal(state.accountChecks,0);assert.equal(state.bookings,0);
+  assert.ok(state.marketReads>0);if('browserLogins' in state)assert.equal(state.browserLogins,0);
+}
+
+test('public Auto Analyser works before and during a failed dummy booking login',async t=>{
+  const api=await server(t,'rejected');
+  const result=await api.post('/api/sportybet/auto-pick',request);
+  assert.equal(result.status,200,JSON.stringify(result.body));assert.ok(result.body.selections.length);
+  assertPublicOnly(await api.state());
+  const booking=await api.post('/api/sportybet/book',{selections:result.body.selections});
+  assert.equal(booking.status,503,JSON.stringify(booking.body));assert.equal(booking.body.bookingErrorCode,'SPORTYBET_AUTH_FAILED');
+  assert.equal(booking.body.authFailure.code,'SPORTYBET_AUTH_FAILED');
+  const retry=await api.post('/api/sportybet/book',{selections:result.body.selections});
+  assert.equal(retry.status,503);assert.ok(retry.body.retryAt);
+  const publicRetry=await api.post('/api/sportybet/auto-pick',request);
+  assert.equal(publicRetry.status,200,JSON.stringify(publicRetry.body));assert.ok(publicRetry.body.selections.length);
+  const diagnostics=await api.get('/api/sportybet/diagnostics');
+  assert.equal(diagnostics.body.publicDataProbe.ok,true);assert.equal(diagnostics.body.session.keepAliveRunning,false);
+  assert.equal(diagnostics.body.session.authenticationScope,'booking');assert.equal(diagnostics.body.session.dataReadAccess,'public');
+  const state=await api.state();assert.equal(state.logins,1);assert.equal(state.ciphers,1);assert.equal(state.accountChecks,0);assert.equal(state.bookings,0);
+  assert.doesNotMatch(JSON.stringify([booking.body,retry.body,publicRetry.body,diagnostics.body]),/mock-test-password|2348000000000/);
 });
 
-test('browser bootstrap validates the dummy once, reads live markets and creates a code over the authenticated session', async t => {
-  const api = await server(t, 'browser');
-  const result = await api.post('/api/sportybet/auto-pick', request);
-  assert.equal(result.status, 200, JSON.stringify(result.body));
-  assert.ok(result.body.selections.length);
-  assert.ok(result.body.selections.every(s => s.live && s.quickCash));
-  const booking = await api.post('/api/sportybet/book', {selections:result.body.selections});
-  assert.equal(booking.status, 200, JSON.stringify(booking.body));
-  assert.equal(booking.body.shareCode, 'SESSION-TEST-CODE');
-  const state = await api.state();
-  assert.equal(state.logins, 0); assert.equal(state.ciphers, 0); assert.equal(state.accountChecks, 1);
-  assert.ok(state.marketReads > 0); assert.equal(state.bookings, 1);
+test('browser bootstrap is used only after public analysis requests a booking code',async t=>{
+  const api=await server(t,'browser');
+  const result=await api.post('/api/sportybet/auto-pick',request);
+  assert.equal(result.status,200,JSON.stringify(result.body));assert.ok(result.body.selections.every(s=>s.live&&s.quickCash));
+  assertPublicOnly(await api.state());
+  const booking=await api.post('/api/sportybet/book',{selections:result.body.selections});
+  assert.equal(booking.status,200,JSON.stringify(booking.body));assert.equal(booking.body.shareCode,'SESSION-TEST-CODE');
+  const state=await api.state();assert.equal(state.logins,0);assert.equal(state.accountChecks,1);assert.equal(state.bookings,1);
+  const next=await api.post('/api/sportybet/auto-pick',request);
+  assert.equal(next.status,200);assert.equal((await api.state()).accountChecks,1);
 });
 
-test('production Auto Analyser automatically recovers a revoked session and books without bootstrap-cookie updates',async t=>{
+test('an expired saved session recovers automatically at booking without blocking public analysis',async t=>{
   const api=await server(t,'automated');
   const result=await api.post('/api/sportybet/auto-pick',request);
   assert.equal(result.status,200,JSON.stringify(result.body));assert.ok(result.body.selections.length);
+  assertPublicOnly(await api.state());
   const booking=await api.post('/api/sportybet/book',{selections:result.body.selections});
   assert.equal(booking.status,200,JSON.stringify(booking.body));assert.equal(booking.body.shareCode,'SESSION-TEST-CODE');
   const state=await api.state();assert.equal(state.browserLogins,1);assert.equal(state.accountChecks,1);
   assert.equal(state.logins,0);assert.equal(state.ciphers,0);assert.equal(state.bookings,1);
 });
-test('public diagnostics still read SportyBet anonymously when automatic browser login is failing',async t=>{
+
+test('public diagnostics and live analysis work when booking browser sign-in fails',async t=>{
   const api=await server(t,'browser-failure');
   const result=await api.post('/api/sportybet/auto-pick',request);
-  assert.equal(result.status,503);assert.equal(result.body.authFailure.stage,'navigation');
+  assert.equal(result.status,200);assertPublicOnly(await api.state());
+  const booking=await api.post('/api/sportybet/book',{selections:result.body.selections});
+  assert.equal(booking.status,503);assert.equal(booking.body.authFailure.stage,'navigation');
   const diagnostics=await api.get('/api/sportybet/diagnostics');
   assert.equal(diagnostics.status,200);assert.equal(diagnostics.body.publicDataProbe.ok,true);
   assert.equal(diagnostics.body.session.lastLoginFailure.reason,'browser_navigation_timeout');
-  const state=await api.state();assert.equal(state.browserLogins,1);assert.ok(state.marketReads>0);
+  const retry=await api.post('/api/sportybet/auto-pick',request);assert.equal(retry.status,200);
+  const state=await api.state();assert.equal(state.browserLogins,1);assert.equal(state.bookings,0);assert.ok(state.marketReads>0);
 });
-test('Auto Analyser and session status preserve the page-check substep through the shared cooldown',async t=>{
+
+test('booking and session diagnostics preserve page-check failures while data requests stay public',async t=>{
   const api=await server(t,'page-check-failure');
   const result=await api.post('/api/sportybet/auto-pick',request);
-  assert.equal(result.status,503);assert.equal(result.body.authFailure.reason,'browser_page_timeout');
-  assert.equal(result.body.authFailure.pageCheck,'body_ready');assert.equal(result.body.authFailure.pageCheckAttempt,2);
-  const retry=await api.post('/api/sportybet/auto-pick',request);
+  assert.equal(result.status,200);assertPublicOnly(await api.state());
+  const body={selections:result.body.selections};
+  const booking=await api.post('/api/sportybet/book',body);
+  assert.equal(booking.status,503);assert.equal(booking.body.authFailure.reason,'browser_page_timeout');
+  assert.equal(booking.body.authFailure.pageCheck,'body_ready');assert.equal(booking.body.authFailure.pageCheckAttempt,2);
+  const retry=await api.post('/api/sportybet/book',body);
   assert.equal(retry.body.authFailure.pageCheck,'body_ready');assert.ok(retry.body.retryAt);
   const diagnostics=await api.get('/api/sportybet/diagnostics');
-  assert.equal(diagnostics.body.session.lastLoginFailure.pageCheck,'body_ready');
-  assert.equal(diagnostics.body.publicDataProbe.ok,true);
-  assert.doesNotMatch(JSON.stringify([result.body,retry.body,diagnostics.body]),/fixture-private-call-log|mock-test-password/);
+  assert.equal(diagnostics.body.session.lastLoginFailure.pageCheck,'body_ready');assert.equal(diagnostics.body.publicDataProbe.ok,true);
+  const live=await api.get('/api/sportybet/live/odds?sport=football&market=all');assert.equal(live.status,200);
+  assert.doesNotMatch(JSON.stringify([booking.body,retry.body,diagnostics.body]),/fixture-private-call-log|mock-test-password/);
   assert.equal((await api.state()).browserLogins,1);
 });

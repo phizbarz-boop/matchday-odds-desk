@@ -1,5 +1,7 @@
 # Hourly Quick Cash and live selection rules
 
+> Current update: hourly Telegram QC/live generation and its workflow are removed. Website live/QC, SAFE, next-12-hours picks and result reports remain. This earlier guide records the previous hourly implementation. See [SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md](SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md).
+
 Manual GitHub daily picks run SAFE plus the five hourly categories immediately,
 and new manual runs can repeat in the same hour. See
 [TELEGRAM_MANUAL_ALL_PICKS.md](TELEGRAM_MANUAL_ALL_PICKS.md).

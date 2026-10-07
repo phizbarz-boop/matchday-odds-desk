@@ -1,6 +1,6 @@
 # SportyBet on-demand requests
 
-The hourly QC schedule and updated halfway/currently-winning live rules are documented in [HOURLY_QC_AND_LIVE_RULES.md](HOURLY_QC_AND_LIVE_RULES.md).
+All request reads are public. Dummy authentication starts only when creating a booking code. Hourly Telegram QC/live picks are removed; see [SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md](SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md). Website live/QC selection rules remain active.
 
 Auto Analyser, manual market views, booking-code analysis and same-fixture replacements now read current SportyBet data when requested. This applies to website visitors and the Telegram builder/analyser. No daily prediction refresh is required before a user can build or analyse a slip.
 
@@ -17,7 +17,7 @@ Booking-code analysis reads the exact event IDs on the submitted ticket. It does
 
 ## What Daily Prediction Refresh still does
 
-The app now collects public SportyBet upcoming fixtures and full event markets for all six supported sports at 06:30, 12:30 and 17:30 WAT, saving the catalogue and football prediction snapshot without dummy login. Six extra next-12-hours Telegram targets run at 07:00 and 18:00 WAT. Existing SAFE, hourly QC/live and 12-hour result/ROI jobs continue. See `PUBLIC_CACHE_AND_NEXT12H_PICKS.md` for data, selection and delivery rules. Historical collectors remain optional manual tools; user requests work independently of the cache schedule.
+The app now collects public SportyBet upcoming fixtures and full event markets for all six supported sports at 06:30, 12:30 and 17:30 WAT, saving the catalogue and football prediction snapshot without dummy login. Six extra next-12-hours Telegram targets run at 07:00 and 18:00 WAT. SAFE and 12-hour result/ROI jobs continue. See `PUBLIC_CACHE_AND_NEXT12H_PICKS.md` for data, selection and delivery rules. Historical collectors remain optional manual tools; user requests work independently of the cache schedule.
 
 The website football dashboard requests `/api/predictions?source=current`. The default `/api/predictions` still exposes the saved daily snapshot so workflow completion checks remain meaningful.
 
@@ -32,8 +32,6 @@ The website football dashboard requests `/api/predictions?source=current`. The d
 
 ## Install and validate
 
-Deploy the updated source using the existing server settings. No new required environment variables or paid data key are needed. Keep the dummy SportyBet credentials for session-backed reads and booking/share codes.
+Deploy the updated source using the existing server settings. No new required environment variables or paid data key are needed. Keep the dummy SportyBet credentials for creating booking/share codes.
 
-200 Node regression tests passed, and syntax checks passed for all 58 source/test JavaScript files plus the inline website script. Tests cover changed odds, newly added games, old snapshots, all six sports, tennis/volleyball totals, pagination, suspended markets, exact imported fixtures, missing historical statistics, live/Quick Cash validation, hourly scheduling and Today’s Codes.
-
-Fresh read-only requests returned current SportyBet fixtures for all six sports. A real local HTTP Auto Analyser request produced 125 candidates at a 70% minimum probability and built eight selections with no source errors. Authenticated statistics collection and real booking creation have not been exercised in this workspace; booking-code flow tests use a mocked share-code service.
+The current update passed all 314 Node regression tests, including public reads with dummy credentials configured and booking-time session recovery. Integration tests use local fixtures and mocked SportyBet booking responses; this update does not verify production account authentication.

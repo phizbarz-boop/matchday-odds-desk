@@ -1,5 +1,7 @@
 # Direct hourly SportyBet tickets to Telegram
 
+> Current update: hourly Telegram QC/live generation and its workflow are removed. Website live/QC, SAFE, next-12-hours picks and result reports remain. This earlier guide records the previous hourly implementation. See [SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md](SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md).
+
 The app now runs the hourly QC/live batch itself. Its timer calls the booking
 job directly inside the Node server, reads current SportyBet live pages using
 the dummy account, rechecks each selected market, creates booking codes and

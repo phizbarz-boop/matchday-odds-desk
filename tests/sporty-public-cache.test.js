@@ -25,20 +25,20 @@ test('public website reads never log in or attach/change the configured dummy se
   direct._session.token='private-fixture-token';direct._session.cookies.set('accessToken',{value:'private-fixture-cookie',expiresAt:null});
   t.after(()=>{direct.setFetchForTesting(null);direct._session.token=token;direct._session.cookies.clear();for(const [k,v] of cookies)direct._session.cookies.set(k,v);for(const [k,v] of Object.entries(prior))if(v==null)delete process.env[k];else process.env[k]=v;});
   const calls=[];direct.setFetchForTesting(async(url,options)=>{
-    assert.match(new URL(url).pathname,/\/factsCenter\//);
+    assert.match(new URL(url).pathname,/\/(?:factsCenter\/|orders\/share)/);
     for(const key of Object.keys(options.headers))assert.doesNotMatch(key,/^(cookie|authorization|token|accessToken|refreshToken)$/i);
     calls.push(url);return response(envelope([event('football')]));
   });
   await withPublicSportyRequest(async()=>{
     await direct.fetchPrematchPage(sporty.SPORT_IDS.football,1,100);await direct.fetchEventDetail('sr:match:public-football-0');
     await assert.rejects(direct.createBookingCode([]),e=>e.code==='SPORTYBET_PUBLIC_READ_ONLY');
-    await assert.rejects(direct.lookupBooking('FIXTURE'),e=>e.code==='SPORTYBET_PUBLIC_READ_ONLY');
+    await direct.lookupBooking('FIXTURE');
     await assert.rejects(direct.sportyRequest('/patron/account/info',{auth:true}),e=>e.code==='SPORTYBET_PUBLIC_READ_ONLY');
   });
-  assert.equal(calls.length,2);assert.equal(direct._session.token,'private-fixture-token');
+  assert.equal(calls.length,3);assert.equal(direct._session.token,'private-fixture-token');
   assert.equal(direct._session.cookies.get('accessToken').value,'private-fixture-cookie');
 });
-test('overlapping public and authenticated request scopes cannot share a market response',async()=>{
+test('overlapping collection and ordinary request scopes retain separate read caches',async()=>{
   let reads=0,release;const gate=new Promise(r=>{release=r;});
   const read=async()=>{reads++;await gate;return sportyRequest().anonymous?'public':'account';};
   const a=withPublicSportyRequest(()=>memoSportyRead('same',read));

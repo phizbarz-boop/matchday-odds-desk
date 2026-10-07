@@ -79,8 +79,8 @@ test('overlapping users share an unfinished read and retry after an upstream fai
 test('website requests follow current SportyBet data independently of Daily Prediction Refresh',async t=>{
   const scratch=mkdtempSync(path.join(tmpdir(),'sporty-current-api-'));
   const child=fork(path.join(__dirname,'fixtures/on-demand-api-server.js'),[],{cwd:path.join(__dirname,'..'),silent:true,
-    env:{...process.env,PORT:'0',REDIS_URL:'',SPORTYBET_PHONE:'',SPORTYBET_PASSWORD:'',SPORTYBET_PROXY_URL:'',
-      SPORTYBET_BOOTSTRAP_COOKIES:'',SPORTYBET_SESSION_FILE:path.join(scratch,'session.json'),SPORTYBET_MAX_PAGES:'1',SPORTYBET_LIVE_MAX_PAGES:'1'}});
+    env:{...process.env,PORT:'0',REDIS_URL:'',SPORTYBET_PHONE:'2348000000000',SPORTYBET_PASSWORD:'unavailable-fixture-password',SPORTYBET_PROXY_URL:'',
+      SPORTYBET_BOOTSTRAP_COOKIES:'accessToken=unused-private-cookie',SPORTYBET_SESSION_FILE:path.join(scratch,'session.json'),SPORTYBET_MAX_PAGES:'1',SPORTYBET_LIVE_MAX_PAGES:'1'}});
   let logs='';child.stdout.on('data',d=>{logs+=d;});child.stderr.on('data',d=>{logs+=d;});
   t.after(()=>{child.kill();rmSync(scratch,{recursive:true,force:true});});
   const port=await new Promise((resolve,reject)=>{
@@ -174,5 +174,12 @@ test('website requests follow current SportyBet data independently of Daily Pred
     assert.equal(picked.body.candidateCount,0);
     assert.match(picked.body.sourceErrors['football 1X2'],/source unavailable/);
     assert.match(picked.body.hint,/reads failed/);
+  });
+  await t.test('all user reads leave dummy credentials unloaded and background login stopped',async()=>{
+    await configure({fail:false});
+    const live=await request('/api/sportybet/live/odds?sport=basketball&market=all');assert.equal(live.status,200);
+    const diagnostics=await request('/api/sportybet/diagnostics');assert.equal(diagnostics.body.publicDataProbe.ok,true);
+    assert.equal(diagnostics.body.session.keepAliveRunning,false);assert.equal(diagnostics.body.session.loginCount,0);
+    assert.equal((await configure()).sessionLoaded,false);
   });
 });

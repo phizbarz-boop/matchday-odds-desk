@@ -8,6 +8,7 @@ const redis=fakeRedis();
 require('redis');require.cache[require.resolve('redis')].exports={createClient:()=>redis};
 const telegram=require('../../lib/telegram');
 const messages=[],aiMessages=[],bookings=[];
+const historicalSelections=new Map();
 let aiWait;
 telegram.sendTelegramMessage=async text=>{messages.push(text);return [{message_id:messages.length}];};
 telegram.sendTelegramAiMessageTo=async(_chat,text)=>{aiMessages.push(text);if(aiWait){aiWait();aiWait=null;}return [{message_id:aiMessages.length}];};
@@ -35,11 +36,12 @@ direct.ensureSession=async()=>{sessionChecks++;};
 let fixture=boards(),liveReads=0,flip=false,flipOdds=false,empty=false,footballOnly=false,tennisOnly=false;
 if(process.env.TEST_HOURLY_ALL_SPORTS==='true')fixture.handball=handballBoard();
 const response=data=>({ok:true,status:200,headers:{get:k=>k==='content-type'?'application/json':null,getSetCookie:()=>[]},text:async()=>JSON.stringify(data)});
-direct.setFetchForTesting(async url=>{
+direct.setFetchForTesting(async(url,options)=>{
   const u=new URL(url);
+  for(const name of Object.keys(options.headers))assert.doesNotMatch(name,/^(cookie|authorization|token|accessToken|refreshToken|device-?id)$/i);
   if(u.pathname.includes('/orders/share')) {
     const code=u.searchParams.get('shareCode'),index=Number(code?.split('-').at(-1))-1;
-    const selections=bookings[index]||[];
+    const selections=historicalSelections.get(code)||bookings[index]||[];
     return response({bizCode:10000,data:{outcomes:selections.map(s=>({...s,
       ...(settled?{settlementStatus:index===1?'LOST':index===2?'VOID':'WON'}:{})}))}});
   }
@@ -59,6 +61,7 @@ direct.setFetchForTesting(async url=>{
   return response(board);
 });
 direct.createBookingCode=async selections=>{
+  await direct.ensureSession();
   assert.ok(selections.length>0&&selections.every(s=>s.eventId.startsWith('sr:match:live-format-')));
   bookings.push(selections);return {bizCode:10000,data:{shareCode:'QC-TEST-'+bookings.length}};
 };
@@ -66,6 +69,17 @@ process.on('message',async message=>{
   const {id,action}=message;
   if(action==='clock'&&testClock!==null){testClock=Date.parse(message.date);schedulerTick?.();}
   if(action==='state')return process.send({id,data:{messages,aiMessages,bookings,sessionChecks,data:[...redis.data],hashes:[...redis.hashes].map(([key,rows])=>[key,[...rows]])}});
+  if(action==='seed_tickets') {
+    const {trackTelegramSlip}=require('../../lib/slipTracker');
+    const date=new Date().toISOString().slice(0,10);
+    for(let index=0;index<4;index++) {
+      const shareCode='QC-TEST-'+(index+1),selections=[{eventId:'sr:match:live-format-late',marketId:'1',outcomeId:'1',
+        sport:'Football',home:'Historical Home',away:'Historical Away',marketDesc:'1X2',outcomeDesc:'Home',betType:'home_win',odds:1.5}];
+      historicalSelections.set(shareCode,selections);
+      await trackTelegramSlip(redis,{ticketId:'historical-'+index,shareCode,label:'QC FOOTBALL',selections,delivery:'posted',postedAt:new Date().toISOString()});
+      await redis.hSet(`telegram:quick-cash:codes:${date}`,'historical-'+index,JSON.stringify({targetOdds:'QC FOOTBALL',shareCode,combinedOdds:1.5}));
+    }
+  }
   if(action==='report_configuration') {
     settled=!!message.settled;
     const window=require('../../lib/telegramPerformance').reportWindow(new Date());

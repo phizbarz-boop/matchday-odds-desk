@@ -38,6 +38,32 @@ function client(t, env = {}, saved) {
 const credentials = {SPORTYBET_PHONE:'2348000000000', SPORTYBET_PASSWORD:'mock-password-only'};
 const jwt = exp => `header.${Buffer.from(JSON.stringify({exp})).toString('base64url')}.signature`;
 
+test('public prematch, live, details and existing codes ignore saved and configured dummy credentials',async t=>{
+  const saved={token:'private-saved-token',cookies:[['accessToken',{value:'private-saved-cookie',expiresAt:null}]]};
+  const {direct,file}=client(t,credentials,saved),before=fs.readFileSync(file,'utf8');
+  let reads=0;
+  direct.setFetchForTesting(async(url,options)=>{
+    assert.match(new URL(url).pathname,/\/(?:factsCenter\/|orders\/share)/);
+    for(const name of Object.keys(options.headers))assert.doesNotMatch(name,/^(cookie|authorization|token|accessToken|refreshToken|device-?id|x-auth-token)$/i);
+    reads++;return response({bizCode:10000,data:[]},['accessToken=unrelated-public-cookie; Max-Age=60']);
+  });
+  await Promise.all(Array.from({length:32},(_,i)=>direct.fetchPrematchPage('sr:sport:1',1,10,{marketIds:String(i)})));
+  await direct.fetchLivePage('sr:sport:1',1,10);await direct.fetchEventDetail('fixture-event');await direct.lookupBooking('FIXTURE');
+  await direct.sportyRequest('/factsCenter/pcUpcomingEvents',{auth:true,extraHeaders:{Cookie:'private',authorization:'private',token:'private',deviceId:'private','x-auth-token':'private'}});
+  assert.equal(reads,36);assert.equal(direct._session.loaded,false);assert.equal(direct._session.cookies.size,0);
+  assert.equal(direct._session.token,null);assert.equal(direct.sessionStatus().loginCount,0);assert.equal(fs.readFileSync(file,'utf8'),before);
+});
+
+test('a rejected public feed never falls back to dummy authentication',async t=>{
+  const {direct}=client(t,credentials);let reads=0;
+  direct.setFetchForTesting(async(url,options)=>{
+    assert.match(new URL(url).pathname,/\/factsCenter\//);assert.equal(options.headers.Cookie,undefined);
+    reads++;return response({bizCode:11000,message:'Public feed rejected'},[],401);
+  });
+  await assert.rejects(direct.fetchLivePage('sr:sport:1',1,10),e=>e.code==='SPORTYBET_HTTP'&&e.status===401);
+  assert.equal(reads,1);assert.equal(direct._session.loaded,false);assert.equal(direct.sessionStatus().loginCount,0);
+});
+
 test('HTTP 200 rejected login never becomes authenticated, even with an access cookie', async t => {
   const {direct} = client(t, credentials);
   let calls = 0;
@@ -55,17 +81,17 @@ test('HTTP 200 rejected login never becomes authenticated, even with an access c
   assert.equal(calls, 1);
 });
 
-test('32 concurrent market families share one failed login and perform no board reads', async t => {
+test('32 concurrent booking requests share one failed login and create no codes', async t => {
   const {direct} = client(t, credentials);
   let logins = 0, boards = 0;
   direct.setFetchForTesting(async url => {
     if (new URL(url).pathname.endsWith('/patron/login')) { logins++; return response({bizCode:12000, message:'Login rejected'}); }
-    boards++; throw new Error('A rejected session must not read the board');
+    boards++; throw new Error('A rejected session must not create a booking');
   });
-  const results = await Promise.allSettled(Array.from({length:32}, (_, i) => direct.fetchPrematchPage('sr:sport:1', 1, 10, {marketIds:String(i)})));
+  const results = await Promise.allSettled(Array.from({length:32}, () => direct.createBookingCode([{eventId:'e',marketId:'1',outcomeId:'1'}])));
   assert.ok(results.every(r => r.status === 'rejected' && r.reason.code === 'SPORTYBET_AUTH_FAILED'));
   assert.equal(logins, 1); assert.equal(boards, 0);
-  await assert.rejects(direct.fetchLivePage('sr:sport:1', 1, 10), /Next automatic login retry/);
+  await assert.rejects(direct.createBookingCode([{eventId:'e',marketId:'1',outcomeId:'1'}]), /Next automatic login retry/);
   assert.equal(logins, 1);
 });
 
@@ -158,7 +184,7 @@ test('HTTP 200 expired-session business errors renew and retry once', {timeout:2
     if (url.endsWith('/patron/refresh')) return response({bizCode:10000, data:{accessToken:'new-rotated-token'}});
     return ++reads === 1 ? response({bizCode:11000, message:'Access token expired'}) : response({bizCode:10000, data:['current']});
   });
-  const result = await direct.sportyRequest('/factsCenter/liveOrPrematchEvents', {auth:true});
+  const result = await direct.sportyRequest('/patron/account/info', {auth:true});
   assert.deepEqual(result.data, ['current']); assert.equal(reads, 2);
 });
 
@@ -207,7 +233,7 @@ test('signed-out Set-Cookie deletes the credential, including combined headers w
     headers:{get:name => name === 'content-type' ? 'application/json' : name === 'set-cookie'
       ? 'accessToken=old-token; Max-Age=-1, deviceId=kept; Expires=Wed, 21 Oct 2037 07:28:00 GMT, refreshToken=fresh; Max-Age=60' : null},
     text:async () => JSON.stringify({bizCode:10000})}));
-  await direct.sportyRequest('/factsCenter/pcUpcomingEvents');
+  await direct.sportyRequest('/patron/account/info');
   assert.equal(direct.hasAuthenticatedSession(), false);
   assert.equal(direct._session.cookies.get('deviceId').value, 'kept');
   assert.equal(direct._session.cookies.get('refreshToken').value, 'fresh');
@@ -225,7 +251,7 @@ test('refresh replaces a stale cookie when new credentials arrive only in the re
     return response({bizCode:10000, data:['current']});
   });
   assert.equal(await direct.refreshSession(), true);
-  await direct.sportyRequest('/factsCenter/liveOrPrematchEvents', {auth:true});
+  await direct.sportyRequest('/patron/account/info', {auth:true});
   assert.equal(direct._session.token, 'new-response-token');
 });
 

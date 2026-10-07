@@ -1,7 +1,7 @@
 name: Matchday Telegram Auto Picks
 
-# Morning cron sends SAFE. Run workflow manually sends SAFE plus the five
-# current hourly QC/Live templates, at any time of day.
+# Morning cron and manual runs send SAFE. Next-12-hours picks have their
+# own twice-daily scheduler and manual workflow.
 on:
   schedule:
     - cron: '25 7 * * *'
@@ -33,20 +33,4 @@ jobs:
             -H 'Content-Type: application/json' \
             -H "x-telegram-job-secret: $TELEGRAM_JOB_SECRET" \
             -H "x-matchday-run-mode: $MODE" \
-            --data '{}' -w '\nHTTP_STATUS:%{http_code}\n'
-
-      - name: Manual run — generate all four QC tickets and Live All Sports 85%
-        # A failed SAFE request must not prevent the manual live batch.
-        if: ${{ github.event_name == 'workflow_dispatch' && !cancelled() }}
-        env:
-          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
-          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
-        run: |
-          test -n "$TELEGRAM_JOB_SECRET" || (echo 'Missing GitHub secret TELEGRAM_JOB_SECRET' && exit 1)
-          curl --fail-with-body --show-error --silent --max-time 780 \
-            -X POST "$MATCHDAY_BASE_URL/api/telegram/quick-cash" \
-            -H 'Content-Type: application/json' \
-            -H "x-telegram-job-secret: $TELEGRAM_JOB_SECRET" \
-            -H 'x-matchday-run-mode: manual' \
-            -H "x-matchday-run-id: $GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             --data '{}' -w '\nHTTP_STATUS:%{http_code}\n'

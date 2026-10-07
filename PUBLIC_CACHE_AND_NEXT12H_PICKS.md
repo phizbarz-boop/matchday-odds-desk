@@ -1,5 +1,7 @@
 # Public SportyBet cache and next-12-hours Telegram picks
 
+Current update: all data reads are public and dummy login is used only for booking. Hourly Telegram QC/live picks are removed. The cache schedule and next-12-hours picks described below remain active.
+
 The long Live/Quick Cash paragraph under Match Status has been removed. The
 mode dropdown and its existing selection rules remain available.
 
@@ -85,7 +87,7 @@ integration is used. This job creates shared booking codes; it does not stake
 money or submit wagers.
 
 The new codes are stored separately so they appear in Today’s Codes without
-erasing SAFE or hourly QC/live history. Each sent ticket enters the existing
+erasing SAFE or previously sent ticket history. Each sent ticket enters the existing
 result tracking and ₦100-per-ticket hypothetical ROI reports. Redis checkpoints
 prevent a scheduled slot or completed ticket being sent again after a restart.
 Failed bookings can retry; uncertain Telegram deliveries are marked unknown

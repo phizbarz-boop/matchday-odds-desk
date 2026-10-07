@@ -1,5 +1,7 @@
 # Telegram hourly sport QC and 12-hour results
 
+> Current update: hourly Telegram QC/live generation and its workflow are removed. Website live/QC, SAFE, next-12-hours picks and result reports remain. This earlier guide records the previous hourly implementation. See [SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md](SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md).
+
 Manual **Matchday Telegram Auto Picks** runs now attempt SAFE plus all five
 hourly QC/live categories at any time. Manual hourly runs also bypass prior
 scheduled-hour sends using independent run records. See
