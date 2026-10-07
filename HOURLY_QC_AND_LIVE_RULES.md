@@ -37,7 +37,7 @@ All live selections are checked against a second current SportyBet read immediat
 
 ## Validation
 
-244 Node tests pass, including HTTP flows through the real server with mocked
+258 Node tests pass, including HTTP flows through the real server with mocked
 upstream services and direct server scheduling. See the current hourly/report
 document for coverage and deployment verification. Real Telegram delivery and
 authenticated SportyBet booking creation have not been exercised here.

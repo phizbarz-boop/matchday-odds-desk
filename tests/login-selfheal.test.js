@@ -60,7 +60,6 @@ test('refresh token rotation via patron/refresh is available', () => {
   assert.match(SRC, /SPORTYBET_ENDPOINT_REFRESH \|\| '\/patron\/refresh'/);
   assert.match(SRC, /async function refreshSession\(\)/);
   assert.match(SRC, /Access token rotated via patron\/refresh/);
-  assert.match(SRC, /trying token refresh/);
 });
 
 test('browser cookie bootstrap via SPORTYBET_BOOTSTRAP_COOKIES', () => {

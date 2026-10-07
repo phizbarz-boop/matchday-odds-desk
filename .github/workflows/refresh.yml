@@ -31,9 +31,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright Chromium
-        run: |
-          npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
+        run: npm run browser:install
 
       - name: Refresh and verify all sports
         env:

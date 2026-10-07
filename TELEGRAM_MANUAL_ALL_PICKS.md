@@ -71,8 +71,8 @@ always-running server requirement.
 
 ## Validation
 
-The combined manual/direct-hourly release passes 244 Node tests, syntax checks
-for all 66 JavaScript files and the inline website script, Telegram workflow
+The combined manual/direct-hourly/automatic-session release passes 258 Node tests, syntax checks
+for all 68 JavaScript files and the inline website script, Telegram workflow
 YAML parsing and `git diff --check`.
 
 Tests execute the workflow curl scripts against local mock HTTP handlers and

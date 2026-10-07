@@ -2345,12 +2345,15 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const sessionFailed = err.code === 'SPORTYBET_AUTH_FAILED';
     const status = sessionFailed || err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : 502;
     res.status(status).json({
-      error: sessionFailed ? 'SportyBet dummy account session needs renewal' : err.code === 'SPORTYBET_NOT_CONFIGURED'
+      error: sessionFailed ? err.requiresUserAction?'SportyBet account recovery needs attention':
+        sportyDirect.sessionStatus().automaticLoginMethod==='browser'&&sportyDirect.credentialsConfigured()?
+          'SportyBet automatic session recovery is temporarily unavailable':'SportyBet dummy account session needs renewal' : err.code === 'SPORTYBET_NOT_CONFIGURED'
         ? 'SportyBet integration is not configured yet'
         : 'Failed to build automatic SportyBet slip',
       code: err.code || null,
       detail: sessionFailed || process.env.NODE_ENV !== 'production' ? err.message : undefined,
       retryAt: err.retryAt || undefined,
+      requiresUserAction:sessionFailed?Boolean(err.requiresUserAction):undefined,
     });
   }
 });

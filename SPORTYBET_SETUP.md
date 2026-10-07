@@ -5,23 +5,27 @@ SportyBet data no longer comes from the paid Parse.bot API. The server now talks
 
 - Fixtures, markets and odds come directly from SportyBet's web JSON endpoints.
   Configuring the dummy account makes market reads require its session too.
-- Booking codes require your **dummy SportyBet account**. Refresh is attempted
-  automatically; a rejected refresh/password login needs session recovery.
+- Booking codes require your **dummy SportyBet account**. Tokens refresh
+  automatically, with website-form sign-in when refresh cannot recover them.
 
 ## Render environment variables
 
-For the rejected login shown in the latest logs, use a fresh browser session
-as described in `SPORTYBET_SESSION_RECOVERY.md`. Set `SPORTYBET_BOOTSTRAP_COOKIES`
-on Render and restart/deploy. A changed bootstrap value replaces stale persisted
-tokens; reusing the same value preserves tokens already rotated by the server.
-
-Password credentials remain a fallback (the current encrypted password-login
-adapter is unverified and must not be assumed to work):
+Configure automatic session recovery once, as described in
+[SPORTYBET_AUTOMATIC_SESSION.md](SPORTYBET_AUTOMATIC_SESSION.md). Set these
+values privately on Render:
 
 ```text
 SPORTYBET_PHONE=2348012345678
 SPORTYBET_PASSWORD=your_dummy_account_password
+SPORTYBET_LOGIN_METHOD=browser
+PLAYWRIGHT_BROWSERS_PATH=0
 ```
+
+Use Node 20 or newer, Build Command `npm ci && npm run browser:download` and
+Start Command `npm start`. The included Dockerfile is an alternative if the
+native runtime lacks browser system libraries. Browser recovery uses the
+website's own login request; the legacy encrypted API adapter is opt-in only.
+Normal token expiry no longer requires copying bootstrap cookies.
 
 Football probabilities use SportyBet's displayed goal averages and H2H, collected
 by `jobs/sporty-football-statistics-collector.js` through the dummy session.
@@ -36,8 +40,8 @@ jobs. See `SPORTYBET_ON_DEMAND.md`. No additional setting enables this behavior.
 For the GitHub refresh workflow also set `SPORTYBET_PHONE` and
 `SPORTYBET_PASSWORD` as repository secrets. Keep `TELEGRAM_JOB_SECRET` the same
 on GitHub and Render so the collector can publish its snapshot. The workflow
-installs Playwright/Chromium. Manually: install Playwright, run
-`npx playwright install chromium`, then `node jobs/sporty-football-statistics-collector.js`
+installs the project's pinned Playwright/Chromium. Manually: run `npm ci`,
+`npm run browser:download`, then `node jobs/sporty-football-statistics-collector.js`
 before `npm run refresh`.
 
 Optional — only needed if diagnostics shows `SPORTYBET_GEO_BLOCKED`.
@@ -64,17 +68,19 @@ H2H_MAX_WEIGHT=0.18
 
 ## How the session is kept alive
 
-1. The server loads the saved dummy session, applying a changed browser
-   bootstrap value first. Expired credentials try refresh before password login.
+1. The server loads the saved dummy session, applying a changed optional
+   bootstrap value first. Expired credentials try refresh before website-form
+   sign-in with the configured dummy phone/password.
 2. Cookies and the access token are persisted to Redis when `REDIS_URL` is set
    (recommended on Render, where the filesystem is wiped on every deploy),
    otherwise to `.sportybet-session.json`.
-3. A keep-alive ping runs every `SPORTYBET_KEEPALIVE_SECONDS` (default 240s).
+3. Maintenance runs every `SPORTYBET_KEEPALIVE_SECONDS` (default 240s).
+   Tokens refresh every 20 minutes, or within five minutes of a known expiry.
    Auto scans and bookings also verify the account, sharing one account check
    per minute by default.
 4. HTTP 401/403 and HTTP-200 session error responses try refresh before login
-   and retry once. Concurrent requests share renewal; failed logins back off
-   for 60 seconds by default.
+   and retry once. Concurrent requests share renewal; transient failed logins
+   back off for 60 seconds and verification/rejected sign-in for 15 minutes.
 
 SportyBet can expire or revoke sessions, require account verification, or reject
 the hosting IP. Renewal cannot guarantee permanent access. When recovery fails,
@@ -113,7 +119,7 @@ SPORTYBET_ENDPOINT_BOOK=/orders/share
 SPORTYBET_ENDPOINT_BOOKING_LOOKUP=/orders/share
 ```
 
-Login self-heals too: SportyBet moved its account service under `/patron`
+The opt-in legacy API login probes routes too: SportyBet moved its account service under `/patron`
 (the site's own account-info call is `/api/ng/patron/account/info`), so on
 each login the app probes a small candidate list
 (`/patron/accessToken`, `/users/login`,
@@ -150,30 +156,32 @@ the dummy account): candidates are tried only when an actual login is needed,
 each candidate is POSTed once, geo/bot blocks abort probing immediately, and
 a fully-failed probe round backs off for 10 minutes.
 
-### Password-login adapter
+### Optional legacy API-login adapter
 
-The legacy adapter calls `/patron/cipher` and encrypts its payload before
+Only `SPORTYBET_LOGIN_METHOD=api` enables this adapter. It calls `/patron/cipher` and encrypts its payload before
 posting to `/patron/accessToken`. Its default AES/CBC format has not been
 verified against the current SportyBet web bundle. A generic HTTP-200 login
 rejection does not prove which field or cipher is wrong. Do not repeatedly try
-different cipher settings/passwords. Use a browser-issued dummy session.
+different cipher settings/passwords. The default `browser` method instead
+uses the website form and lets SportyBet encrypt its own login request.
 
-### Cookie bootstrap (simplest reliable session)
+### Optional cookie bootstrap
 
-When password login is rejected, hand the server a browser session
+If SportyBet requires human verification, you can hand the server a browser session
 directly: in Firefox/Chrome DevTools → Storage/Application → Cookies →
-`www.sportybet.com`, copy `accessToken`, `refreshToken` and `deviceId`, and
+`www.sportybet.com`, copy `accessToken`, `refreshToken` and its actual device
+cookie (`device-id` or `deviceId`), and
 set one env var:
 
 ```text
-SPORTYBET_BOOTSTRAP_COOKIES=accessToken=...; refreshToken=...; deviceId=...
+SPORTYBET_BOOTSTRAP_COOKIES=accessToken=...; refreshToken=...; device-id=...
 ```
 
 Refresh uses `POST /api/ng/patron/refresh` while SportyBet accepts the refresh
 cookie. A changed bootstrap replaces stale saved auth even if an old token is
 still present; an unchanged bootstrap does not replace newer rotated tokens.
-`SPORTYBET_PHONE`/`SPORTYBET_PASSWORD` are optional with a working browser
-session. Keep the cookie values private. The local session capture helper and
+Keep `SPORTYBET_PHONE`/`SPORTYBET_PASSWORD` configured for automatic re-login
+after a session is revoked. Keep the cookie values private. The local session capture helper and
 recovery checks are documented in `SPORTYBET_SESSION_RECOVERY.md`.
 
 To find the current paths: open sportybet.com/ng in a browser, open DevTools →

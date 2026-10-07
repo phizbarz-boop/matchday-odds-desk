@@ -7,7 +7,7 @@ const path = require('node:path');
 const readline = require('node:readline/promises');
 
 function bootstrapLine(cookies, now = Date.now()) {
-  const required = ['accessToken', 'refreshToken', 'deviceId'];
+  const required = ['accessToken', 'refreshToken', 'device-id', 'deviceId'];
   const selected = new Map();
   for (const cookie of cookies || []) {
     const domain = String(cookie.domain || '').replace(/^\./, '').toLowerCase();

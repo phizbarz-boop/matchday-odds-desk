@@ -15,7 +15,7 @@ function response(payload, cookies = [], status = 200) {
 function client(t, env = {}, saved) {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'sporty-session-test-'));
   const vars = {REDIS_URL:'', SPORTYBET_PHONE:'', SPORTYBET_PASSWORD:'', SPORTYBET_BOOTSTRAP_COOKIES:'',
-    SPORTYBET_PROXY_URL:'', HTTPS_PROXY:'', SPORTYBET_LOGIN_EXTRA:'', SPORTYBET_ENDPOINT_LOGIN:'/patron/login',
+    SPORTYBET_PROXY_URL:'', HTTPS_PROXY:'', SPORTYBET_LOGIN_METHOD:'api', SPORTYBET_LOGIN_EXTRA:'', SPORTYBET_ENDPOINT_LOGIN:'/patron/login',
     SPORTYBET_ENDPOINT_LOGIN_CANDIDATES:'', SPORTYBET_ENDPOINT_USERINFO:'',
     SPORTYBET_SESSION_FILE:path.join(folder, 'session.json'), ...env};
   const prior = Object.fromEntries(Object.keys(vars).map(name => [name, process.env[name]]));
@@ -239,4 +239,96 @@ test('local session export accepts only current SportyBet auth cookies', () => {
   assert.equal(bootstrapLine(cookies), 'SPORTYBET_BOOTSTRAP_COOKIES=accessToken=current-access; refreshToken=current-refresh; deviceId=device');
   assert.throws(() => bootstrapLine(cookies.map(c => c.name === 'accessToken' ? {...c, expires:1} : c)), /no usable/);
   assert.throws(() => bootstrapLine(cookies.map(c => c.name === 'refreshToken' ? {...c, value:'bad\nvalue'} : c)), /no usable/);
+});
+
+const browserCredentials={...credentials,SPORTYBET_LOGIN_METHOD:'browser'};
+const browserResult=()=>({verifiedAt:Date.now(),cookies:[
+  {name:'accessToken',value:'automatic-browser-access',expiresAt:Date.now()+3600000},
+  {name:'refreshToken',value:'automatic-browser-refresh',expiresAt:Date.now()+86400000},
+  {name:'device-id',value:'browser-device',expiresAt:null},
+]});
+test('automatic browser sign-in is the default and 32 requests share one login',async t=>{
+  const {direct,file}=client(t,{...credentials,SPORTYBET_LOGIN_METHOD:''});let logins=0;
+  direct.setFetchForTesting(async()=>{throw Error('No guessed API login or extra account request should run');});
+  direct.setBrowserLoginForTesting(async options=>{logins++;assert.equal(options.phone,credentials.SPORTYBET_PHONE);return browserResult();});
+  await Promise.all(Array.from({length:32},()=>direct.ensureSession({validate:true})));
+  assert.equal(logins,1);assert.equal(direct.sessionStatus().automaticLoginMethod,'browser');
+  assert.equal(direct.sessionStatus().lastLoginMethod,'browser');assert.equal(direct.hasAuthenticatedSession(),true);
+  assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).loginMethod,'browser');
+  assert.equal(fs.statSync(file).mode&0o777,0o600);
+  assert.doesNotMatch(JSON.stringify(direct.sessionStatus()),/mock-password|automatic-browser-access|automatic-browser-refresh/);
+});
+test('an expired session with a revoked refresh token signs in automatically through the browser',async t=>{
+  const expired=jwt(Math.floor(Date.now()/1000)-60);
+  const {direct}=client(t,browserCredentials,{token:expired,cookies:[['accessToken',{value:expired,expiresAt:null}],['refreshToken',{value:'revoked',expiresAt:null}]]});
+  let refreshes=0,logins=0;
+  direct.setFetchForTesting(async url=>{assert.ok(url.endsWith('/patron/refresh'));refreshes++;return response({message:'Unauthorized'},[],401);});
+  direct.setBrowserLoginForTesting(async()=>{logins++;return browserResult();});
+  await direct.ensureSession({validate:true});assert.equal(refreshes,1);assert.equal(logins,1);
+  assert.equal(direct.sessionStatus().requiresUserAction,false);assert.equal(direct.hasAuthenticatedSession(),true);
+});
+test('maintenance proactively refreshes opaque tokens and persists body-rotated refresh credentials',async t=>{
+  const last=new Date(Date.now()-21*60000).toISOString();
+  const {direct,file}=client(t,browserCredentials,{lastRefreshAt:last,loggedInAt:last,cookies:[
+    ['accessToken',{value:'opaque-old',expiresAt:Date.now()+3600000}],['refreshToken',{value:'old-refresh',expiresAt:null}],['device-id',{value:'real-device',expiresAt:null}],
+  ]});let refreshes=0,checks=0;
+  direct.setBrowserLoginForTesting(async()=>{throw Error('Accepted refresh must avoid browser login');});
+  direct.setFetchForTesting(async(url,options)=>{
+    assert.match(options.headers.Cookie,/device-id=real-device/);assert.doesNotMatch(options.headers.Cookie,/(?:^|; )deviceId=/);
+    if(url.endsWith('/patron/refresh')){refreshes++;return response({bizCode:10000,data:{accessToken:'rotated-access',refreshToken:'rotated-refresh'}});}
+    checks++;assert.match(options.headers.Cookie,/refreshToken=rotated-refresh/);assert.match(options.headers.Cookie,/accessToken=rotated-access/);
+    return response({bizCode:10000,data:{userId:'dummy'}});
+  });
+  await Promise.all(Array.from({length:20},()=>direct.maintainSession()));
+  assert.equal(refreshes,1);assert.equal(checks,1);assert.equal(direct.sessionStatus().lastKeepAliveOk,true);
+  const saved=JSON.parse(fs.readFileSync(file,'utf8'));assert.equal(saved.cookies.find(([name])=>name==='refreshToken')[1].value,'rotated-refresh');
+  assert.ok(saved.lastRefreshAt);await direct.maintainSession();assert.equal(refreshes,1);
+});
+test('known expiry triggers renewal before an otherwise valid access token expires',async t=>{
+  const almost=jwt(Math.floor(Date.now()/1000)+120);
+  const {direct}=client(t,{}, {token:almost,lastRefreshAt:new Date().toISOString(),cookies:[
+    ['accessToken',{value:almost,expiresAt:null}],['refreshToken',{value:'refresh',expiresAt:null}],
+  ]});let refreshes=0;
+  direct.setFetchForTesting(async url=>url.endsWith('/patron/refresh')?(refreshes++,response({bizCode:10000,data:{accessToken:'early-renewal'}})):
+    response({bizCode:10000,data:{userId:'dummy'}}));
+  await direct.ensureSession({validate:true});assert.equal(refreshes,1);assert.equal(direct._session.token,'early-renewal');
+});
+test('a transient proactive refresh failure preserves a still-accepted session and backs off refresh',async t=>{
+  const {direct}=client(t,browserCredentials,{loggedInAt:new Date(Date.now()-3600000).toISOString(),cookies:[
+    ['accessToken',{value:'still-current',expiresAt:Date.now()+3600000}],['refreshToken',{value:'refresh',expiresAt:null}],
+  ]});let refreshes=0;
+  direct.setBrowserLoginForTesting(async()=>{throw Error('Healthy session should not trigger password login');});
+  direct.setFetchForTesting(async url=>url.endsWith('/patron/refresh')?(refreshes++,response({bizCode:12000,message:'Service temporarily unavailable'})):
+    response({bizCode:10000,data:{userId:'dummy'}}));
+  await direct.maintainSession();await direct.maintainSession();
+  assert.equal(refreshes,1);assert.equal(direct.hasAuthenticatedSession(),true);assert.equal(direct.sessionStatus().lastKeepAliveOk,true);
+  assert.match(direct.sessionStatus().lastRefreshError,/Service temporarily unavailable/);
+});
+test('browser verification stops automatic sign-in and prevents repeated password attempts',async t=>{
+  const {direct}=client(t,browserCredentials);let attempts=0;
+  direct.setBrowserLoginForTesting(async()=>{attempts++;throw Object.assign(Error('SportyBet requires verification'),
+    {code:'SPORTYBET_AUTH_FAILED',requiresUserAction:true,reason:'verification_required'});});
+  await assert.rejects(direct.ensureSession({validate:true}),e=>Boolean(e.requiresUserAction&&e.retryAt));
+  await assert.rejects(direct.ensureSession({validate:true}),e=>e.requiresUserAction&&e.reason==='verification_required');
+  await direct.maintainSession();assert.equal(attempts,1);assert.equal(direct.hasAuthenticatedSession(),false);
+  assert.equal(direct.sessionStatus().requiresUserAction,true);assert.equal(direct.sessionStatus().lastKeepAliveOk,false);
+});
+test('a browser result containing only device cookies cannot authenticate the dummy account',async t=>{
+  const {direct}=client(t,browserCredentials);
+  direct.setBrowserLoginForTesting(async()=>({verifiedAt:Date.now(),cookies:[{name:'device-id',value:'visitor'}]}));
+  await assert.rejects(direct.ensureSession(),/no authenticated/);assert.equal(direct.hasAuthenticatedSession(),false);
+});
+test('a browser-recovered session survives restart with no bootstrap cookie recopy',async t=>{
+  const first=client(t,browserCredentials);first.direct.setBrowserLoginForTesting(async()=>browserResult());
+  await first.direct.ensureSession({validate:true});const saved=JSON.parse(fs.readFileSync(first.file,'utf8'));
+  const second=client(t,browserCredentials,saved);let checks=0;
+  second.direct.setBrowserLoginForTesting(async()=>{throw Error('Restart should restore saved current session');});
+  second.direct.setFetchForTesting(async(_url,options)=>{checks++;assert.match(options.headers.Cookie,/automatic-browser-access/);return response({bizCode:10000,data:{userId:'dummy'}});});
+  await second.direct.ensureSession({validate:true});assert.equal(checks,1);assert.equal(second.direct.sessionStatus().lastLoginMethod,'browser');
+});
+test('local export preserves the observed hyphenated device cookie',()=>{
+  assert.equal(bootstrapLine([{domain:'.sportybet.com',name:'accessToken',value:'access',expires:-1},
+    {domain:'.sportybet.com',name:'refreshToken',value:'refresh',expires:-1},
+    {domain:'.sportybet.com',name:'device-id',value:'device',expires:-1}]),
+    'SPORTYBET_BOOTSTRAP_COOKIES=accessToken=access; refreshToken=refresh; device-id=device');
 });

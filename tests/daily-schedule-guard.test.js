@@ -22,7 +22,8 @@ test('one CopyHub-style daily workflow refreshes all six sports; old sport workf
   assert.match(daily, /workflow_dispatch/);
   assert.match(daily, /cancel-in-progress:\s*false/);
   assert.match(daily, /node-version:\s*['"]20['"]/);
-  assert.match(daily, /playwright@1\.55\.0/);
+  assert.match(daily, /npm run browser:install/);
+  assert.doesNotMatch(daily, /npm install --no-save playwright@/, 'Daily refresh must use the locked browser dependency');
   assert.match(daily, /node jobs\/all-sports-daily-refresh\.js/);
 
   const orchestrator = fs.readFileSync(path.join(root, 'jobs/all-sports-daily-refresh.js'), 'utf8');

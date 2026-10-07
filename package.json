@@ -6,14 +6,17 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "browser:download": "playwright install chromium",
+    "browser:install": "playwright install --with-deps chromium",
     "refresh": "node jobs/refresh.js"
   },
   "dependencies": {
     "express": "^4.19.2",
+    "playwright": "1.62.1",
     "redis": "^4.7.0",
     "undici": "^6.19.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   }
 }

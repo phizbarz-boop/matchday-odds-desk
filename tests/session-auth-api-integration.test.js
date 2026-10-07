@@ -11,10 +11,12 @@ async function server(t, mode) {
   const sessionFile = path.join(folder, 'session.json');
   if (mode === 'browser') fs.writeFileSync(sessionFile, JSON.stringify({token:'stale-persisted-bearer',
     cookies:[['accessToken', {value:'stale-persisted-cookie', expiresAt:null}]]}));
+  if(mode==='automated')fs.writeFileSync(sessionFile,JSON.stringify({token:'expired-bearer',tokenExpiresAt:1,
+    cookies:[['refreshToken',{value:'revoked-refresh',expiresAt:null}]]}));
   const child = fork(path.join(__dirname, 'fixtures/session-auth-api-server.js'), [], {cwd:path.join(__dirname, '..'), silent:true,
     env:{...process.env, NODE_ENV:'production', PORT:'0', REDIS_URL:'', HTTPS_PROXY:'', SPORTYBET_PROXY_URL:'',
       SPORTYBET_SESSION_FILE:sessionFile, SPORTYBET_ENDPOINT_LOGIN:'', SPORTYBET_ENDPOINT_LOGIN_CANDIDATES:'',
-      SPORTYBET_PHONE:'2348000000000', SPORTYBET_PASSWORD:'mock-test-password',
+      SPORTYBET_PHONE:'2348000000000', SPORTYBET_PASSWORD:'mock-test-password',SPORTYBET_LOGIN_METHOD:mode==='automated'?'browser':'api',
       SPORTYBET_BOOTSTRAP_COOKIES:mode === 'browser' ? 'accessToken=fresh-browser-token; refreshToken=fresh-refresh; deviceId=fresh-device' : '',
       SPORTYBET_LIVE_MAX_PAGES:'1', SESSION_TEST_MODE:mode, WEBSITE_ACCESS_CODE:''}});
   let logs = '';
@@ -66,4 +68,14 @@ test('browser bootstrap validates the dummy once, reads live markets and creates
   const state = await api.state();
   assert.equal(state.logins, 0); assert.equal(state.ciphers, 0); assert.equal(state.accountChecks, 1);
   assert.ok(state.marketReads > 0); assert.equal(state.bookings, 1);
+});
+
+test('production Auto Analyser automatically recovers a revoked session and books without bootstrap-cookie updates',async t=>{
+  const api=await server(t,'automated');
+  const result=await api.post('/api/sportybet/auto-pick',request);
+  assert.equal(result.status,200,JSON.stringify(result.body));assert.ok(result.body.selections.length);
+  const booking=await api.post('/api/sportybet/book',{selections:result.body.selections});
+  assert.equal(booking.status,200,JSON.stringify(booking.body));assert.equal(booking.body.shareCode,'SESSION-TEST-CODE');
+  const state=await api.state();assert.equal(state.browserLogins,1);assert.equal(state.accountChecks,1);
+  assert.equal(state.logins,0);assert.equal(state.ciphers,0);assert.equal(state.bookings,1);
 });

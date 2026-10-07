@@ -43,7 +43,7 @@ its internal job does not transmit or require the GitHub job secret. Keep the
 job secret for protected status/manual APIs, morning SAFE and results workflows.
 
 Retain a working dummy-account session/login configuration. Session setup and
-renewal are in [SPORTYBET_SESSION_RECOVERY.md](SPORTYBET_SESSION_RECOVERY.md).
+automatic renewal are in [SPORTYBET_AUTOMATIC_SESSION.md](SPORTYBET_AUTOMATIC_SESSION.md).
 Never put session cookies or Telegram tokens in the committed source.
 
 The server must stay running between hourly runs. Render Free web services

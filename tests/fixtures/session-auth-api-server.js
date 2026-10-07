@@ -5,13 +5,23 @@ const {direct, SPORT_IDS, extractUpcomingEvents} = require('../../lib/sportybet'
 const {boards} = require('./sportybet-live-format');
 const fixture = boards();
 const state = {logins:0, ciphers:0, accountChecks:0, marketReads:0, bookings:0};
-const successful = process.env.SESSION_TEST_MODE === 'browser';
+const automated=process.env.SESSION_TEST_MODE==='automated';
+const successful = process.env.SESSION_TEST_MODE === 'browser'||automated;
+if(automated) {
+  state.browserLogins=0;
+  direct.setBrowserLoginForTesting(async()=>{state.browserLogins++;return {verifiedAt:0,cookies:[
+    {name:'accessToken',value:'fresh-browser-token',expiresAt:Date.now()+3600000},
+    {name:'refreshToken',value:'fresh-refresh',expiresAt:Date.now()+86400000},
+    {name:'deviceId',value:'fresh-device',expiresAt:null},
+  ]};});
+}
 const bySportId = new Map(Object.entries(SPORT_IDS).map(([sport, id]) => [id, fixture[sport]]));
 const response = payload => ({ok:true, status:200,
   headers:{get:name => name === 'content-type' ? 'application/json' : null, getSetCookie:() => []},
   text:async () => JSON.stringify(payload)});
 direct.setFetchForTesting(async (url, options) => {
   const parsed = new URL(url), endpoint = parsed.pathname;
+  if(automated&&endpoint.endsWith('/patron/refresh'))return response({bizCode:11000,message:'Refresh token expired'});
   if (endpoint.endsWith('/patron/cipher')) {
     state.ciphers++;
     return response({bizCode:10000, data:{password:Buffer.alloc(16, 1).toString('base64'), ursId:'mock-cipher'}});

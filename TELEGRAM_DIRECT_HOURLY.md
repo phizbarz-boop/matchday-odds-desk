@@ -41,12 +41,12 @@ minutes are 0–59. Environment changes require a server restart/redeploy.
 Set `TELEGRAM_HOURLY_ENABLED=false` to stop automatic hourly picks while keeping
 authenticated manual runs available.
 
-Keep a working dummy-account session in `SPORTYBET_BOOTSTRAP_COOKIES`, or the
-existing supported dummy login configuration. The job validates that session;
-anonymous visitor/device cookies cannot substitute for authenticated access.
-Session recovery is documented in
-[SPORTYBET_SESSION_RECOVERY.md](SPORTYBET_SESSION_RECOVERY.md). An expired or
-rejected session causes a logged failure and retry, not fabricated picks.
+Set `SPORTYBET_PHONE` and `SPORTYBET_PASSWORD` and install Chromium once for
+automatic dummy-account login and renewal, following
+[SPORTYBET_AUTOMATIC_SESSION.md](SPORTYBET_AUTOMATIC_SESSION.md). The hourly
+job uses that same recovered session; visitor/device cookies cannot substitute
+for authenticated access. Normal expiry no longer requires copied cookies.
+Unrecoverable source errors remain visible and retry through the existing job.
 
 The timer needs an **always-running Node service**. Render Free web services
 sleep after 15 minutes without inbound HTTP/WebSocket traffic. An internal
@@ -125,8 +125,8 @@ does not alter the report's confirmed-result calculations.
 
 ## Validation
 
-All 244 Node tests pass. Syntax checks pass for 66 JavaScript files and the
-inline website script; all three Telegram workflows parse, and
+All 258 Node tests pass. Syntax checks pass for 68 JavaScript files and the
+inline website script; all three Telegram workflows and daily refresh parse, and
 `git diff --check` passes.
 
 The direct scheduler is tested with a controlled clock, mocked upstream

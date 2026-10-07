@@ -79,8 +79,8 @@ data read at actual execution time.
 
 ## Validation
 
-The combined direct-hourly/manual release passes 244 Node tests, syntax checks
-for 66 JavaScript files and the inline website script, Telegram workflow YAML
+The combined direct-hourly/manual/automatic-session release passes 258 Node tests, syntax checks
+for 68 JavaScript files and the inline website script, Telegram workflow YAML
 parsing and `git diff --check`.
 
 HTTP integration tests exercise the real server with mocked SportyBet, Redis
