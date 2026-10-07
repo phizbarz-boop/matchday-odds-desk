@@ -1,11 +1,11 @@
 # SportyBet-only update
 
 - Removed the paid football and related results-provider clients and configuration requirements.
-- Fixtures, odds, offered corner O/U lines and booking IDs come directly from SportyBet, attaching the configured dummy session.
+- Fixtures, odds, offered corner O/U lines and booking IDs come directly from public SportyBet endpoints. Booking-code creation also uses anonymous sharing by default; see `SPORTYBET_ANONYMOUS_BOOKING.md`.
 - Added a bounded browser collector for the statistics displayed on SportyBet match pages, published through the existing internal-job secret. These are displayed goal averages and H2H, not a replica of the retired provider's seasonal database.
 - Kept Poisson/H2H modelling where statistics exist and clearly labelled complete-market price estimates where they do not. Missing or incomplete data cannot create a 100% estimate.
 - Live mode excludes upcoming/finished/unknown-status matches and reads fresh details for missing offered markets. Football models account for current score and time when available.
-- Quick Cash uses late live matches with currently winning offered selections. All live legs require at least halfway through the match. Website and Telegram builds retain user probability settings; the four scheduled sport QC tickets use 0% and scheduled Live All Sports uses 85%. See `HOURLY_QC_AND_LIVE_RULES.md` for score, total, handicap and set-format rules.
+- Quick Cash uses late live matches with currently winning offered selections. All live legs require at least halfway through the match. Website and interactive Telegram builds retain user probability settings. Hourly Telegram QC/live picks are removed; SAFE, next-12-hours picks and result reports remain. See `HOURLY_QC_AND_LIVE_RULES.md` for score, total, handicap and set-format rules.
 - Booking generation checks current availability, progress and winning market state again, and reports dropped legs. Only booking/share codes are created; no stakes are submitted.
 
 ## Live feed correction

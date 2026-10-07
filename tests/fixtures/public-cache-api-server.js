@@ -1,4 +1,5 @@
 'use strict';
+process.env.SPORTYBET_BOOKING_MODE='public';
 const assert=require('node:assert/strict'),express=require('express');
 const {fakeRedis}=require('./fake-redis'),{market,outcome}=require('./sportybet-live-format');
 const redis=fakeRedis();require('redis');require.cache[require.resolve('redis')].exports={createClient:()=>redis};
@@ -11,7 +12,7 @@ global.Date=class extends RealDate{constructor(...args){super(...(args.length?ar
 global.setInterval=(fn,ms,...args)=>{if(ms!==30000)return realInterval(fn,ms,...args);const marker={unref(){}};ticks.set(marker,fn);return marker;};
 global.clearInterval=marker=>{if(ticks.has(marker))ticks.delete(marker);else realClear(marker);};
 const {direct,SPORT_IDS}=require('../../lib/sportybet'),{sportyRequest}=require('../../lib/sportyRequest');
-let sessionChecks=0;direct.ensureSession=async()=>{assert.notEqual(sportyRequest()?.anonymous,true);sessionChecks++;};direct.startKeepAlive=()=>{};
+let sessionChecks=0;direct.ensureSession=async()=>{sessionChecks++;assert.fail('Public Telegram bookings must not check a dummy session');};direct.startKeepAlive=()=>{};
 const sporting={football:['1','1X2'],basketball:['219','Winner (incl. overtime)'],hockey:['1','1X2'],handball:['1','1X2'],volleyball:['186','Winner'],tennis:['186','Winner']};
 const events=new Map();
 function slate(sport){const [marketId,desc]=sporting[sport],three=['football','hockey','handball'].includes(sport),batch=String(Math.floor(time/3600000));
@@ -24,13 +25,18 @@ function slate(sport){const [marketId,desc]=sporting[sport],three=['football','h
 }
 const response=data=>({ok:true,status:200,headers:{get:k=>k==='content-type'?'application/json':null,getSetCookie:()=>[]},text:async()=>JSON.stringify(data)});
 direct.setFetchForTesting(async(url,options)=>{
-  const u=new URL(url);assert.match(u.pathname,/\/factsCenter\//);assert.equal(sportyRequest()?.anonymous,true);
+  const u=new URL(url);
   assert.ok(!options.headers.Cookie&&!options.headers.Authorization&&!options.headers.token);reads.push(url);
+  if(u.pathname.endsWith('/orders/share')&&options.method==='POST'){
+    assert.notEqual(sportyRequest()?.anonymous,true);const selections=JSON.parse(options.body).selections;
+    assert.ok(selections.length>0&&selections.every(s=>s.eventId&&s.marketId&&s.outcomeId));bookings.push(selections);
+    return response({bizCode:10000,data:{shareCode:'PUBLIC-TEST-'+bookings.length}});
+  }
+  assert.match(u.pathname,/\/factsCenter\//);assert.equal(sportyRequest()?.anonymous,true);
   if(u.searchParams.has('eventId'))return response({bizCode:10000,data:events.get(u.searchParams.get('eventId'))||{}});
   const sport=Object.keys(SPORT_IDS).find(s=>SPORT_IDS[s]===u.searchParams.get('sportId'));
   return response({bizCode:10000,data:{totalNum:24,events:slate(sport)}});
 });
-direct.createBookingCode=async selections=>{assert.ok(selections.length>0);assert.notEqual(sportyRequest()?.anonymous,true);bookings.push(selections);return {bizCode:10000,data:{shareCode:'PUBLIC-TEST-'+bookings.length}};};
 process.on('message',async({id,action,...message})=>{
   if(action==='clock'){time=Date.parse(message.date);for(const tick of ticks.values())tick();}
   if(action==='daily')await redis.set(`telegram:daily-codes:${message.date}`,JSON.stringify({date:message.date,codes:message.codes}));

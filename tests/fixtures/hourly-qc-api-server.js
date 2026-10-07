@@ -2,6 +2,7 @@
 // Each fixture enables only the automation it exercises.
 process.env.SPORTYBET_PUBLIC_CACHE_ENABLED='false';
 process.env.TELEGRAM_NEXT12H_ENABLED='false';
+process.env.SPORTYBET_BOOKING_MODE='public';
 const assert=require('node:assert/strict'),express=require('express');
 const {fakeRedis}=require('./fake-redis');
 const redis=fakeRedis();
@@ -30,9 +31,9 @@ function handballBoard() {
   ]}]};
 }
 const {direct,SPORT_IDS,extractUpcomingEvents}=require('../../lib/sportybet');
-// This child process substitutes the authenticated dummy session only in tests.
+// Public HTTP responses and Telegram delivery are replaced in this child only.
 let sessionChecks=0,settled=false;
-direct.ensureSession=async()=>{sessionChecks++;};
+direct.ensureSession=async()=>{sessionChecks++;assert.fail('Public booking must not check a dummy session');};
 let fixture=boards(),liveReads=0,flip=false,flipOdds=false,empty=false,footballOnly=false,tennisOnly=false;
 if(process.env.TEST_HOURLY_ALL_SPORTS==='true')fixture.handball=handballBoard();
 const response=data=>({ok:true,status:200,headers:{get:k=>k==='content-type'?'application/json':null,getSetCookie:()=>[]},text:async()=>JSON.stringify(data)});
@@ -40,7 +41,12 @@ direct.setFetchForTesting(async(url,options)=>{
   const u=new URL(url);
   for(const name of Object.keys(options.headers))assert.doesNotMatch(name,/^(cookie|authorization|token|accessToken|refreshToken|device-?id)$/i);
   if(u.pathname.includes('/orders/share')) {
-    const code=u.searchParams.get('shareCode'),index=Number(code?.split('-').at(-1))-1;
+    if(options.method==='POST'){
+      const selections=JSON.parse(options.body).selections;
+      assert.ok(selections.length>0&&selections.every(s=>s.eventId.startsWith('sr:match:live-format-')));
+      bookings.push(selections);return response({bizCode:10000,data:{shareCode:'QC-TEST-'+bookings.length}});
+    }
+    const code=decodeURIComponent(u.pathname.split('/').at(-1)),index=Number(code?.split('-').at(-1))-1;
     const selections=historicalSelections.get(code)||bookings[index]||[];
     return response({bizCode:10000,data:{outcomes:selections.map(s=>({...s,
       ...(settled?{settlementStatus:index===1?'LOST':index===2?'VOID':'WON'}:{})}))}});
@@ -60,11 +66,6 @@ direct.setFetchForTesting(async(url,options)=>{
   if(tennisOnly)board.data.forEach(t=>t.events.forEach(e=>{e.markets=e.markets.filter(m=>m.desc!=='Correct Score');}));
   return response(board);
 });
-direct.createBookingCode=async selections=>{
-  await direct.ensureSession();
-  assert.ok(selections.length>0&&selections.every(s=>s.eventId.startsWith('sr:match:live-format-')));
-  bookings.push(selections);return {bizCode:10000,data:{shareCode:'QC-TEST-'+bookings.length}};
-};
 process.on('message',async message=>{
   const {id,action}=message;
   if(action==='clock'&&testClock!==null){testClock=Date.parse(message.date);schedulerTick?.();}

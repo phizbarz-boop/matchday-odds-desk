@@ -1,5 +1,9 @@
 # SportyBet page-check timeout fix
 
+The current default uses anonymous booking, so booking does not run this browser
+page check. This earlier fix remains for explicit legacy session mode. See
+[SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md).
+
 The October 7 log from commit `99417f6` confirms a successful Chromium build
 and a running application. The sign-in failure is now identified as
 `browser_page_timeout` at `stage=page_check`, with login-page HTTP status 200.

@@ -3,9 +3,13 @@ const path = require('node:path');
 const {spawnSync} = require('node:child_process');
 const {configureBrowserPath} = require('../lib/sportyBrowserRuntime');
 
-function installBrowser({env = process.env, withDependencies = false,
+function installBrowser({env = process.env, withDependencies = false, force = false,
   spawn = spawnSync, resolvePackage = () => require.resolve('playwright/package.json'),
   log = console.log, error = console.error} = {}) {
+  if (!force && !withDependencies && String(env.SPORTYBET_BOOKING_MODE || 'public').trim().toLowerCase() === 'public') {
+    log('[SportyBet browser] Anonymous booking enabled; Chromium is not required for booking.');
+    return 0;
+  }
   if (env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD === '1') {
     log('[SportyBet browser] Download skipped by PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1. A prepared browser is required.');
     return 0;
@@ -28,5 +32,5 @@ function installBrowser({env = process.env, withDependencies = false,
   }
 }
 
-if (require.main === module) process.exitCode = installBrowser({withDependencies:process.argv.includes('--with-deps')});
+if (require.main === module) process.exitCode = installBrowser({withDependencies:process.argv.includes('--with-deps'),force:process.argv.includes('--force')});
 module.exports = {installBrowser};

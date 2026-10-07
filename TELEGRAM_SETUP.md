@@ -1,6 +1,6 @@
 # Telegram booking-code setup
 
-Telegram analysis and results read public SportyBet data. Creating a new code uses the dummy account and its automatic recovery. The hourly QC/live Telegram batch has been removed; legacy hourly settings cannot start it again.
+Telegram analysis and results read public SportyBet data. Creating a new code uses anonymous SportyBet sharing by default, without dummy credentials or session recovery. The hourly QC/live Telegram batch has been removed; legacy hourly settings cannot start it again.
 
 | Ticket/update | Time in WAT | Scheduler |
 | --- | --- | --- |
@@ -23,7 +23,7 @@ REDIS_URL=<your persistent Redis connection>
 TELEGRAM_JOB_SECRET=<your existing job secret>
 ```
 
-Keep the same job secret in GitHub Actions for retained scheduled jobs and manual triggers. `MATCHDAY_BASE_URL` can be a repository variable; the existing Render URL is the fallback. Dummy credentials are needed for booking, as described in [SPORTYBET_AUTOMATIC_SESSION.md](SPORTYBET_AUTOMATIC_SESSION.md).
+Keep the same job secret in GitHub Actions for retained scheduled jobs and manual triggers. `MATCHDAY_BASE_URL` can be a repository variable; the existing Render URL is the fallback. Booking defaults to `SPORTYBET_BOOKING_MODE=public`; see [SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md). No dummy credentials are needed.
 
 ## Deployment and manual picks
 

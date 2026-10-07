@@ -34,7 +34,7 @@ test('the rolling twelve-hour window excludes started, live and later games and 
 function harness(overrides={}){
   const redis=fakeRedis(),messages=[],bookings=[],saved=[],tracked=new Map();let checks=0;
   const context={redis,slotKey:'2026-10-07T07:00',dateKey:'2026-10-07',slotTime:'07:00',shouldAbort:()=>false};
-  const deps={now:()=>now,loadPool:async()=>pool(),validate:async selections=>selections,assertSession:async()=>{checks++;},
+  const deps={now:()=>now,loadPool:async()=>pool(),validate:async selections=>selections,assertBookingReady:async()=>{checks++;},
     book:async selections=>{bookings.push(selections);return {shareCode:'NEXT-'+bookings.length};},send:async text=>{messages.push(text);},
     track:async(_r,ticket)=>tracked.set(ticket.ticketId,ticket),updateTrack:async(_r,id,patch)=>Object.assign(tracked.get(id),patch),
     saveCode:async(...args)=>saved.push(args),...overrides};

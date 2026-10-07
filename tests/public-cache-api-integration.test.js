@@ -24,7 +24,7 @@ test('the real app refreshes public data and sends two additional six-ticket Tel
   await rpc('clock',{date:'2026-10-07T06:00:00Z'});
   let status=await complete('/api/telegram/status',p=>p.next12hScheduler.lastRun?.slotTime==='07:00'&&p.next12hScheduler.lastRun.status==='completed');
   assert.equal(status.next12hScheduler.lastRun.ticketsSent,6,JSON.stringify(status));
-  let state=await rpc('state');assert.equal(state.messages.length,6);assert.equal(state.bookings.length,6);assert.equal(state.sessionChecks,1);
+  let state=await rpc('state');assert.equal(state.messages.length,6);assert.equal(state.bookings.length,6);assert.equal(state.sessionChecks,0);
   const repeated=await request('/api/telegram/next-12h-picks',{}, {'x-telegram-job-secret':'fixture-job-secret'});assert.equal(repeated.body.reason,'already_processed_this_slot');
   await rpc('daily',{date:'2026-10-07',codes:[{targetOdds:'1.30–5.00 SAFE',combinedOdds:1.5,shareCode:'SAFE-PRESERVED'}]});
   await request('/api/telegram/bot/webhook',{callback_query:{id:'fixture-callback',data:'action:dailycodes',from:{id:6001},message:{chat:{id:6001},text:'/start'}}},{'x-telegram-bot-api-secret-token':'fixture-hook-secret'});
@@ -37,6 +37,7 @@ test('the real app refreshes public data and sends two additional six-ticket Tel
   status=await complete('/api/telegram/status',p=>p.next12hScheduler.lastRun?.slotTime==='18:00'&&p.next12hScheduler.lastRun.status==='completed');
   assert.equal(status.next12hScheduler.lastRun.ticketsSent,6,JSON.stringify(status));state=await rpc('state');
   assert.equal(state.bookings.length,12);assert.equal(state.messages.length,12);
+  assert.equal(state.sessionChecks,0);
   const dailyFields=state.hashes.find(([key])=>key==='telegram:next12h:codes:2026-10-07')[1];assert.equal(dailyFields.length,12);
   assert.equal(state.data.filter(([key])=>key.startsWith('sportybet:public-refresh:done:')).length,3);
   const tracked=state.hashes.find(([key])=>key==='telegram:tracked-tickets:v2')[1].map(([,raw])=>JSON.parse(raw));assert.equal(tracked.length,12);assert.ok(tracked.every(p=>p.delivery==='posted'));

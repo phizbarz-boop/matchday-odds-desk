@@ -9,11 +9,14 @@ const {boards} = require('./sportybet-live-format');
 const fixture = boards();
 const state = {logins:0, ciphers:0, accountChecks:0, marketReads:0, bookings:0, lookupReads:0};
 const delayed=process.env.SESSION_TEST_MODE==='delayed-booking';
+const publicBooking=process.env.SESSION_TEST_MODE.startsWith('public');
+const publicDelayed=process.env.SESSION_TEST_MODE==='public-delayed';
 const automated=process.env.SESSION_TEST_MODE==='automated'||delayed;
 let releaseLogin,releaseBooking;
 const pageCheckFailure=process.env.SESSION_TEST_MODE==='page-check-failure';
 const browserFailure=process.env.SESSION_TEST_MODE==='browser-failure'||pageCheckFailure;
 const successful = process.env.SESSION_TEST_MODE === 'browser'||automated;
+if(publicBooking){state.browserLogins=0;direct.setBrowserLoginForTesting(async()=>{state.browserLogins++;assert.fail('Anonymous booking must never open a login browser');});}
 if(automated) {
   state.browserLogins=0;
   direct.setBrowserLoginForTesting(async()=>{state.browserLogins++;if(delayed)await new Promise(resolve=>{releaseLogin=resolve;});return {verifiedAt:0,cookies:[
@@ -30,7 +33,7 @@ if(browserFailure){
         proxyConfigured:false,raw:'fixture-private-call-log'}:{reason:'browser_navigation_timeout',stage:'navigation',proxyConfigured:false}});});
 }
 const bySportId = new Map(Object.entries(SPORT_IDS).map(([sport, id]) => [id, fixture[sport]]));
-const response = payload => ({ok:true, status:200,
+const response = (payload,status=200) => ({ok:status>=200&&status<300, status,
   headers:{get:name => name === 'content-type' ? 'application/json' : null, getSetCookie:() => []},
   text:async () => JSON.stringify(payload)});
 direct.setFetchForTesting(async (url, options) => {
@@ -44,9 +47,9 @@ direct.setFetchForTesting(async (url, options) => {
     state.logins++;
     return response({bizCode:12000, innerMsg:'Mock failure', message:'Looks like we’re having trouble on our end. Please try again later.'});
   }
-  if(endpoint.includes('/factsCenter/') || endpoint.endsWith('/orders/share') && options.method==='GET'){
+  if(endpoint.includes('/factsCenter/') || endpoint.includes('/orders/share') && options.method==='GET'){
     for(const key of Object.keys(options.headers))assert.doesNotMatch(key,/^(cookie|authorization|token|accessToken|refreshToken|device-id)$/i);
-    if(endpoint.endsWith('/orders/share')) {
+    if(endpoint.includes('/orders/share')) {
       state.lookupReads++;
       const event=extractUpcomingEvents(fixture.football).events[0];
       return response({bizCode:10000,data:{outcomes:[{sport:'Football',eventId:event.eventId,marketId:'1',marketDesc:'1X2',outcomeId:'1',outcomeDesc:'Home',odds:1.05}]}});
@@ -56,7 +59,15 @@ direct.setFetchForTesting(async (url, options) => {
     if(id)return response({bizCode:10000,data:Object.values(fixture).flatMap(payload=>extractUpcomingEvents(payload).events).find(event=>event.eventId===id)||{}});
     return response(bySportId.get(parsed.searchParams.get('sportId'))||fixture.football);
   }
-  assert.equal(successful, true, 'Only successful dummy authentication can create a booking');
+  if(publicBooking&&endpoint.endsWith('/orders/share')&&options.method==='POST'){
+    for(const key of Object.keys(options.headers))assert.doesNotMatch(key,/^(cookie|authorization|token|accessToken|refreshToken|device-?id)$/i);
+    assert.equal(options.headers['Current-Country'],'NG');assert.equal(options.headers['Content-Type'],'application/json;charset=UTF-8');
+    const body=JSON.parse(options.body);assert.deepEqual(Object.keys(body),['selections']);
+    assert.ok(body.selections.every(s=>Object.keys(s).sort().join(',')==='eventId,marketId,outcomeId,specifier'));
+    state.bookings++;if(publicDelayed)await new Promise(resolve=>{releaseBooking=resolve;});
+    return process.env.SESSION_TEST_MODE==='public-rejected'?response({bizCode:11000,message:'Login required'},401):response({bizCode:10000,data:{shareCode:'ANONYMOUS-TEST-CODE'}});
+  }
+  assert.equal(successful, true, 'Only explicit session mode can contact private account endpoints');
   assert.match(options.headers.Cookie, /accessToken=fresh-browser-token/);
   assert.match(options.headers.Cookie, /deviceId=fresh-device/);
   assert.equal(options.headers.authorization, undefined, 'A stale persisted bearer token must be removed');

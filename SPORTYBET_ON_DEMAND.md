@@ -1,6 +1,6 @@
 # SportyBet on-demand requests
 
-All request reads are public. Dummy authentication starts only when creating a booking code. Hourly Telegram QC/live picks are removed; see [SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md](SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md). Website live/QC selection rules remain active.
+All request reads and booking-code creation are public by default. Dummy login is not needed; see [SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md). Hourly Telegram QC/live picks are removed. Website live/QC selection rules remain active.
 
 Auto Analyser, manual market views, booking-code analysis and same-fixture replacements now read current SportyBet data when requested. This applies to website visitors and the Telegram builder/analyser. No daily prediction refresh is required before a user can build or analyse a slip.
 
@@ -32,6 +32,6 @@ The website football dashboard requests `/api/predictions?source=current`. The d
 
 ## Install and validate
 
-Deploy the updated source using the existing server settings. No new required environment variables or paid data key are needed. Keep the dummy SportyBet credentials for creating booking/share codes.
+Deploy the updated source using the existing server settings. No new required environment variables or paid data key are needed. `SPORTYBET_BOOKING_MODE` defaults to `public`; booking/share codes do not require dummy credentials.
 
-The current update passed all 332 Node regression tests, including public reads with dummy credentials configured and booking-time session recovery. Integration tests use local fixtures and mocked SportyBet booking responses; this update does not verify production account authentication.
+The current update passed all 343 Node regression tests, including public reads and anonymous booking with expired dummy credentials present, and explicit legacy session compatibility. Integration tests use local fixtures and mocked SportyBet responses. A real public browser and the updated server client also generated and looked up `RF33A7` without account authentication. The deployed Render host and Telegram delivery have not been tested here.

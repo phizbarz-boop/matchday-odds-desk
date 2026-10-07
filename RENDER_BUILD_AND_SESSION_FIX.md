@@ -1,5 +1,9 @@
 # Render build and SportyBet session fix
 
+The current default uses anonymous booking and skips Chromium installation.
+The account/browser troubleshooting below applies to optional legacy session
+mode. See [SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md).
+
 The later October 7 build confirms that Chromium installation succeeds.
 For its remaining browser sign-in error, use the updated recovery and
 diagnostics described in

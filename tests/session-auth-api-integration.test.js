@@ -12,11 +12,12 @@ async function server(t, mode) {
   const sessionFile = path.join(folder, 'session.json');
   if (mode === 'browser') fs.writeFileSync(sessionFile, JSON.stringify({token:'stale-persisted-bearer',
     cookies:[['accessToken', {value:'stale-persisted-cookie', expiresAt:null}]]}));
-  if(['automated','delayed-booking'].includes(mode))fs.writeFileSync(sessionFile,JSON.stringify({token:'expired-bearer',tokenExpiresAt:1,
+  if(['automated','delayed-booking'].includes(mode)||mode.startsWith('public'))fs.writeFileSync(sessionFile,JSON.stringify({token:'expired-bearer',tokenExpiresAt:1,
     cookies:[['refreshToken',{value:'revoked-refresh',expiresAt:null}]]}));
   const child = fork(path.join(__dirname, 'fixtures/session-auth-api-server.js'), [], {cwd:path.join(__dirname, '..'), silent:true,
     env:{...process.env, NODE_ENV:'production', PORT:'0', REDIS_URL:'', HTTPS_PROXY:'', SPORTYBET_PROXY_URL:'',
       SPORTYBET_SESSION_FILE:sessionFile, SPORTYBET_ENDPOINT_LOGIN:'', SPORTYBET_ENDPOINT_LOGIN_CANDIDATES:'',
+      SPORTYBET_BOOKING_MODE:mode.startsWith('public')?'':'session',
       SPORTYBET_PHONE:'2348000000000', SPORTYBET_PASSWORD:'mock-test-password',SPORTYBET_LOGIN_METHOD:['automated','browser-failure','page-check-failure','delayed-booking'].includes(mode)?'browser':'api',
       SPORTYBET_BOOTSTRAP_COOKIES:mode === 'browser' ? 'accessToken=fresh-browser-token; refreshToken=fresh-refresh; deviceId=fresh-device' : '',
       SPORTYBET_LIVE_MAX_PAGES:'1', SESSION_TEST_MODE:mode, WEBSITE_ACCESS_CODE:''}});
@@ -39,7 +40,7 @@ async function server(t, mode) {
     child.on('message', handler); child.send({type, id});
   });
   const get=async route=>{const result=await fetch(`http://127.0.0.1:${port}${route}`);return {status:result.status,body:await result.json()};};
-  return {post,get,state};
+  return {post,get,state,sessionFile};
 }
 const request = {sports:['football'], liveMode:'quick_cash', minProbability:0, targetOdds:1.05, maxSelections:1, betTypes:['home_win']};
 
@@ -47,6 +48,49 @@ function assertPublicOnly(state) {
   assert.equal(state.logins,0);assert.equal(state.ciphers,0);assert.equal(state.accountChecks,0);assert.equal(state.bookings,0);
   assert.ok(state.marketReads>0);if('browserLogins' in state)assert.equal(state.browserLogins,0);
 }
+
+test('website and live booking use anonymous sharing with zero dummy login or session writes',async t=>{
+  const api=await server(t,'public'),before=fs.readFileSync(api.sessionFile,'utf8');
+  const picked=await api.post('/api/sportybet/auto-pick',request);assert.equal(picked.status,200);assertPublicOnly(await api.state());
+  for(const route of ['/api/sportybet/book','/api/sportybet/live/book']){
+    const result=await api.post(route,{selections:picked.body.selections,sport:'football'});
+    assert.equal(result.status,200,JSON.stringify(result.body));assert.equal(result.body.shareCode,'ANONYMOUS-TEST-CODE');
+  }
+  const diagnostics=await api.get('/api/sportybet/diagnostics');assert.equal(diagnostics.status,200);
+  assert.equal(diagnostics.body.session.bookingMode,'public');assert.equal(diagnostics.body.session.bookingLoginRequired,false);
+  assert.equal(diagnostics.body.session.authenticationScope,'none');assert.equal(diagnostics.body.session.loginCount,0);
+  const relogin=await api.post('/api/sportybet/session/relogin',{});assert.equal(relogin.status,410);assert.equal(relogin.body.code,'SPORTYBET_SESSION_DISABLED');
+  const state=await api.state();assert.equal(state.bookings,2);assert.equal(state.logins,0);assert.equal(state.browserLogins,0);
+  assert.equal(state.ciphers,0);assert.equal(state.accountChecks,0);assert.equal(fs.readFileSync(api.sessionFile,'utf8'),before);
+});
+
+test('an anonymous sharing rejection returns the source error without dummy fallback or duplicate jobs',async t=>{
+  const api=await server(t,'public-rejected');const picked=await api.post('/api/sportybet/auto-pick',request);
+  const body={requestId:randomUUID(),selections:picked.body.selections},headers={Prefer:'respond-async'};
+  const pending=await api.post('/api/sportybet/book',body,headers);assert.equal(pending.status,202);
+  let result;
+  for(let i=0;i<100;i++){result=await api.get(pending.body.statusUrl);if(result.status!==202)break;await new Promise(resolve=>setTimeout(resolve,10));}
+  assert.equal(result.status,502,JSON.stringify(result.body));assert.equal(result.body.bookingErrorCode,'SPORTYBET_BOOKING_FAILED');
+  assert.match(result.body.detail,/401/);assert.equal(result.body.authFailure,undefined);assert.equal(result.body.retryAt,undefined);
+  const repeated=await api.post('/api/sportybet/book',body,headers);assert.equal(repeated.status,502);
+  const state=await api.state();assert.equal(state.bookings,1);assert.equal(state.logins,0);assert.equal(state.browserLogins,0);assert.equal(state.accountChecks,0);
+});
+
+test('a delayed anonymous HTTP booking survives disconnect and duplicate clicks without signing in',async t=>{
+  const api=await server(t,'public-delayed');const picked=await api.post('/api/sportybet/auto-pick',request);
+  const body={requestId:randomUUID(),selections:picked.body.selections},headers={Prefer:'respond-async',Connection:'close'};
+  const pending=await api.post('/api/sportybet/book',body,headers);assert.equal(pending.status,202);
+  for(let i=0;i<100&&(await api.state()).bookings!==1;i++)await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal((await api.state()).bookings,1);
+  assert.equal((await api.post('/api/sportybet/book',body,headers)).status,202);
+  assert.equal((await api.post('/api/sportybet/auto-pick',request)).status,200);
+  await api.state('release_booking');
+  let result;for(let i=0;i<100;i++){result=await api.get(pending.body.statusUrl);if(result.status!==202)break;await new Promise(resolve=>setTimeout(resolve,10));}
+  assert.equal(result.status,200,JSON.stringify(result.body));assert.equal(result.body.shareCode,'ANONYMOUS-TEST-CODE');
+  const resumed=await api.post('/api/sportybet/book',body,headers);assert.equal(resumed.body.shareCode,result.body.shareCode);
+  assert.equal(resumed.body.telegramSendToken,result.body.telegramSendToken);
+  const state=await api.state();assert.equal(state.bookings,1);assert.equal(state.browserLogins,0);assert.equal(state.logins,0);assert.equal(state.accountChecks,0);
+});
 
 test('public Auto Analyser works before and during a failed dummy booking login',async t=>{
   const api=await server(t,'rejected');

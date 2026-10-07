@@ -5,27 +5,27 @@ SportyBet data no longer comes from the paid Parse.bot API. The server now talks
 
 - Fixtures, markets and odds come directly from SportyBet's web JSON endpoints.
   They stay public even when dummy-account credentials are configured.
-- Booking codes require your **dummy SportyBet account**. Tokens refresh
-  automatically, with website-form sign-in when refresh cannot recover them.
+- Booking codes use SportyBet's anonymous **Book Bet** sharing endpoint.
+  No account login, access token or saved cookie is required in the default mode.
 
 ## Render environment variables
 
-Configure automatic session recovery once, as described in
-[SPORTYBET_AUTOMATIC_SESSION.md](SPORTYBET_AUTOMATIC_SESSION.md). Set these
-values privately on Render:
+Anonymous booking is enabled by default. You can set these values explicitly
+on Render:
 
 ```text
-SPORTYBET_PHONE=2348012345678
-SPORTYBET_PASSWORD=your_dummy_account_password
-SPORTYBET_LOGIN_METHOD=browser
-PLAYWRIGHT_BROWSERS_PATH=0
+SPORTYBET_BOOKING_MODE=public
+SPORTYBET_CURRENT_COUNTRY=NG
 ```
 
-Use Node 20 or newer, Build Command `npm ci && npm run browser:download` and
-Start Command `npm start`. The included Dockerfile is an alternative if the
-native runtime lacks browser system libraries. Browser recovery uses the
-website's own login request; the legacy encrypted API adapter is opt-in only.
-Normal token expiry no longer requires copying bootstrap cookies.
+Use Node 20 or newer, Build Command `npm ci --ignore-scripts=false` and
+Start Command `npm start`. The default postinstall skips Chromium because
+anonymous booking does not use it. Existing dummy credentials can remain
+private on the service; the public mode does not load or send them.
+See [SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md) for the
+verified request and installation. The older account adapter is available
+only with `SPORTYBET_BOOKING_MODE=session`; its optional setup is documented
+in [SPORTYBET_AUTOMATIC_SESSION.md](SPORTYBET_AUTOMATIC_SESSION.md).
 
 Football probabilities use SportyBet's displayed goal averages and H2H, collected
 by `jobs/sporty-football-statistics-collector.js` from public match pages.
@@ -43,6 +43,9 @@ account or collector credentials. Keep `TELEGRAM_JOB_SECRET` the same on GitHub
 and Render for protected manual Telegram jobs. Optional historical football
 statistics collection still uses `node jobs/sporty-football-statistics-collector.js`
 in a fresh public browser context; it is not required by `npm run refresh`.
+If that optional collector is needed on a native host, explicitly download its
+browser with `npm run browser:download -- --force`. The included Dockerfile
+also installs the browser and its Linux dependencies for optional collectors.
 
 Optional — only needed if diagnostics shows `SPORTYBET_GEO_BLOCKED`.
 Reachability depends on the server IP and SportyBet's current restrictions:
@@ -67,13 +70,21 @@ H2H_MAX_WEIGHT=0.18
 
 ## Booking request tracking
 
-The website submits a booking once and polls its status, allowing session recovery to finish beyond the former 18-second browser cutoff. Repeating the same request retrieves its saved result. The provider booking timeout defaults to 45 seconds. See [SPORTYBET_BOOKING_TIMEOUT_FIX.md](SPORTYBET_BOOKING_TIMEOUT_FIX.md) for deployment and retry details.
+The website submits a booking once and polls its status, allowing slow public sharing requests to finish beyond the former 18-second browser cutoff. Repeating the same request retrieves its saved result. The provider booking timeout defaults to 45 seconds. See [SPORTYBET_BOOKING_TIMEOUT_FIX.md](SPORTYBET_BOOKING_TIMEOUT_FIX.md) for deployment and retry details.
 
-## Booking-only session recovery
+## Anonymous booking
 
 Public reads do not load dummy credentials or require a session. The website does not attempt a startup login or start periodic account maintenance.
 
-When a booking code is requested, the server loads the saved private session, verifies it and refreshes or signs in through SportyBet's own form when required. Rotated credentials are saved to Redis when configured, or the private local session file. Concurrent booking requests share verification and recovery. A failed sign-in has a cooldown and appears in booking diagnostics; public analysis remains usable.
+When a booking code is requested, the server posts only the offered event ID,
+market ID, specifier and outcome ID to `/orders/share`, without Cookie or
+Authorization headers. The default mode never loads a private session,
+refreshes a token or falls back to account login after an error. Expired dummy
+tokens and browser sign-in cooldowns therefore do not affect booking.
+
+Setting `SPORTYBET_BOOKING_MODE=session` explicitly restores booking-only
+account verification and recovery. Public data reads remain anonymous in both
+modes. This compatibility option is not necessary for normal Book Bet sharing.
 
 See [SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md](SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md) for current behavior and installation. Hourly Telegram QC/live picks are removed; SAFE, next-12-hours picks and result reports remain.
 
@@ -81,7 +92,7 @@ See [SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md](SPORTYBET_PUBLIC_READS_BOOKING_ONLY
 
 ```text
 GET  /api/sportybet/diagnostics        session state, cookie expiries, proxy/geo status, public-data probe
-POST /api/sportybet/session/relogin    force a fresh dummy-account login
+POST /api/sportybet/session/relogin    legacy session mode only; HTTP 410 in public mode
 ```
 
 Both are guarded by the website access cookie when `WEBSITE_ACCESS_CODE` is set.
@@ -107,7 +118,12 @@ SPORTYBET_ENDPOINT_LOGIN=/patron/accessToken (default first probe)
 SPORTYBET_ENDPOINT_USERINFO=/patron/account/info
 SPORTYBET_ENDPOINT_BOOK=/orders/share
 SPORTYBET_ENDPOINT_BOOKING_LOOKUP=/orders/share
+SPORTYBET_BOOKING_LOOKUP_STYLE=path
 ```
+
+Code lookup uses `GET /orders/share/<encoded-code>`, matching the website.
+`SPORTYBET_BOOKING_LOOKUP_STYLE=query` is an explicit compatibility option for
+an older custom upstream; it is not the current SportyBet website format.
 
 The opt-in legacy API login probes routes too: SportyBet moved its account service under `/patron`
 (the site's own account-info call is `/api/ng/patron/account/info`), so on
@@ -148,7 +164,7 @@ a fully-failed probe round backs off for 10 minutes.
 
 ### Optional legacy API-login adapter
 
-Only `SPORTYBET_LOGIN_METHOD=api` enables this adapter. It calls `/patron/cipher` and encrypts its payload before
+Only `SPORTYBET_BOOKING_MODE=session` together with `SPORTYBET_LOGIN_METHOD=api` enables this adapter. It calls `/patron/cipher` and encrypts its payload before
 posting to `/patron/accessToken`. Its default AES/CBC format has not been
 verified against the current SportyBet web bundle. A generic HTTP-200 login
 rejection does not prove which field or cipher is wrong. Do not repeatedly try
@@ -157,7 +173,7 @@ uses the website form and lets SportyBet encrypt its own login request.
 
 ### Optional cookie bootstrap
 
-If SportyBet requires human verification, you can hand the server a browser session
+For explicit legacy session mode only, if SportyBet requires human verification, you can hand the server a browser session
 directly: in Firefox/Chrome DevTools → Storage/Application → Cookies →
 `www.sportybet.com`, copy `accessToken`, `refreshToken` and its actual device
 cookie (`device-id` or `deviceId`), and
@@ -212,8 +228,8 @@ SPORTYBET_SPORT_ID_VOLLEYBALL=sr:sport:23
 ## Live / in-play betting
 
 The site has a **Live Betting** page (`/live.html`, behind the same website
-access code) that reads the public SportyBet live board. The dummy account is
-used only to create booking codes after live selections are rechecked.
+access code) that reads the public SportyBet live board. Booking codes use
+anonymous sharing after live selections are rechecked.
 
 ```text
 GET  /api/sportybet/live/odds?sport=football&market=all
@@ -226,7 +242,7 @@ POST /api/sportybet/live/book     { "selections": [...] }
 - Before a live code is created, every leg is re-validated against a **fresh,
   uncached** live board scrape. Suspended or settled legs are dropped and
   reported in `dropped`; they are never booked blindly.
-- Live booking uses the same dummy-account session and per-minute rate limit
+- Live booking uses the same anonymous sharing endpoint and per-minute rate limit
   as prematch booking.
 
 Live tuning:
@@ -274,25 +290,18 @@ POST /api/sportybet/replace-unsupported
 
 ## Booking code creation
 
-`POST /api/sportybet/book` now books through the dummy-account session instead
-of Parse. Every selectable outcome still carries its real SportyBet
+`POST /api/sportybet/book` uses SportyBet's anonymous `/orders/share` endpoint.
+Every selectable outcome still carries its real SportyBet
 `eventId`, `marketId`, `outcomeId` and optional `specifier`; no IDs are ever
-invented. The account is never used to stake real money — only "book a bet"
-share-code creation is called.
-
-## Risk notes
-
-- Automated traffic on a logged-in account can get that account flagged or
-  banned by SportyBet's risk systems, and this usage is against their terms.
-  Use a throwaway dummy account only, keep `SPORTYBET_BOOKINGS_PER_MINUTE`
-  low, and never reuse an account you care about.
-- Reading odds is anonymous; only booking touches the account.
+invented. Empty specifiers are sent as `null`, matching the website request.
+Only share-code creation is called; no stake or wager is submitted.
 
 ## Deploy
 
 Commit to the GitHub repository connected to Render, set the environment
 variables above, redeploy, then open `/api/sportybet/diagnostics` and confirm
-`session.loggedIn: true` and `publicDataProbe.ok: true`. Run one
+`session.bookingMode: "public"`, `session.bookingLoginRequired: false` and
+`publicDataProbe.ok: true`. `loggedIn` is not required for public booking. Run one
 `Daily Predictions Refresh` after deploying.
 
 Bump `SPORTYBET_CACHE_VERSION` (e.g. to `10`) on first deploy so no stale
@@ -310,8 +319,8 @@ football at 75+ minutes, basketball in Q4/overtime, hockey in the final
 period/overtime, and handball at 50+ minutes in the second half. A readable
 non-tied score is required. Picks must support the current leader in a winner,
 double-chance, DNB or handicap market. Unsupported/missing phase data is skipped.
-A final set cannot be inferred safely without the match format, so tennis and
-volleyball are currently excluded from Quick Cash; normal Live mode supports them.
+Tennis and volleyball need a known match format and a readable late deciding-set
+state; a final set is not inferred from a period label alone.
 
 Football live probabilities use current score plus remaining time with the
 SportyBet goal-rate model when all inputs exist. Missing historical inputs use
@@ -323,5 +332,5 @@ code. Changed leaders, settled matches, suspended selections and removed
 markets are dropped. The Telegram Matches button also cycles through Quick
 Cash; natural-language requests such as "Quick Cash 5x" select it.
 
-This build creates SportyBet booking/share codes using the dummy account. It
+This build creates SportyBet booking/share codes anonymously by default. It
 uses the existing booking flow and does not submit a monetary stake.

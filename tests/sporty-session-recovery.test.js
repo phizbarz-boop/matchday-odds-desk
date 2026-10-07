@@ -15,7 +15,7 @@ function response(payload, cookies = [], status = 200) {
 function client(t, env = {}, saved) {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'sporty-session-test-'));
   const vars = {REDIS_URL:'', SPORTYBET_PHONE:'', SPORTYBET_PASSWORD:'', SPORTYBET_BOOTSTRAP_COOKIES:'',
-    SPORTYBET_PROXY_URL:'', HTTPS_PROXY:'', SPORTYBET_LOGIN_METHOD:'api', SPORTYBET_LOGIN_EXTRA:'', SPORTYBET_ENDPOINT_LOGIN:'/patron/login',
+    SPORTYBET_PROXY_URL:'', HTTPS_PROXY:'', SPORTYBET_BOOKING_MODE:'session', SPORTYBET_BOOKING_LOOKUP_STYLE:'', SPORTYBET_LOGIN_METHOD:'api', SPORTYBET_LOGIN_EXTRA:'', SPORTYBET_ENDPOINT_LOGIN:'/patron/login',
     SPORTYBET_ENDPOINT_LOGIN_CANDIDATES:'', SPORTYBET_ENDPOINT_USERINFO:'',
     SPORTYBET_ENDPOINT_REFRESH:'/patron/refresh',
     SPORTYBET_SESSION_FILE:path.join(folder, 'session.json'), ...env};
@@ -37,6 +37,91 @@ function client(t, env = {}, saved) {
 }
 const credentials = {SPORTYBET_PHONE:'2348000000000', SPORTYBET_PASSWORD:'mock-password-only'};
 const jwt = exp => `header.${Buffer.from(JSON.stringify({exp})).toString('base64url')}.signature`;
+
+test('booking defaults to anonymous sharing even with expired saved dummy credentials',async t=>{
+  const saved={token:'expired-private-bearer',tokenExpiresAt:1,cookies:[['accessToken',{value:'expired-private-cookie',expiresAt:1}]]};
+  const {direct,file}=client(t,{...credentials,SPORTYBET_BOOKING_MODE:''},saved),before=fs.readFileSync(file,'utf8');
+  let posts=0;
+  direct.setBrowserLoginForTesting(async()=>assert.fail('Anonymous booking must not open a sign-in browser'));
+  direct.setFetchForTesting(async(url,options)=>{
+    assert.match(new URL(url).pathname,/\/orders\/share$/);assert.equal(options.method,'POST');posts++;
+    for(const name of Object.keys(options.headers))assert.doesNotMatch(name,/^(cookie|authorization|token|accessToken|refreshToken|device-?id|x-auth-token)$/i);
+    assert.equal(options.headers['Current-Country'],'NG');assert.equal(options.headers['Content-Type'],'application/json;charset=UTF-8');
+    assert.deepEqual(JSON.parse(options.body),{selections:[{eventId:'fixture',marketId:'1',specifier:null,outcomeId:'1'}]});
+    return response({bizCode:10000,data:{shareCode:'ANONYMOUS-CODE'}},['accessToken=unrelated-guest-response; Max-Age=60']);
+  });
+  await direct.assertBookingReady();
+  const result=await direct.createBookingCode([{eventId:'fixture',marketId:'1',outcomeId:'1',stake:100,live:true}]);
+  assert.equal(result.data.shareCode,'ANONYMOUS-CODE');assert.equal(posts,1);assert.equal(direct._session.loaded,false);
+  assert.equal(direct._session.cookies.size,0);assert.equal(fs.readFileSync(file,'utf8'),before);
+  const status=direct.sessionStatus();assert.equal(status.bookingMode,'public');assert.equal(status.bookingLoginRequired,false);
+  assert.equal(status.authenticationScope,'none');assert.equal(status.loginCount,0);assert.equal(status.automaticReloginConfigured,false);
+});
+
+test('anonymous share rejections never retry through dummy login or mutate a loaded private session',async t=>{
+  for(const [payload,status,expected] of [
+    [{message:'Unauthorized'},401,'SPORTYBET_HTTP'],
+    [{message:'Forbidden'},403,'SPORTYBET_HTTP'],
+    [{bizCode:11000,message:'Access token expired'},200,'SPORTYBET_API'],
+  ]){
+    const {direct}=client(t,{...credentials,SPORTYBET_BOOKING_MODE:''});
+    direct._session.loaded=true;direct._session.token='private-bearer';
+    direct._session.cookies.set('accessToken',{value:'private-cookie',expiresAt:null});
+    let posts=0;direct.setFetchForTesting(async(url,options)=>{
+      assert.match(new URL(url).pathname,/\/orders\/share$/);assert.equal(options.headers.Cookie,undefined);
+      assert.equal(options.headers.Authorization,undefined);assert.equal(options.headers.token,undefined);
+      posts++;return response(payload,['accessToken=; Max-Age=0'],status);
+    });
+    await assert.rejects(direct.createBookingCode([{eventId:'fixture',marketId:'18',outcomeId:'12',specifier:'total=2.5'}]),e=>e.code===expected);
+    assert.equal(posts,1);assert.equal(direct.sessionStatus().loginCount,0);assert.equal(direct._session.token,'private-bearer');
+    assert.equal(direct._session.cookies.get('accessToken').value,'private-cookie');
+  }
+});
+
+test('anonymous sharing needs no account configuration and preserves parameterized market lines',async t=>{
+  const {direct}=client(t,{SPORTYBET_BOOKING_MODE:''});
+  direct.setFetchForTesting(async(url,options)=>{
+    assert.equal(options.headers.Cookie,undefined);
+    assert.deepEqual(JSON.parse(options.body),{selections:[{eventId:'fixture',marketId:'166',specifier:'total=8.5',outcomeId:'12'}]});
+    return response({bizCode:10000,data:{shareCode:'CORNERS-CODE'}});
+  });
+  assert.equal(direct.sessionStatus().configured,true);assert.equal(direct.sessionStatus().credentialsConfigured,false);
+  const result=await direct.createBookingCode([{eventId:'fixture',marketId:'166',specifier:'total=8.5',outcomeId:'12'}]);
+  assert.equal(result.data.shareCode,'CORNERS-CODE');assert.equal(direct._session.loaded,false);
+});
+
+test('an unknown anonymous booking response remains uncertain and is not automatically posted again',async t=>{
+  const {direct}=client(t,{SPORTYBET_BOOKING_MODE:''});let posts=0;
+  direct.setFetchForTesting(async(url,options)=>{assert.match(new URL(url).pathname,/\/orders\/share$/);assert.equal(options.headers.Cookie,undefined);posts++;throw Error('Fixture response lost');});
+  await assert.rejects(direct.createBookingCode([{eventId:'fixture',marketId:'1',outcomeId:'1'}]),e=>e.code==='SPORTYBET_NETWORK'&&e.bookingOutcomeUnknown===true);
+  assert.equal(posts,1);assert.equal(direct._session.loaded,false);assert.equal(direct.sessionStatus().loginCount,0);
+});
+
+test('invalid booking mode fails before either public submission or private recovery',async t=>{
+  const {direct}=client(t,{...credentials,SPORTYBET_BOOKING_MODE:'invalid'});
+  direct.setFetchForTesting(async()=>assert.fail('Invalid configuration must not create a code or log in'));
+  await assert.rejects(direct.createBookingCode([{eventId:'fixture',marketId:'1',outcomeId:'1'}]),e=>e.code==='SPORTYBET_NOT_CONFIGURED');
+  assert.equal(direct._session.loaded,false);
+});
+
+test('existing codes use the public share-code path even inside a read-only cache scope',async t=>{
+  const {direct}=client(t,{...credentials,SPORTYBET_BOOKING_MODE:''});let reads=0;
+  direct.setFetchForTesting(async(url,options)=>{
+    const parsed=new URL(url);assert.equal(parsed.pathname,'/api/ng/orders/share/FIXTURE');
+    assert.equal(parsed.searchParams.has('shareCode'),false);assert.equal(options.method,'GET');
+    assert.equal(options.headers.Cookie,undefined);reads++;return response({bizCode:10000,data:{shareCode:'FIXTURE'}});
+  });
+  const {withPublicSportyRequest}=require('../lib/sportyRequest');
+  const result=await withPublicSportyRequest(()=>direct.lookupBooking('FIXTURE',{fresh:true}));
+  assert.equal(result.data.shareCode,'FIXTURE');assert.equal(reads,1);assert.equal(direct._session.loaded,false);
+});
+
+test('an explicitly configured legacy lookup keeps its query format and stays public',async t=>{
+  const {direct}=client(t,{SPORTYBET_BOOKING_MODE:'',SPORTYBET_BOOKING_LOOKUP_STYLE:'query'});
+  direct.setFetchForTesting(async(url,options)=>{const parsed=new URL(url);assert.equal(parsed.pathname,'/api/ng/orders/share');
+    assert.equal(parsed.searchParams.get('shareCode'),'FIXTURE');assert.equal(options.headers.Cookie,undefined);return response({bizCode:10000,data:{shareCode:'FIXTURE'}});});
+  assert.equal((await direct.lookupBooking('FIXTURE')).data.shareCode,'FIXTURE');assert.equal(direct._session.loaded,false);
+});
 
 test('public prematch, live, details and existing codes ignore saved and configured dummy credentials',async t=>{
   const saved={token:'private-saved-token',cookies:[['accessToken',{value:'private-saved-cookie',expiresAt:null}]]};

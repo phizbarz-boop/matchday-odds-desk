@@ -1,6 +1,6 @@
-# Automatic SportyBet dummy-account recovery
+# Optional legacy SportyBet account recovery
 
-Current booking-timeout update: the website tracks a recoverable booking request instead of aborting the whole operation after 18 seconds. See [SPORTYBET_BOOKING_TIMEOUT_FIX.md](SPORTYBET_BOOKING_TIMEOUT_FIX.md).
+The default `SPORTYBET_BOOKING_MODE=public` generates booking codes anonymously and skips account recovery and Chromium installation. This document applies only when you explicitly choose `SPORTYBET_BOOKING_MODE=session`. Use [SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md) for the current default setup.
 
 The server renews accepted sessions and signs back in through SportyBet's own
 Nigeria login form when refresh is rejected. Normal expiry no longer requires
@@ -14,12 +14,13 @@ booking codes. Analysis and result reads use public SportyBet data.
 2. In the Render service environment, set these values privately:
 
    ```text
+   SPORTYBET_BOOKING_MODE=session
    SPORTYBET_PHONE=<dummy-account mobile number>
    SPORTYBET_PASSWORD=<dummy-account password>
    SPORTYBET_LOGIN_METHOD=browser
    ```
 
-   Browser login is the default. The Nigeria form supplies +234 separately;
+   Browser login is the default within session mode. The Nigeria form supplies +234 separately;
    the adapter accepts a number beginning with 234, a local leading 0, or the
    ten-digit local number. Do not put credentials into source files or chat.
    `SPORTYBET_BOOTSTRAP_COOKIES` is optional; existing unchanged bootstrap
@@ -31,13 +32,15 @@ booking codes. Analysis and result reads use public SportyBet data.
    ```
 
    Keep the **Start Command** as `npm start`. `npm install` also works. Both run the
-   project's postinstall step to download the pinned Chromium browser. Build
+   project's postinstall step to download the pinned Chromium browser when
+   `SPORTYBET_BOOKING_MODE=session` is configured during the build. Build
    and runtime default to `PLAYWRIGHT_BROWSERS_PATH=0`, placing the browser
    inside the deployed package; an explicit prepared-browser path is retained.
    A failed browser installation fails the build. No browser download or manual
    cookie capture is required during an ordinary renewal.
-4. Save/redeploy. Check `/api/sportybet/diagnostics`, then run Auto Analyser or
-   create a booking code to exercise account recovery on your deployment.
+4. Save/redeploy. Check `/api/sportybet/diagnostics`, then create a booking code
+   to exercise account recovery on your deployment. Auto Analyser remains public
+   and does not exercise account recovery.
 
 If the native Render runtime is missing Chromium system libraries, use the
 included `Dockerfile` and `.dockerignore`: it installs the pinned Playwright
@@ -66,7 +69,7 @@ Keep persistent Redis enabled so renewed credentials, ticket history and duplica
 - Persist the recovered session. Ordinary restarts reuse it without cookie
   copying or another password submission.
 
-The browser adapter does not place a wager. Website and retained Telegram booking-code generation use the same recovery. Public reads continue without it.
+The browser adapter does not place a wager. In explicit session mode, website and retained Telegram booking-code generation use the same recovery. Public reads continue without it. Public booking mode never invokes this recovery, even after a rejected sharing request.
 
 ## Diagnostics and exceptions
 
@@ -74,6 +77,8 @@ The diagnostics session object shows:
 
 ```text
 automaticLoginMethod: "browser"
+bookingMode: "session"
+bookingLoginRequired: true
 automaticReloginConfigured: true
 lastLoginMethod: "browser"
 lastAuthenticatedAt: <recent successful account verification>
@@ -117,7 +122,7 @@ SPORTYBET_SESSION_CHECK_MS=60000
 ```
 
 The old encrypted API-login adapter is available only with
-`SPORTYBET_LOGIN_METHOD=api`; its format is unverified and it is not used by
+`SPORTYBET_BOOKING_MODE=session` and `SPORTYBET_LOGIN_METHOD=api`; its format is unverified and it is not used by
 default. Cookie capture in [SPORTYBET_SESSION_RECOVERY.md](SPORTYBET_SESSION_RECOVERY.md)
 remains an optional recovery tool if SportyBet requires human verification.
 
@@ -128,11 +133,11 @@ After downloading this ZIP into Downloads:
 ```bash
 cd ~/Documents &&
 session_dir=$(mktemp -d /tmp/plot207-session.XXXXXX) &&
-unzip -q ~/Downloads/matchday-odds-desk-booking-timeout-fix.zip -d "$session_dir" &&
+unzip -q ~/Downloads/matchday-odds-desk-anonymous-booking.zip -d "$session_dir" &&
 rsync -a --delete --exclude=.git --exclude='.env*' --exclude=node_modules --exclude=data --exclude='.sportybet-*' "$session_dir/matchday-odds-desk/" matchday-odds-desk/ &&
 cd matchday-odds-desk &&
 git add -A &&
-git commit -m "Use public SportyBet reads and remove hourly Telegram picks" &&
+git commit -m "Generate SportyBet booking codes without dummy login" &&
 git push origin main
 ```
 

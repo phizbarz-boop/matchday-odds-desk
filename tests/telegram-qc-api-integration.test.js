@@ -57,13 +57,13 @@ test('hourly removal preserves historical tickets, public results and interactiv
     assert.equal(picked.status,404,JSON.stringify(picked.body));assert.ok(picked.body.liveDiagnostics.selectionRules.halfwayRejected>0);
     assert.match(picked.body.hint,/halfway/);
   });
-  await t.test('interactive tennis QC still analyzes publicly then books with the dummy account',async()=>{
+  await t.test('interactive tennis QC analyzes and books without the dummy account',async()=>{
     await rpc('configure',{tennisOnly:true});const before=await rpc('state');
     const picked=await post('/api/sportybet/auto-pick',{sports:['tennis'],liveMode:'quick_cash',minProbability:0,minEdge:-25,betTypes:['tennis_winner'],targetOdds:1.05,maxSelections:1});
     assert.equal(picked.status,200,JSON.stringify(picked.body));assert.equal(picked.body.selections[0].liveState.bestOf,3);
     assert.equal((await rpc('state')).sessionChecks,before.sessionChecks);
     const booked=await post('/api/sportybet/book',{selections:picked.body.selections});
     assert.equal(booked.status,200,JSON.stringify(booked.body));assert.match(booked.body.shareCode,/QC-TEST-/);
-    assert.equal((await rpc('state')).sessionChecks,before.sessionChecks+1);
+    assert.equal((await rpc('state')).sessionChecks,before.sessionChecks);
   });
 });

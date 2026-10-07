@@ -1,6 +1,6 @@
 # Public SportyBet cache and next-12-hours Telegram picks
 
-Current update: all data reads are public and dummy login is used only for booking. Hourly Telegram QC/live picks are removed. The cache schedule and next-12-hours picks described below remain active.
+Current update: all data reads and booking-code creation are public by default. Hourly Telegram QC/live picks are removed. The cache schedule and next-12-hours picks described below remain active.
 
 The long Live/Quick Cash paragraph under Match Status has been removed. The
 mode dropdown and its existing selection rules remain available.
@@ -15,7 +15,6 @@ account, even when dummy credentials are configured on the same server.
 | --- | --- | --- |
 | Public fixture and market cache | 06:30, 12:30, 17:30 | App server |
 | Six additional next-12-hours tickets | 07:00, 18:00 | App server |
-| Existing QC 0% and Live All Sports 85% tickets | Hourly, existing configured minute | App server |
 | Existing SAFE daily ticket | 08:25 | Existing GitHub workflow |
 | Existing result and hypothetical ₦100-per-ticket ROI reports | 00:10, 12:10 | Existing GitHub workflow |
 
@@ -81,10 +80,11 @@ Within each six-ticket batch:
 - If a target is unreachable under these rules, that plan is recorded as
   unavailable. No empty or lower-target booking code is posted in its place.
 
-The dummy account is still used for **booking-code creation**. The existing
-automatic browser session recovery remains in place. No paid API-Football
-integration is used. This job creates shared booking codes; it does not stake
-money or submit wagers.
+Booking-code creation uses **anonymous SportyBet sharing**, just like the
+public website's Book Bet button. It does not load a dummy session or fall back
+to account login. The older recovery adapter remains available only with
+`SPORTYBET_BOOKING_MODE=session`. No paid API-Football integration is used.
+This job creates shared booking codes; it does not stake money or submit wagers.
 
 The new codes are stored separately so they appear in Today’s Codes without
 erasing SAFE or previously sent ticket history. Each sent ticket enters the existing
@@ -97,10 +97,9 @@ and are not automatically reposted.
 
 Install this ZIP into your existing repository, commit/push, and deploy the
 connected app. The deployed service has not been changed by this download.
-Keep the existing persistent Redis, Telegram and automatic dummy-session
-configuration. See [SPORTYBET_AUTOMATIC_SESSION.md](SPORTYBET_AUTOMATIC_SESSION.md)
-for the one-time browser build/runtime setup. A continuously running service is
-required for the internal timers.
+Keep the existing persistent Redis and Telegram configuration. See
+[SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md) for the public
+booking setup. A continuously running service is required for the internal timers.
 
 New switches default to enabled:
 
@@ -110,8 +109,8 @@ TELEGRAM_NEXT12H_ENABLED=true
 ```
 
 The new Telegram timer requires `REDIS_URL`, `TELEGRAM_BOT_TOKEN` and
-`TELEGRAM_CHAT_ID`; booking needs the working dummy account. Cache collection
-itself requires no account credentials or browser installation.
+`TELEGRAM_CHAT_ID`. Neither cache collection nor default booking requires
+account credentials or browser installation.
 
 Optional collection tuning:
 
@@ -143,11 +142,11 @@ After downloading the ZIP into Downloads:
 ```bash
 cd ~/Documents &&
 public_update_dir=$(mktemp -d /tmp/plot207-public.XXXXXX) &&
-unzip -q ~/Downloads/matchday-odds-desk-public-cache-next12h-picks.zip -d "$public_update_dir" &&
+unzip -q ~/Downloads/matchday-odds-desk-anonymous-booking.zip -d "$public_update_dir" &&
 rsync -a --delete --exclude=.git --exclude='.env*' --exclude=node_modules --exclude=data --exclude='.sportybet-*' "$public_update_dir/matchday-odds-desk/" matchday-odds-desk/ &&
 cd matchday-odds-desk &&
 git add -A &&
-git commit -m "Cache public SportyBet markets and add twice-daily next-12h tickets" &&
+git commit -m "Generate SportyBet booking codes without dummy login" &&
 git push
 ```
 
@@ -161,5 +160,6 @@ six-sport market storage, pagination and source failures, fresh market/probabili
 checks, WAT schedules, duplicate protection, the 90%/three-ticket exception,
 booking/send failures and Today’s Codes. A controlled real-app integration test
 refreshes at all three slots and generates six mocked booking codes at both
-ticket times. Actual public SportyBet feed availability from your deployed host
-and actual account/Telegram delivery must be checked after deployment.
+ticket times with no account calls. A real anonymous SportyBet share code was
+also verified using the updated client. Public SportyBet reachability from your
+deployed host and actual Telegram delivery must be checked after deployment.

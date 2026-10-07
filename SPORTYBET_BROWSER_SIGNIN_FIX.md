@@ -1,5 +1,9 @@
 # SportyBet browser sign-in and cache restart update
 
+The current default uses anonymous booking without browser sign-in. The recovery
+changes below remain available only for explicit `SPORTYBET_BOOKING_MODE=session`.
+See [SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md).
+
 For the subsequently identified `page_check` timeout, see
 [SPORTYBET_PAGE_CHECK_FIX.md](SPORTYBET_PAGE_CHECK_FIX.md). The current archive
 includes that fix alongside the changes described below.

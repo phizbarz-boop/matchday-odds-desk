@@ -1,5 +1,9 @@
 # Dummy-session recovery and optional manual bootstrap
 
+This guide applies only to explicitly enabled `SPORTYBET_BOOKING_MODE=session`.
+The current default generates codes anonymously and does not need cookie capture
+or dummy-session renewal. See [SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md).
+
 **Normal expiry is now automatic.** Set the dummy account phone/password and
 install the server browser once using
 [SPORTYBET_AUTOMATIC_SESSION.md](SPORTYBET_AUTOMATIC_SESSION.md). It covers the

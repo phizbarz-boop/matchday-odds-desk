@@ -1,12 +1,12 @@
-# Public SportyBet reads and booking-only login
+# Public SportyBet reads and anonymous booking
 
-Current booking-timeout update: the website tracks a recoverable booking request instead of aborting the whole operation after 18 seconds. See [SPORTYBET_BOOKING_TIMEOUT_FIX.md](SPORTYBET_BOOKING_TIMEOUT_FIX.md).
+Current update: booking also uses the public website's anonymous sharing operation. See [SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md). The website retains recoverable requests instead of aborting the operation after 18 seconds.
 
 User requests read SportyBet's public website JSON feeds. Fixtures, odds, full event markets, live/QC analysis, imported booking-code analysis, replacement selections, result checks and public cache refreshes do not load or send dummy-account credentials. The optional football statistics collector opens public match pages in a fresh browser context.
 
 There is no startup login or background session keep-alive in the website. An expired dummy session or failed sign-in cooldown cannot prevent public analysis. A public-feed error is reported as a source error; it does not trigger an account login or substitute old market prices.
 
-Creating a booking code remains authenticated. The server rechecks live selections publicly before booking, then loads and verifies the saved dummy session. It refreshes or signs in automatically when needed. Concurrent bookings share recovery, and safe failure diagnostics are returned only by the booking request. Redis session persistence, browser installation and the previous page-check fix remain available.
+Creating a booking code uses anonymous `POST /orders/share` by default. The server rechecks live selections publicly and sends only the event, market, specifier and outcome IDs. It does not load the saved dummy session or fall back to login after a rejected public request. The older account adapter remains available only with the explicit `SPORTYBET_BOOKING_MODE=session` setting.
 
 ## Telegram schedules
 
@@ -16,8 +16,8 @@ The following remain active:
 
 | Pick or update | Schedule in WAT | Source/authentication |
 | --- | --- | --- |
-| Morning SAFE | 08:25 daily, GitHub Actions | Public markets; dummy account for booking |
-| Next 12 hours: 10,000, 2,500, 500, three 100 targets | 07:00 and 18:00 daily, app server | Public cache and fresh market checks; dummy account for booking |
+| Morning SAFE | 08:25 daily, GitHub Actions | Public markets and anonymous booking |
+| Next 12 hours: 10,000, 2,500, 500, three 100 targets | 07:00 and 18:00 daily, app server | Public cache, fresh market checks and anonymous booking |
 | Results and hypothetical ₦100-per-ticket ROI | 00:10 and 12:10, GitHub Actions | Public booking-code lookup and event results |
 | Public fixture/market cache | 06:30, 12:30 and 17:30 daily, app server | Public, no dummy account |
 
@@ -30,16 +30,16 @@ Download this ZIP to Downloads, then run:
 ```bash
 cd ~/Documents &&
 update_dir=$(mktemp -d /tmp/plot207-update.XXXXXX) &&
-unzip -q ~/Downloads/matchday-odds-desk-booking-timeout-fix.zip -d "$update_dir" &&
+unzip -q ~/Downloads/matchday-odds-desk-anonymous-booking.zip -d "$update_dir" &&
 rsync -a --delete --exclude=.git --exclude='.env*' --exclude=node_modules --exclude=data --exclude='.sportybet-*' "$update_dir/matchday-odds-desk/" matchday-odds-desk/ &&
 cd matchday-odds-desk &&
 git add -A &&
-git commit -m "Use public SportyBet reads; reserve dummy login for booking; remove hourly Telegram picks" &&
+git commit -m "Generate SportyBet booking codes without dummy login" &&
 git push origin main
 ```
 
-Keep the existing Render build command `npm ci --ignore-scripts=false` and start command `npm start`. Keep the dummy credentials and Telegram settings privately on the service; dummy credentials are needed when a code is created.
+Keep the Render build command `npm ci --ignore-scripts=false` and start command `npm start`. Set `SPORTYBET_BOOKING_MODE=public` or leave it unset. Keep the existing Redis and Telegram settings. Dummy credentials and browser installation are not required for public booking.
 
 ## Validation
 
-All 332 Node tests passed. Tests verify public reads with configured and saved dummy credentials, missing/expired sessions, no account headers, unchanged private session storage, public feed errors without login fallback, booking-time recovery and its shared cooldown, safe failure diagnostics, removed hourly endpoints and schedules, retained next-12-hours picks, public results/ROI and website live/QC booking. Real Chromium tests use local fixtures and fake credentials. No real account login, booking or Telegram send was performed for this update.
+All 343 Node tests passed. Tests verify anonymous reads and booking despite configured or expired dummy credentials, no account headers or private-session changes, public failures without login fallback, exact selection payloads, code lookup, asynchronous recovery after a lost HTTP connection, removed hourly endpoints, retained Telegram picks and public results/ROI. Explicit legacy session mode is also covered with fake credentials and local Chromium fixtures. A real logged-out SportyBet browser and a separate server request both generated code `RF33A7`; the updated booking and lookup functions returned the same code without loading a session. No real account login, wager or Telegram send was performed. Render deployment remains a separate step.

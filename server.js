@@ -1281,7 +1281,7 @@ app.post('/api/sportybet/live/book', express.json(), bookingRequests.wrap(async 
     const status = authFailure || err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : (err.code === 'SPORTYBET_BOOKING_TIMEOUT' ? 504 : 502);
     res.status(status).json({
       error: err.code === 'SPORTYBET_NOT_CONFIGURED'
-        ? 'SportyBet dummy account is not configured (SPORTYBET_PHONE / SPORTYBET_PASSWORD)'
+        ? 'SportyBet booking configuration is unavailable'
         : 'Failed to create live SportyBet booking code',
       bookingErrorCode: err.code || null,
       ...(err.bookingOutcomeUnknown?{bookingOutcomeUnknown:true}:{}),
@@ -1330,6 +1330,8 @@ app.post('/api/sportybet/session/relogin', express.json(), async (req, res) => {
   if (websiteAccessCode() && !hasWebsiteAccess(req)) {
     return res.status(401).json({ error: 'Website access required' });
   }
+  if (sportyDirect.sessionStatus().bookingMode !== 'session')
+    return res.status(410).json({ok:false,code:'SPORTYBET_SESSION_DISABLED',error:'Dummy login is disabled while public booking is enabled.'});
   try {
     const result = await sportyDirect.login({ force: true, bypassBackoff: true });
     res.json({ ok: true, result, session: sportyDirect.sessionStatus() });
@@ -3608,7 +3610,7 @@ const publicCacheScheduler=createWatScheduler({name:'SportyBet public refresh',t
   enabled:!['false','0','off'].includes(String(process.env.SPORTYBET_PUBLIC_CACHE_ENABLED||'true').toLowerCase()),maxRunMilliseconds:3300000});
 const next12hJob=createWatSlotJob({namespace:'telegram:next12h',getRedis,run:context=>runNext12hPicks({
   now:()=>new Date(),loadPool:async({signal})=>publicCandidates(await publicCache.usable({signal})),
-  validate:validatePublicSelections,assertSession:()=>sportyDirect.ensureSession({validate:true}),
+  validate:validatePublicSelections,assertBookingReady:()=>sportyDirect.assertBookingReady(),
   book:selections=>bookBet(selections.map(row=>({eventId:row.eventId,marketId:row.marketId,outcomeId:row.outcomeId,...(row.specifier?{specifier:row.specifier}:{})}))),
   send:(text,{signal})=>sendTelegramMessage(text,{}, {signal}),track:trackTelegramSlip,updateTrack:updateTrackedTicket,saveCode:saveTelegramNext12hCode,
 },context)});
@@ -4004,7 +4006,7 @@ app.post('/api/refresh', express.json(), (req, res) => {
 const httpServer=app.listen(PORT, () => {
   console.log(`Matchday site listening on :${PORT}`);
   publicCacheScheduler.start();next12hScheduler.start();
-  console.log('[SportyBet access] Public data reads; dummy-account recovery runs only when creating booking codes');
+  console.log(`[SportyBet access] Public data reads; booking mode=${sportyDirect.sessionStatus().bookingMode}`);
 });
 const stopSchedulers=()=>{publicCacheScheduler.stop();next12hScheduler.stop();};
 httpServer.once('close',stopSchedulers);
