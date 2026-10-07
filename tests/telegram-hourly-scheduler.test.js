@@ -143,6 +143,16 @@ test('empty hourly logs identify skipped or failed categories without revealing 
   assert.equal(h.logs.some(line=>line.includes('private-credential-bearing')),false);h.scheduler.stop();
 });
 
+test('a browser login failure reaches the hourly outcome and status without credential-bearing metadata',async()=>{
+  const h=protectedHarness(async()=>{throw Object.assign(Error('Fixture navigation timed out'),
+    {code:'SPORTYBET_AUTH_FAILED',reason:'browser_navigation_timeout',diagnostics:{reason:'browser_navigation_timeout',stage:'navigation',proxyConfigured:true,
+      password:'fixture-private-password',proxyUrl:'http://fixture-private-password@localhost'}});});
+  h.scheduler.start();h.setClock('2026-10-06T16:05:00Z');await h.scheduler.tick();
+  assert.equal(h.scheduler.status().lastRun.reason,'browser_navigation_timeout');
+  assert.equal(h.scheduler.status().lastRun.authFailure.stage,'navigation');
+  assert.ok(h.logs.some(line=>line.includes('outcome=browser_navigation_timeout')));
+  assert.doesNotMatch(JSON.stringify(h.scheduler.status()),/fixture-private-password|localhost/);h.scheduler.stop();
+});
 test('an unexpected runner rejection is caught and retries without killing the hourly clock',async()=>{
   const h=harness({runJob:async()=>{throw Error('test failure');}});h.scheduler.start();
   h.setClock('2026-10-06T16:05:00Z');await h.scheduler.tick();

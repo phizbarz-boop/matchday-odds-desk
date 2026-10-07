@@ -39,3 +39,11 @@ test('Redis protects slots across processes but a failed run releases its runnin
   const next={...context,slotKey:'2026-10-07T18:00'};await redis.set('test:once:'+next.slotKey,'another-worker');
   assert.equal((await job(next)).body.reason,'slot_in_progress');assert.equal((await job(next)).body.retryable,true);
 });
+test('a busy public-refresh slot logs its lock outcome without copying an upstream error',async()=>{
+  const messages=[];
+  const scheduler=createWatScheduler({name:'SportyBet public refresh',times:['06:30'],timers,now:()=>new Date('2026-10-07T08:13:00Z'),
+    logger:{log:line=>messages.push(line),error(){}},runJob:async()=>({statusCode:503,body:{retryable:true,reason:'slot_in_progress',error:'fixture-private-upstream-message'}})});
+  scheduler.start();await flush();
+  assert.ok(messages.some(line=>line.includes('outcome=slot_in_progress')));
+  assert.equal(messages.some(line=>line.includes('fixture-private-upstream-message')),false);scheduler.stop();
+});

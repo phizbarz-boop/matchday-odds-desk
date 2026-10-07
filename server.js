@@ -3,6 +3,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const {safeAuthDiagnostics}=require('./lib/sportyAuthDiagnostics');
 
 const app = express();
 app.set('trust proxy', 1); // Render forwards the real client IP.
@@ -1332,7 +1333,7 @@ async function getSportMarketProbe() {
   // One tiny public prematch page proves the server can reach SportyBet data
   // (geo/IP check) without touching the logged-in account.
   const { getFootballMarket: probeFootball } = require('./lib/sportybet');
-  return probeFootball('1x2', { hours: 24, maxPages: 1 });
+  return withPublicSportyRequest(()=>probeFootball('1x2', { hours: 24, maxPages: 1 }));
 }
 
 // Force a fresh dummy-account login (for example after changing the account
@@ -2379,6 +2380,7 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       code: err.code || null,
       detail: sessionFailed || process.env.NODE_ENV !== 'production' ? err.message : undefined,
       retryAt: err.retryAt || undefined,
+      authFailure:sessionFailed?safeAuthDiagnostics(err):undefined,
       requiresUserAction:sessionFailed?Boolean(err.requiresUserAction):undefined,
     });
   }

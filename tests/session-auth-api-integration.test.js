@@ -16,7 +16,7 @@ async function server(t, mode) {
   const child = fork(path.join(__dirname, 'fixtures/session-auth-api-server.js'), [], {cwd:path.join(__dirname, '..'), silent:true,
     env:{...process.env, NODE_ENV:'production', PORT:'0', REDIS_URL:'', HTTPS_PROXY:'', SPORTYBET_PROXY_URL:'',
       SPORTYBET_SESSION_FILE:sessionFile, SPORTYBET_ENDPOINT_LOGIN:'', SPORTYBET_ENDPOINT_LOGIN_CANDIDATES:'',
-      SPORTYBET_PHONE:'2348000000000', SPORTYBET_PASSWORD:'mock-test-password',SPORTYBET_LOGIN_METHOD:mode==='automated'?'browser':'api',
+      SPORTYBET_PHONE:'2348000000000', SPORTYBET_PASSWORD:'mock-test-password',SPORTYBET_LOGIN_METHOD:['automated','browser-failure'].includes(mode)?'browser':'api',
       SPORTYBET_BOOTSTRAP_COOKIES:mode === 'browser' ? 'accessToken=fresh-browser-token; refreshToken=fresh-refresh; deviceId=fresh-device' : '',
       SPORTYBET_LIVE_MAX_PAGES:'1', SESSION_TEST_MODE:mode, WEBSITE_ACCESS_CODE:''}});
   let logs = '';
@@ -37,7 +37,8 @@ async function server(t, mode) {
     const handler = message => { if (message.id === id) { child.off('message', handler); resolve(message.state); } };
     child.on('message', handler); child.send({type:'state', id});
   });
-  return {post, state};
+  const get=async route=>{const result=await fetch(`http://127.0.0.1:${port}${route}`);return {status:result.status,body:await result.json()};};
+  return {post,get,state};
 }
 const request = {sports:['football'], liveMode:'quick_cash', minProbability:0, targetOdds:1.05, maxSelections:1, betTypes:['home_win']};
 
@@ -78,4 +79,13 @@ test('production Auto Analyser automatically recovers a revoked session and book
   assert.equal(booking.status,200,JSON.stringify(booking.body));assert.equal(booking.body.shareCode,'SESSION-TEST-CODE');
   const state=await api.state();assert.equal(state.browserLogins,1);assert.equal(state.accountChecks,1);
   assert.equal(state.logins,0);assert.equal(state.ciphers,0);assert.equal(state.bookings,1);
+});
+test('public diagnostics still read SportyBet anonymously when automatic browser login is failing',async t=>{
+  const api=await server(t,'browser-failure');
+  const result=await api.post('/api/sportybet/auto-pick',request);
+  assert.equal(result.status,503);assert.equal(result.body.authFailure.stage,'navigation');
+  const diagnostics=await api.get('/api/sportybet/diagnostics');
+  assert.equal(diagnostics.status,200);assert.equal(diagnostics.body.publicDataProbe.ok,true);
+  assert.equal(diagnostics.body.session.lastLoginFailure.reason,'browser_navigation_timeout');
+  const state=await api.state();assert.equal(state.browserLogins,1);assert.ok(state.marketReads>0);
 });

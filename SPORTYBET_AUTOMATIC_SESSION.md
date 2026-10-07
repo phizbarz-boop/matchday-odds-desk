@@ -25,10 +25,10 @@ hourly Telegram job use this shared session.
 3. Use Node 20 or newer. Set the **Build Command** to:
 
    ```bash
-   npm install
+   npm ci --ignore-scripts=false
    ```
 
-   Keep the **Start Command** as `npm start`. `npm ci` also works. Both run the
+   Keep the **Start Command** as `npm start`. `npm install` also works. Both run the
    project's postinstall step to download the pinned Chromium browser. Build
    and runtime default to `PLAYWRIGHT_BROWSERS_PATH=0`, placing the browser
    inside the deployed package; an explicit prepared-browser path is retained.
@@ -95,6 +95,13 @@ and successful data probe. Diagnostics never include credential values.
 `refreshEndpointUnavailable: true` records a missing or unsupported refresh
 route. Browser recovery remains configured independently of that route.
 
+`lastLoginFailure` gives the fixed stage and reason for a failed automatic
+sign-in, with a known network code or bounded status codes when available.
+`nextLoginRetryAt` shows its cooldown. The public-data probe is anonymous and
+does not establish that account authentication succeeded. See
+[SPORTYBET_BROWSER_SIGNIN_FIX.md](SPORTYBET_BROWSER_SIGNIN_FIX.md) for the latest
+sign-in, proxy and public-cache lease changes and the meaning of the next logs.
+
 SportyBet can request an OTP/CAPTCHA, reject a password/account, block access
 from the server or change its form. Recovery stops at a verification prompt
 and reports the reason. Verification and rejected credentials have a
@@ -124,11 +131,11 @@ After downloading this ZIP into Downloads:
 ```bash
 cd ~/Documents &&
 session_dir=$(mktemp -d /tmp/plot207-session.XXXXXX) &&
-unzip -q ~/Downloads/matchday-odds-desk-render-session-fix.zip -d "$session_dir" &&
+unzip -q ~/Downloads/matchday-odds-desk-browser-signin-fix.zip -d "$session_dir" &&
 rsync -a --delete --exclude=.git --exclude='.env*' --exclude=node_modules --exclude=data --exclude='.sportybet-*' "$session_dir/matchday-odds-desk/" matchday-odds-desk/ &&
 cd matchday-odds-desk &&
 git add -A &&
-git commit -m "Install browser recovery during builds and handle unavailable SportyBet refresh" &&
+git commit -m "Improve SportyBet browser recovery and diagnose sign-in failures" &&
 git push origin main
 ```
 
@@ -136,7 +143,7 @@ git push origin main
 
 The full Node test suite covers session recovery, build installation, public
 cache collection, hourly QC/live tickets and next-12-hour ticket packs.
-See [RENDER_BUILD_AND_SESSION_FIX.md](RENDER_BUILD_AND_SESSION_FIX.md) for this
+See [SPORTYBET_BROWSER_SIGNIN_FIX.md](SPORTYBET_BROWSER_SIGNIN_FIX.md) for this
 update's checks and the meaning of the deployment logs.
 
 Focused tests exercise expiry, proactive refresh, rotated refresh tokens,

@@ -9,6 +9,7 @@ const {boards} = require('./sportybet-live-format');
 const fixture = boards();
 const state = {logins:0, ciphers:0, accountChecks:0, marketReads:0, bookings:0};
 const automated=process.env.SESSION_TEST_MODE==='automated';
+const browserFailure=process.env.SESSION_TEST_MODE==='browser-failure';
 const successful = process.env.SESSION_TEST_MODE === 'browser'||automated;
 if(automated) {
   state.browserLogins=0;
@@ -17,6 +18,11 @@ if(automated) {
     {name:'refreshToken',value:'fresh-refresh',expiresAt:Date.now()+86400000},
     {name:'deviceId',value:'fresh-device',expiresAt:null},
   ]};});
+}
+if(browserFailure){
+  state.browserLogins=0;
+  direct.setBrowserLoginForTesting(async()=>{state.browserLogins++;throw Object.assign(Error('Fixture navigation timed out'),
+    {code:'SPORTYBET_AUTH_FAILED',reason:'browser_navigation_timeout',diagnostics:{reason:'browser_navigation_timeout',stage:'navigation',proxyConfigured:false}});});
 }
 const bySportId = new Map(Object.entries(SPORT_IDS).map(([sport, id]) => [id, fixture[sport]]));
 const response = payload => ({ok:true, status:200,
@@ -32,6 +38,10 @@ direct.setFetchForTesting(async (url, options) => {
   if (endpoint.endsWith('/patron/accessToken')) {
     state.logins++;
     return response({bizCode:12000, innerMsg:'Mock failure', message:'Looks like we’re having trouble on our end. Please try again later.'});
+  }
+  if(browserFailure&&endpoint.includes('/factsCenter/')){
+    assert.equal(options.headers.Cookie,undefined);assert.equal(options.headers.authorization,undefined);
+    state.marketReads++;return response(bySportId.get(parsed.searchParams.get('sportId'))||fixture.football);
   }
   assert.equal(successful, true, 'A rejected login must stop the market scan');
   assert.match(options.headers.Cookie, /accessToken=fresh-browser-token/);

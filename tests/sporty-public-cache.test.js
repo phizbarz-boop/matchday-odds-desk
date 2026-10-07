@@ -125,3 +125,28 @@ test('a damaged cache can be rebuilt instead of breaking every later refresh',as
   const cache=createPublicCache({getRedis:async()=>redis,file,collect:async()=>catalog,logger:{warn(){}}});
   assert.equal(await cache.read(),null);await cache.refresh();assert.equal((await cache.read()).schemaVersion,1);
 });
+test('an active cache lease renews, a stopped worker expires within 15 minutes, and a stale worker cannot overwrite the new snapshot',async t=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'public-lease-test-'));t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const file=path.join(directory,'catalog.json'),redis=fakeRedis(),expires=new Map();let seconds=0;
+  const get=redis.get.bind(redis),set=redis.set.bind(redis);
+  redis.get=async key=>{if(expires.has(key)&&expires.get(key)<=seconds){redis.data.delete(key);expires.delete(key);}return get(key);};
+  redis.set=async(key,value,options={})=>{await redis.get(key);const result=await set(key,value,options);if(result==='OK'&&options.EX)expires.set(key,seconds+options.EX);return result;};
+  redis.eval=async(script,{keys,arguments:args})=>{
+    if(await redis.get(keys[0])!==args[0])return 0;
+    if(script.includes('"EXPIRE"')){expires.set(keys[0],seconds+900);return 1;}
+    redis.data.delete(keys[0]);expires.delete(keys[0]);return 1;
+  };
+  let heartbeat;const timers={setInterval(fn){heartbeat=fn;return {unref(){}};},clearInterval(){}};
+  const previous=await collect(client()),fresh={...previous,generatedAt:'2026-10-07T06:00:00.000Z'};
+  await redis.set(CACHE_KEY,JSON.stringify(previous));
+  let entered,release;const started=new Promise(resolve=>{entered=resolve;}),waiting=new Promise(resolve=>{release=resolve;});
+  const old=createPublicCache({getRedis:async()=>redis,file,timers,collect:async()=>{entered();await waiting;return previous;}});
+  const oldRun=old.refresh();await started;
+  seconds=400;heartbeat();await new Promise(setImmediate);
+  const replacement=createPublicCache({getRedis:async()=>redis,file,timers,collect:async()=>fresh});
+  seconds=1299;assert.equal((await replacement.refresh()).reason,'public_refresh_in_progress');
+  assert.equal(replacement.status().lastRun.status,'waiting');
+  seconds=1300;assert.equal((await replacement.refresh()).catalog.generatedAt,fresh.generatedAt);
+  const rejected=assert.rejects(oldRun,/lease was lost/);release();await rejected;
+  assert.equal(JSON.parse(await redis.get(CACHE_KEY)).generatedAt,fresh.generatedAt);
+});

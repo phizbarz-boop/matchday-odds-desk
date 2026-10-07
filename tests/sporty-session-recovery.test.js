@@ -380,6 +380,20 @@ test('a browser-recovered session survives restart with no bootstrap cookie reco
   second.direct.setFetchForTesting(async(_url,options)=>{checks++;assert.match(options.headers.Cookie,/automatic-browser-access/);return response({bizCode:10000,data:{userId:'dummy'}});});
   await second.direct.ensureSession({validate:true});assert.equal(checks,1);assert.equal(second.direct.sessionStatus().lastLoginMethod,'browser');
 });
+test('the direct client passes its configured proxy into browser recovery and preserves safe failures during backoff',async t=>{
+  const proxy='http://fixture-proxy-user:fixture-proxy-password@localhost:8080';
+  const {direct}=client(t,{...browserCredentials,SPORTYBET_PROXY_URL:proxy});let logins=0;
+  direct.setBrowserLoginForTesting(async options=>{
+    logins++;assert.equal(options.proxyUrl,proxy);
+    throw Object.assign(Error('Fixture navigation timed out'),{code:'SPORTYBET_AUTH_FAILED',reason:'browser_navigation_timeout',
+      diagnostics:{stage:'navigation',reason:'browser_navigation_timeout',proxyConfigured:true,proxyUrl:proxy,password:'fixture-private-password'}});
+  });
+  await assert.rejects(direct.ensureSession(),e=>e.reason==='browser_navigation_timeout');
+  const failure=direct.sessionStatus().lastLoginFailure;
+  assert.equal(failure.stage,'navigation');assert.equal(failure.proxyConfigured,true);
+  assert.doesNotMatch(JSON.stringify(failure),/fixture-proxy|fixture-private-password|localhost/);
+  await assert.rejects(direct.ensureSession(),e=>e.diagnostics.stage==='navigation');assert.equal(logins,1);
+});
 test('local export preserves the observed hyphenated device cookie',()=>{
   assert.equal(bootstrapLine([{domain:'.sportybet.com',name:'accessToken',value:'access',expires:-1},
     {domain:'.sportybet.com',name:'refreshToken',value:'refresh',expires:-1},
