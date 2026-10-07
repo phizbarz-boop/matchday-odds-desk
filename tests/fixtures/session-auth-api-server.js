@@ -8,13 +8,15 @@ const {direct, SPORT_IDS, extractUpcomingEvents} = require('../../lib/sportybet'
 const {boards} = require('./sportybet-live-format');
 const fixture = boards();
 const state = {logins:0, ciphers:0, accountChecks:0, marketReads:0, bookings:0, lookupReads:0};
-const automated=process.env.SESSION_TEST_MODE==='automated';
+const delayed=process.env.SESSION_TEST_MODE==='delayed-booking';
+const automated=process.env.SESSION_TEST_MODE==='automated'||delayed;
+let releaseLogin,releaseBooking;
 const pageCheckFailure=process.env.SESSION_TEST_MODE==='page-check-failure';
 const browserFailure=process.env.SESSION_TEST_MODE==='browser-failure'||pageCheckFailure;
 const successful = process.env.SESSION_TEST_MODE === 'browser'||automated;
 if(automated) {
   state.browserLogins=0;
-  direct.setBrowserLoginForTesting(async()=>{state.browserLogins++;return {verifiedAt:0,cookies:[
+  direct.setBrowserLoginForTesting(async()=>{state.browserLogins++;if(delayed)await new Promise(resolve=>{releaseLogin=resolve;});return {verifiedAt:0,cookies:[
     {name:'accessToken',value:'fresh-browser-token',expiresAt:Date.now()+3600000},
     {name:'refreshToken',value:'fresh-refresh',expiresAt:Date.now()+86400000},
     {name:'deviceId',value:'fresh-device',expiresAt:null},
@@ -62,7 +64,8 @@ direct.setFetchForTesting(async (url, options) => {
     state.accountChecks++; return response({bizCode:10000, data:{userId:'dummy-test-user'}});
   }
   if (endpoint.endsWith('/orders/share')) {
-    state.bookings++; return response({bizCode:10000, data:{shareCode:'SESSION-TEST-CODE'}});
+    state.bookings++;if(delayed)await new Promise(resolve=>{releaseBooking=resolve;});
+    return response({bizCode:10000, data:{shareCode:'SESSION-TEST-CODE'}});
   }
   assert.fail('Unexpected private endpoint: '+endpoint);
 });
@@ -72,5 +75,9 @@ express.application.listen = function (...args) {
   server.on('listening', () => process.send({port:server.address().port}));
   return server;
 };
-process.on('message', message => { if (message.type === 'state') process.send({id:message.id, state}); });
+process.on('message', message => {
+  if(message.type==='release_login')releaseLogin?.();
+  if(message.type==='release_booking')releaseBooking?.();
+  if(['state','release_login','release_booking'].includes(message.type))process.send({id:message.id,state});
+});
 require('../../server');

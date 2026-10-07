@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const {safeAuthDiagnostics}=require('./lib/sportyAuthDiagnostics');
+const {createBookingRequests}=require('./lib/sportyBookingRequests');
 
 const app = express();
 app.set('trust proxy', 1); // Render forwards the real client IP.
@@ -24,6 +25,7 @@ const {createWatScheduler,createWatSlotJob,watParts}=require('./lib/watScheduler
 const {PLANS:NEXT12H_PLANS,runNext12hPicks}=require('./lib/telegramNext12h');
 const {refreshTicketResults,buildPerformanceReport,performanceText,registerTelegramPerformanceRoute}=require('./lib/telegramPerformance');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
+const bookingRequests=createBookingRequests({getRedis,runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
 
 let redisClient = null;
 async function getRedis() {
@@ -1243,7 +1245,7 @@ app.get('/api/sportybet/live/odds', async (req, res) => {
 // POST /api/sportybet/live/book { selections: [...] }
 // Every selection is re-validated against a fresh live board scrape first;
 // suspended/settled legs are dropped and reported, never booked blindly.
-app.post('/api/sportybet/live/book', express.json(), async (req, res) => {
+app.post('/api/sportybet/live/book', express.json(), bookingRequests.wrap(async (req, res) => {
   try {
     if (!(await allowBookingRequest(req))) {
       return res.status(429).json({ error: 'Too many booking requests; try again in a minute' });
@@ -1253,6 +1255,7 @@ app.post('/api/sportybet/live/book', express.json(), async (req, res) => {
       return res.status(400).json({ error: 'selections must be an array containing 1-100 selections' });
     }
 
+    res.bookingStage?.('checking_selections');
     const { valid, dropped } = await validateLiveSelections(selections, {
       maxPages: Math.max(1, Math.min(20, parseInt(process.env.SPORTYBET_LIVE_MAX_PAGES || '5', 10))),
     });
@@ -1263,6 +1266,7 @@ app.post('/api/sportybet/live/book', express.json(), async (req, res) => {
       });
     }
 
+    res.bookingStage?.('creating_code');
     const result = await bookBet(valid, { preferFullMarket: true });
     res.json({
       ...result,
@@ -1280,13 +1284,14 @@ app.post('/api/sportybet/live/book', express.json(), async (req, res) => {
         ? 'SportyBet dummy account is not configured (SPORTYBET_PHONE / SPORTYBET_PASSWORD)'
         : 'Failed to create live SportyBet booking code',
       bookingErrorCode: err.code || null,
+      ...(err.bookingOutcomeUnknown?{bookingOutcomeUnknown:true}:{}),
       ...(authFailure?{authFailure,retryAt:err.retryAt||sportyDirect.sessionStatus().nextLoginRetryAt}:{}),
       detail: err.code === 'SPORTYBET_BOOKING_FAILED'
         ? err.message
         : (process.env.NODE_ENV === 'production' ? undefined : err.message),
     });
   }
-});
+}));
 
 // Direct-SportyBet session diagnostics. Shows dummy-account login state, cookie
 // expiry times, keep-alive health and proxy/geo-block status. Guarded by the
@@ -3824,7 +3829,8 @@ app.post('/api/telegram/send-slip', express.json(), async (req, res) => {
   }
 });
 
-app.post('/api/sportybet/book', express.json(), async (req, res) => {
+app.get('/api/sportybet/book/status/:requestId',bookingRequests.status);
+app.post('/api/sportybet/book', express.json(), bookingRequests.wrap(async (req, res) => {
   try {
     if (!(await allowBookingRequest(req))) {
       return res.status(429).json({ error: 'Too many booking requests; try again in a minute' });
@@ -3847,6 +3853,7 @@ app.post('/api/sportybet/book', express.json(), async (req, res) => {
     let bookable = selections;
     let droppedLive = [];
     if (liveLegs.length) {
+      res.bookingStage?.('checking_selections');
       const prematchLegs = selections.filter(s => !(s && s.live === true));
       try {
         const check = await validateLiveSelections(liveLegs.map(s => ({
@@ -3876,31 +3883,35 @@ app.post('/api/sportybet/book', express.json(), async (req, res) => {
         });
       }
     }
+    res.bookingStage?.('creating_code');
     const result = await bookBet(bookable, { preferFullMarket });
     const slip = sanitizeTelegramSlip(req.body && req.body.telegramContext);
-    const telegramSendToken = await createTelegramSendToken({
+    let sendTimer;
+    const telegramSendToken = await Promise.race([createTelegramSendToken({
       shareCode: result?.shareCode || null,
       shareURL: result?.shareURL || null,
       slip,
       createdAt: new Date().toISOString(),
-    });
+    }),new Promise(resolve=>{sendTimer=setTimeout(()=>resolve(null),3000);})]).catch(()=>null);
+    clearTimeout(sendTimer); // A sharing-token error cannot discard a created code.
     res.json({ ...result, telegramSendToken, ...(droppedLive.length ? { droppedLive } : {}) });
   } catch (err) {
     console.error('SportyBet booking error:', err.message);
     const authFailure=safeAuthDiagnostics(err);
-    const status = authFailure || err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : 502;
+    const status = authFailure || err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : (err.code==='SPORTYBET_BOOKING_TIMEOUT'?504:502);
     res.status(status).json({
       error: err.code === 'SPORTYBET_NOT_CONFIGURED'
         ? 'SportyBet integration is not configured yet'
         : 'Failed to create SportyBet booking code',
       bookingErrorCode: err.code || null,
+      ...(err.bookingOutcomeUnknown?{bookingOutcomeUnknown:true}:{}),
       ...(authFailure?{authFailure,retryAt:err.retryAt||sportyDirect.sessionStatus().nextLoginRetryAt}:{}),
       detail: err.code === 'SPORTYBET_BOOKING_FAILED'
         ? err.message
         : (process.env.NODE_ENV === 'production' ? undefined : err.message),
     });
   }
-});
+}));
 
 // Manual/scheduled trigger to run the refresh job (protected by a shared secret).
 // Fetching direct SportyBet fixtures and full event markets can take

@@ -65,6 +65,10 @@ SPORTYBET_BOOKINGS_PER_MINUTE=5
 H2H_MAX_WEIGHT=0.18
 ```
 
+## Booking request tracking
+
+The website submits a booking once and polls its status, allowing session recovery to finish beyond the former 18-second browser cutoff. Repeating the same request retrieves its saved result. The provider booking timeout defaults to 45 seconds. See [SPORTYBET_BOOKING_TIMEOUT_FIX.md](SPORTYBET_BOOKING_TIMEOUT_FIX.md) for deployment and retry details.
+
 ## Booking-only session recovery
 
 Public reads do not load dummy credentials or require a session. The website does not attempt a startup login or start periodic account maintenance.

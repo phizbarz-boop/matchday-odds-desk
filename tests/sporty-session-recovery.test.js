@@ -64,6 +64,19 @@ test('a rejected public feed never falls back to dummy authentication',async t=>
   assert.equal(reads,1);assert.equal(direct._session.loaded,false);assert.equal(direct.sessionStatus().loginCount,0);
 });
 
+test('a lost booking response is marked uncertain and is never automatically posted a second time',async t=>{
+  const {direct}=client(t);direct._session.loaded=true;
+  direct._session.cookies.set('accessToken',{value:'accepted-fixture-session',expiresAt:null});
+  let posts=0;
+  direct.setFetchForTesting(async(url,options)=>{
+    if(new URL(url).pathname.endsWith('/patron/account/info'))return response({bizCode:10000,data:{userId:'fixture'}});
+    assert.equal(options.method,'POST');assert.match(new URL(url).pathname,/\/orders\/share$/);
+    posts++;throw Error('Fixture connection lost after submitting booking');
+  });
+  await assert.rejects(direct.createBookingCode([{eventId:'fixture',marketId:'1',outcomeId:'1'}]),e=>e.code==='SPORTYBET_NETWORK'&&e.bookingOutcomeUnknown===true);
+  assert.equal(posts,1);
+});
+
 test('HTTP 200 rejected login never becomes authenticated, even with an access cookie', async t => {
   const {direct} = client(t, credentials);
   let calls = 0;

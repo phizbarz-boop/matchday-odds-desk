@@ -1,5 +1,7 @@
 # Automatic SportyBet dummy-account recovery
 
+Current booking-timeout update: the website tracks a recoverable booking request instead of aborting the whole operation after 18 seconds. See [SPORTYBET_BOOKING_TIMEOUT_FIX.md](SPORTYBET_BOOKING_TIMEOUT_FIX.md).
+
 The server renews accepted sessions and signs back in through SportyBet's own
 Nigeria login form when refresh is rejected. Normal expiry no longer requires
 copying browser cookies into Render. This recovery is used only when creating
@@ -126,7 +128,7 @@ After downloading this ZIP into Downloads:
 ```bash
 cd ~/Documents &&
 session_dir=$(mktemp -d /tmp/plot207-session.XXXXXX) &&
-unzip -q ~/Downloads/matchday-odds-desk-public-booking-only.zip -d "$session_dir" &&
+unzip -q ~/Downloads/matchday-odds-desk-booking-timeout-fix.zip -d "$session_dir" &&
 rsync -a --delete --exclude=.git --exclude='.env*' --exclude=node_modules --exclude=data --exclude='.sportybet-*' "$session_dir/matchday-odds-desk/" matchday-odds-desk/ &&
 cd matchday-odds-desk &&
 git add -A &&

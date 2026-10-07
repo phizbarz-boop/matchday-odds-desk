@@ -34,4 +34,4 @@ The website football dashboard requests `/api/predictions?source=current`. The d
 
 Deploy the updated source using the existing server settings. No new required environment variables or paid data key are needed. Keep the dummy SportyBet credentials for creating booking/share codes.
 
-The current update passed all 314 Node regression tests, including public reads with dummy credentials configured and booking-time session recovery. Integration tests use local fixtures and mocked SportyBet booking responses; this update does not verify production account authentication.
+The current update passed all 332 Node regression tests, including public reads with dummy credentials configured and booking-time session recovery. Integration tests use local fixtures and mocked SportyBet booking responses; this update does not verify production account authentication.

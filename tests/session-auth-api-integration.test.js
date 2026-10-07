@@ -5,18 +5,19 @@ const {fork} = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const {randomUUID}=require('node:crypto');
 
 async function server(t, mode) {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'sporty-session-api-'));
   const sessionFile = path.join(folder, 'session.json');
   if (mode === 'browser') fs.writeFileSync(sessionFile, JSON.stringify({token:'stale-persisted-bearer',
     cookies:[['accessToken', {value:'stale-persisted-cookie', expiresAt:null}]]}));
-  if(mode==='automated')fs.writeFileSync(sessionFile,JSON.stringify({token:'expired-bearer',tokenExpiresAt:1,
+  if(['automated','delayed-booking'].includes(mode))fs.writeFileSync(sessionFile,JSON.stringify({token:'expired-bearer',tokenExpiresAt:1,
     cookies:[['refreshToken',{value:'revoked-refresh',expiresAt:null}]]}));
   const child = fork(path.join(__dirname, 'fixtures/session-auth-api-server.js'), [], {cwd:path.join(__dirname, '..'), silent:true,
     env:{...process.env, NODE_ENV:'production', PORT:'0', REDIS_URL:'', HTTPS_PROXY:'', SPORTYBET_PROXY_URL:'',
       SPORTYBET_SESSION_FILE:sessionFile, SPORTYBET_ENDPOINT_LOGIN:'', SPORTYBET_ENDPOINT_LOGIN_CANDIDATES:'',
-      SPORTYBET_PHONE:'2348000000000', SPORTYBET_PASSWORD:'mock-test-password',SPORTYBET_LOGIN_METHOD:['automated','browser-failure','page-check-failure'].includes(mode)?'browser':'api',
+      SPORTYBET_PHONE:'2348000000000', SPORTYBET_PASSWORD:'mock-test-password',SPORTYBET_LOGIN_METHOD:['automated','browser-failure','page-check-failure','delayed-booking'].includes(mode)?'browser':'api',
       SPORTYBET_BOOTSTRAP_COOKIES:mode === 'browser' ? 'accessToken=fresh-browser-token; refreshToken=fresh-refresh; deviceId=fresh-device' : '',
       SPORTYBET_LIVE_MAX_PAGES:'1', SESSION_TEST_MODE:mode, WEBSITE_ACCESS_CODE:''}});
   let logs = '';
@@ -28,14 +29,14 @@ async function server(t, mode) {
     child.once('error', error => { clearTimeout(timer); reject(error); });
     child.once('exit', code => { clearTimeout(timer); reject(new Error('Test server exited ' + code + ': ' + logs)); });
   });
-  const post = async (route, body) => {
-    const result = await fetch(`http://127.0.0.1:${port}${route}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const post = async (route, body,headers={}) => {
+    const result = await fetch(`http://127.0.0.1:${port}${route}`, {method:'POST', headers:{'Content-Type':'application/json',...headers}, body:JSON.stringify(body)});
     return {status:result.status, body:await result.json()};
   };
-  const state = () => new Promise(resolve => {
+  const state = (type='state') => new Promise(resolve => {
     const id = 'session-state';
     const handler = message => { if (message.id === id) { child.off('message', handler); resolve(message.state); } };
-    child.on('message', handler); child.send({type:'state', id});
+    child.on('message', handler); child.send({type, id});
   });
   const get=async route=>{const result=await fetch(`http://127.0.0.1:${port}${route}`);return {status:result.status,body:await result.json()};};
   return {post,get,state};
@@ -117,4 +118,27 @@ test('booking and session diagnostics preserve page-check failures while data re
   const live=await api.get('/api/sportybet/live/odds?sport=football&market=all');assert.equal(live.status,200);
   assert.doesNotMatch(JSON.stringify([booking.body,retry.body,diagnostics.body]),/fixture-private-call-log|mock-test-password/);
   assert.equal((await api.state()).browserLogins,1);
+});
+
+test('the HTTP booking job returns before slow login, survives connection close and recovers one completed code',async t=>{
+  const api=await server(t,'delayed-booking');
+  const picked=await api.post('/api/sportybet/auto-pick',request);assert.equal(picked.status,200);assertPublicOnly(await api.state());
+  const body={requestId:randomUUID(),selections:picked.body.selections},headers={Prefer:'respond-async',Connection:'close'};
+  const first=await api.post('/api/sportybet/book',body,headers);
+  assert.equal(first.status,202,JSON.stringify(first.body));assert.equal(first.body.requestId,body.requestId);
+  const until=async check=>{for(let i=0;i<100;i++){const state=await api.state();if(check(state))return state;await new Promise(resolve=>setTimeout(resolve,10));}assert.fail('Booking stage did not advance');};
+  await until(state=>state.browserLogins===1);
+  const retry=await api.post('/api/sportybet/book',body,headers);assert.equal(retry.status,202);
+  const publicWhileLogin=await api.post('/api/sportybet/auto-pick',request);assert.equal(publicWhileLogin.status,200);
+  assert.equal((await api.get(first.body.statusUrl)).status,202);
+  await api.state('release_login');await until(state=>state.bookings===1);
+  assert.equal((await api.get(first.body.statusUrl)).status,202);
+  await api.state('release_booking');
+  let finished;
+  for(let i=0;i<100;i++){finished=await api.get(first.body.statusUrl);if(finished.status!==202)break;await new Promise(resolve=>setTimeout(resolve,10));}
+  assert.equal(finished.status,200,JSON.stringify(finished.body));assert.equal(finished.body.shareCode,'SESSION-TEST-CODE');assert.ok(finished.body.telegramSendToken);
+  const completed=await api.post('/api/sportybet/book',body,headers);assert.equal(completed.body.shareCode,finished.body.shareCode);
+  assert.equal(completed.body.telegramSendToken,finished.body.telegramSendToken);
+  const state=await api.state();assert.equal(state.browserLogins,1);assert.equal(state.bookings,1);
+  assert.doesNotMatch(JSON.stringify(finished.body),/fresh-browser-token|fresh-refresh|mock-test-password/);
 });

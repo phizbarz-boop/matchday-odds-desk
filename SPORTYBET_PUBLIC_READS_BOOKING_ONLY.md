@@ -1,5 +1,7 @@
 # Public SportyBet reads and booking-only login
 
+Current booking-timeout update: the website tracks a recoverable booking request instead of aborting the whole operation after 18 seconds. See [SPORTYBET_BOOKING_TIMEOUT_FIX.md](SPORTYBET_BOOKING_TIMEOUT_FIX.md).
+
 User requests read SportyBet's public website JSON feeds. Fixtures, odds, full event markets, live/QC analysis, imported booking-code analysis, replacement selections, result checks and public cache refreshes do not load or send dummy-account credentials. The optional football statistics collector opens public match pages in a fresh browser context.
 
 There is no startup login or background session keep-alive in the website. An expired dummy session or failed sign-in cooldown cannot prevent public analysis. A public-feed error is reported as a source error; it does not trigger an account login or substitute old market prices.
@@ -28,7 +30,7 @@ Download this ZIP to Downloads, then run:
 ```bash
 cd ~/Documents &&
 update_dir=$(mktemp -d /tmp/plot207-update.XXXXXX) &&
-unzip -q ~/Downloads/matchday-odds-desk-public-booking-only.zip -d "$update_dir" &&
+unzip -q ~/Downloads/matchday-odds-desk-booking-timeout-fix.zip -d "$update_dir" &&
 rsync -a --delete --exclude=.git --exclude='.env*' --exclude=node_modules --exclude=data --exclude='.sportybet-*' "$update_dir/matchday-odds-desk/" matchday-odds-desk/ &&
 cd matchday-odds-desk &&
 git add -A &&
@@ -40,4 +42,4 @@ Keep the existing Render build command `npm ci --ignore-scripts=false` and start
 
 ## Validation
 
-All 314 Node tests passed. Tests verify public reads with configured and saved dummy credentials, missing/expired sessions, no account headers, unchanged private session storage, public feed errors without login fallback, booking-time recovery and its shared cooldown, safe failure diagnostics, removed hourly endpoints and schedules, retained next-12-hours picks, public results/ROI and website live/QC booking. Real Chromium tests use local fixtures and fake credentials. No real account login, booking or Telegram send was performed for this update.
+All 332 Node tests passed. Tests verify public reads with configured and saved dummy credentials, missing/expired sessions, no account headers, unchanged private session storage, public feed errors without login fallback, booking-time recovery and its shared cooldown, safe failure diagnostics, removed hourly endpoints and schedules, retained next-12-hours picks, public results/ROI and website live/QC booking. Real Chromium tests use local fixtures and fake credentials. No real account login, booking or Telegram send was performed for this update.
