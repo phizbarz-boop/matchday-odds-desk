@@ -8,12 +8,16 @@ run inside the application; they do not depend on GitHub's hourly scheduler.
 | --- | --- | --- |
 | QC Ice Hockey, Basketball, Handball + Volleyball, Football; 0% minimum | Every hour at :05 by default | App server |
 | Live All Sports; 85% minimum | Same hourly batch | App server |
+| Next 12h: 10,000x, 2,500x, 500x, three 100x variations | 07:00 and 18:00 daily | App server |
 | SAFE; 85%, combined odds 1.30–5.00 | 08:25 daily | GitHub Actions |
 | Results, closest/worst tickets and hypothetical ₦100 ROI | 00:10 and 12:10 | GitHub Actions |
 
 See [TELEGRAM_DIRECT_HOURLY.md](TELEGRAM_DIRECT_HOURLY.md) for direct scheduling
 and [TELEGRAM_HOURLY_SPORT_QC_AND_ROI.md](TELEGRAM_HOURLY_SPORT_QC_AND_ROI.md)
 for selection rules and reports.
+The additional prematch targets use the public SportyBet cache with fresh
+market checks and the dummy account for codes; see
+[PUBLIC_CACHE_AND_NEXT12H_PICKS.md](PUBLIC_CACHE_AND_NEXT12H_PICKS.md).
 
 ## Bot and destination
 

@@ -15,16 +15,16 @@ test('WAT calendar date remains timezone-correct for daily deduplication', () =>
   assert.equal(watMinuteOfDay(new Date('2026-09-18T07:25:00Z')), 505);
 });
 
-test('one CopyHub-style daily workflow refreshes all six sports; old sport workflows are manual-only', () => {
+test('public refresh is manual-only on GitHub; three automatic slots belong to the app', () => {
   const daily = workflow('refresh.yml');
-  assert.match(daily, /Plot207 All Sports Daily Predictions/);
-  assert.match(daily, /cron: ['"]20 6 \* \* \*['"]/);
+  assert.match(daily, /Public SportyBet Prediction Cache/);
+  assert.doesNotMatch(daily, /cron:/);
   assert.match(daily, /workflow_dispatch/);
   assert.match(daily, /cancel-in-progress:\s*false/);
-  assert.match(daily, /node-version:\s*['"]20['"]/);
-  assert.match(daily, /npm run browser:install/);
-  assert.doesNotMatch(daily, /npm install --no-save playwright@/, 'Daily refresh must use the locked browser dependency');
-  assert.match(daily, /node jobs\/all-sports-daily-refresh\.js/);
+  assert.doesNotMatch(daily, /SPORTYBET_(PHONE|PASSWORD|BOOTSTRAP_COOKIES)|browser:install|SPORTYSOCIAL/);
+  assert.match(daily, /api\/refresh/);
+  const server=fs.readFileSync(path.join(root,'server.js'),'utf8');
+  assert.match(server, /times:\['06:30','12:30','17:30'\]/);
 
   const orchestrator = fs.readFileSync(path.join(root, 'jobs/all-sports-daily-refresh.js'), 'utf8');
   for (const required of [

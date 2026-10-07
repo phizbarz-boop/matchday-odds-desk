@@ -54,9 +54,10 @@ test('hourly QC creates current codes, sends to Telegram and preserves Today’s
     const repeat=await post('/api/telegram/performance-report',{}, {'x-telegram-job-secret':'qc-secret'});
     assert.equal(repeat.body.reason,'already_reported_this_period');assert.equal((await rpc('state')).messages.length,before);
   });
-  await t.test('scheduled status advertises only SAFE and the five hourly templates',async()=>{
+  await t.test('scheduled status advertises SAFE, five hourly templates and six next-12h targets',async()=>{
     const response=await fetch(`http://127.0.0.1:${port}/api/telegram/status`);const data=await response.json();
-    assert.equal(data.targets.length,6);assert.ok(data.targets.includes('QC FOOTBALL'));
+    assert.equal(data.targets.length,12);assert.ok(data.targets.includes('QC FOOTBALL'));
+    assert.deepEqual(data.next12hRules.targets.map(p=>p.targetOdds),[10000,2500,500,100,100,100]);
     assert.ok(!data.targets.includes(2)&&!data.targets.includes(3));assert.ok(data.targets.every(x=>!String(x).startsWith('1000')));
     assert.equal(data.rules.performance.stakePerTicket,100);assert.equal(data.rules.hourly.dummySessionRequired,true);
   });

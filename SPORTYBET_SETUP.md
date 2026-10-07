@@ -34,15 +34,15 @@ missing. No paid football data subscription or key is required.
 
 Website and Telegram user requests now fetch current SportyBet fixtures/markets
 and calculate selections on demand. They bypass saved daily market snapshots;
-Daily Prediction Refresh remains useful for historical statistics and scheduled
-jobs. See `SPORTYBET_ON_DEMAND.md`. No additional setting enables this behavior.
+Daily Prediction Refresh now caches the public SportyBet fixture and market
+feeds at 06:30, 12:30 and 17:30 WAT without dummy login. See
+`PUBLIC_CACHE_AND_NEXT12H_PICKS.md` and `SPORTYBET_ON_DEMAND.md`.
 
-For the GitHub refresh workflow also set `SPORTYBET_PHONE` and
-`SPORTYBET_PASSWORD` as repository secrets. Keep `TELEGRAM_JOB_SECRET` the same
-on GitHub and Render so the collector can publish its snapshot. The workflow
-installs the project's pinned Playwright/Chromium. Manually: run `npm ci`,
-`npm run browser:download`, then `node jobs/sporty-football-statistics-collector.js`
-before `npm run refresh`.
+The manual GitHub public-refresh workflow needs `REFRESH_SECRET`, not dummy
+account or collector credentials. Keep `TELEGRAM_JOB_SECRET` the same on GitHub
+and Render for protected manual Telegram jobs. Optional historical football
+statistics collection still uses `node jobs/sporty-football-statistics-collector.js`
+and a configured dummy session; it is not required by `npm run refresh`.
 
 Optional — only needed if diagnostics shows `SPORTYBET_GEO_BLOCKED`.
 Reachability depends on the server IP and SportyBet's current restrictions:

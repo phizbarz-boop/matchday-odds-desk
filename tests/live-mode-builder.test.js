@@ -161,7 +161,7 @@ test('standalone live page is removed and Auto Builder carries the match-status 
 
 // --- refresh job --------------------------------------------------------------
 
-test('daily refresh seeds snapshots for all six sports with file fallback', () => {
+test('legacy snapshots remain compatible while the daily entry point uses the public catalogue', () => {
   assert.match(refreshSrc, /async function collectSportySnapshots/);
   for (const sport of ['basketball', 'hockey', 'handball', 'volleyball', 'tennis']) {
     assert.ok(refreshSrc.includes(`${sport}: ['winner','totals'`), `refresh must seed ${sport} snapshots`);
@@ -170,7 +170,10 @@ test('daily refresh seeds snapshots for all six sports with file fallback', () =
   assert.match(refreshSrc, /'home_ou05','away_ou05','home_ou45','away_ou45'/);
   assert.match(refreshSrc, /function sportySnapshotKey\(sport, kind\)/, 'refresh must share the server snapshot key scheme');
   assert.match(refreshSrc, /writeSnapshotFile\(key, \{ \.\.\.snap\.payload/, 'no-Redis branch must write snapshot files');
-  assert.match(refreshSrc, /SPORTYBET_SNAPSHOT_SEED/, 'snapshot seeding must be toggleable');
+  const entryPoint=refreshSrc.slice(refreshSrc.indexOf('async function main()')).split('\nif (require.main')[0];
+  assert.match(entryPoint, /sportyPublicCache/);
+  assert.match(entryPoint, /cache\.refresh\(/);
+  assert.doesNotMatch(entryPoint, /ensureSession|collectSportySnapshots|statistics-collector/);
 });
 
 test('refresh snapshot keys match the server scheme including the team-goal suffix', () => {
