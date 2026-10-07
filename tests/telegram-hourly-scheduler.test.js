@@ -153,6 +153,17 @@ test('a browser login failure reaches the hourly outcome and status without cred
   assert.ok(h.logs.some(line=>line.includes('outcome=browser_navigation_timeout')));
   assert.doesNotMatch(JSON.stringify(h.scheduler.status()),/fixture-private-password|localhost/);h.scheduler.stop();
 });
+test('the hourly job retains the page-check substep and retries the failed hour',async()=>{
+  const h=protectedHarness(async()=>{throw Object.assign(Error('Fixture page check timed out'),
+    {code:'SPORTYBET_AUTH_FAILED',reason:'browser_page_timeout',diagnostics:{reason:'browser_page_timeout',stage:'page_check',
+      pageCheck:'verification_messages',pageCheckAttempt:2,httpStatus:200,proxyConfigured:false,raw:'fixture-private-call-log'}});});
+  h.scheduler.start();h.setClock('2026-10-06T16:05:00Z');await h.scheduler.tick();
+  const last=h.scheduler.status().lastRun;
+  assert.equal(last.status,'retry_pending');assert.equal(last.authFailure.pageCheck,'verification_messages');
+  assert.equal(last.authFailure.pageCheckAttempt,2);assert.ok(h.scheduler.status().nextRunAt);
+  assert.ok(h.logs.some(line=>line.includes('outcome=browser_page_timeout')));
+  assert.doesNotMatch(JSON.stringify(h.scheduler.status()),/fixture-private-call-log/);h.scheduler.stop();
+});
 test('an unexpected runner rejection is caught and retries without killing the hourly clock',async()=>{
   const h=harness({runJob:async()=>{throw Error('test failure');}});h.scheduler.start();
   h.setClock('2026-10-06T16:05:00Z');await h.scheduler.tick();

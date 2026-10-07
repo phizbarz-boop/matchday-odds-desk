@@ -99,8 +99,10 @@ route. Browser recovery remains configured independently of that route.
 sign-in, with a known network code or bounded status codes when available.
 `nextLoginRetryAt` shows its cooldown. The public-data probe is anonymous and
 does not establish that account authentication succeeded. See
-[SPORTYBET_BROWSER_SIGNIN_FIX.md](SPORTYBET_BROWSER_SIGNIN_FIX.md) for the latest
-sign-in, proxy and public-cache lease changes and the meaning of the next logs.
+[SPORTYBET_PAGE_CHECK_FIX.md](SPORTYBET_PAGE_CHECK_FIX.md) for the latest
+page-check timeout fix and the meaning of the next logs. The earlier sign-in,
+proxy and public-cache lease changes are in
+[SPORTYBET_BROWSER_SIGNIN_FIX.md](SPORTYBET_BROWSER_SIGNIN_FIX.md).
 
 SportyBet can request an OTP/CAPTCHA, reject a password/account, block access
 from the server or change its form. Recovery stops at a verification prompt
@@ -131,11 +133,11 @@ After downloading this ZIP into Downloads:
 ```bash
 cd ~/Documents &&
 session_dir=$(mktemp -d /tmp/plot207-session.XXXXXX) &&
-unzip -q ~/Downloads/matchday-odds-desk-browser-signin-fix.zip -d "$session_dir" &&
+unzip -q ~/Downloads/matchday-odds-desk-page-check-fix.zip -d "$session_dir" &&
 rsync -a --delete --exclude=.git --exclude='.env*' --exclude=node_modules --exclude=data --exclude='.sportybet-*' "$session_dir/matchday-odds-desk/" matchday-odds-desk/ &&
 cd matchday-odds-desk &&
 git add -A &&
-git commit -m "Improve SportyBet browser recovery and diagnose sign-in failures" &&
+git commit -m "Fix SportyBet page-check timeout during automatic sign-in" &&
 git push origin main
 ```
 
@@ -143,7 +145,7 @@ git push origin main
 
 The full Node test suite covers session recovery, build installation, public
 cache collection, hourly QC/live tickets and next-12-hour ticket packs.
-See [SPORTYBET_BROWSER_SIGNIN_FIX.md](SPORTYBET_BROWSER_SIGNIN_FIX.md) for this
+See [SPORTYBET_PAGE_CHECK_FIX.md](SPORTYBET_PAGE_CHECK_FIX.md) for this
 update's checks and the meaning of the deployment logs.
 
 Focused tests exercise expiry, proactive refresh, rotated refresh tokens,

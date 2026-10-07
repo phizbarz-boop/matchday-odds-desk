@@ -5,8 +5,19 @@ require('../lib/sportyBrowserRuntime').configureBrowserPath();
 const {chromium}=require('playwright');
 const testChromium={launch:options=>chromium.launch({...options,
   ...(process.env.PLOT207_TEST_BROWSER_EXECUTABLE?{executablePath:process.env.PLOT207_TEST_BROWSER_EXECUTABLE}:{})})};
+function instrumentedChromium(instrument){
+  return {launch:async options=>{
+    const browser=await testChromium.launch(options),createContext=browser.newContext.bind(browser);
+    browser.newContext=async options=>{
+      const context=await createContext(options),createPage=context.newPage.bind(context);
+      context.newPage=async()=>{const page=await createPage();instrument(page);return page;};
+      return context;
+    };return browser;
+  }};
+}
 
-async function fixture(t,{verification=false,rejected=false,formDelay=0,accountFailures=0,pageStatus=200,accountStatus=200}={}) {
+async function fixture(t,{verification=false,rejected=false,formDelay=0,accountFailures=0,pageStatus=200,accountStatus=200,
+  bodyDelay=0,challenge=false,challengeDelay=0,hiddenWarnings=false,initialVerification=false,oddsRows=0}={}) {
   let posts=0,accountChecks=0,failuresLeft=accountFailures;
   const server=http.createServer(async(req,res)=>{
     if(req.url==='/api/ng/patron/account/info') {
@@ -21,16 +32,23 @@ async function fixture(t,{verification=false,rejected=false,formDelay=0,accountF
       res.setHeader('Content-Type','application/json');res.end(JSON.stringify({verification,rejected}));return;
     }
     res.statusCode=pageStatus;res.setHeader('Content-Type','text/html');res.end(`<!doctype html><html><body>
-      <div ${formDelay?'style="display:none"':''}>+234<input name="phone" placeholder="Mobile Number"><input name="psd" type="password"><input name="keepSignedIn" type="checkbox"><button>Login</button></div>
-      <script>${formDelay?`setTimeout(()=>document.querySelector('div').style.display='',${formDelay});`:''}
+      <div id="fixture-form" ${formDelay?'style="display:none"':''}>+234<input name="phone" placeholder="Mobile Number"><input name="psd" type="password"><input name="keepSignedIn" type="checkbox"><button>Login</button></div>
+      ${challenge?'<p>Checking your browser</p>':''}
+      ${initialVerification?'<input autocomplete="one-time-code">':''}
+      ${hiddenWarnings?'<p style="display:none">Incorrect password</p><p style="visibility:hidden">Checking your browser</p>':''}
+      ${'<div>Fixture Team A v Team B — 1.25 3.50 4.00</div>'.repeat(oddsRows)}
+      <script>${formDelay?`setTimeout(()=>document.querySelector('#fixture-form').style.display='',${formDelay});`:''}
+      ${challengeDelay?`setTimeout(()=>{const message=document.createElement('p');message.textContent='Checking your browser';document.body.appendChild(message);},${challengeDelay});`:''}
       document.querySelector('button').onclick=async()=>{
         const result=await (await fetch('/fixture-login',{method:'POST',body:JSON.stringify({phone:document.querySelector('[name=phone]').value,password:document.querySelector('[name=psd]').value,remember:document.querySelector('[name=keepSignedIn]').checked})})).json();
         if(result.verification){document.body.innerHTML='<input autocomplete="one-time-code">Enter verification code';return;}
-        if(result.rejected){document.body.innerHTML='Incorrect password';return;}
+        if(result.rejected){document.body.innerHTML='<p>Incorrect <span>password</span></p>';return;}
         document.cookie='accessToken=fixture-access; path=/; max-age=3600';
         document.cookie='refreshToken=fixture-refresh; path=/; max-age=86400';
         document.cookie='device-id=fixture-device; path=/';document.body.innerHTML='Account signed in';
-      };</script></body></html>`);
+      };
+      ${bodyDelay?`const fixtureBody=document.body;fixtureBody.remove();setTimeout(()=>document.documentElement.appendChild(fixtureBody),${bodyDelay});`:''}
+      </script></body></html>`);
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   t.after(()=>new Promise(resolve=>server.close(resolve)));
@@ -79,6 +97,109 @@ test('fresh cookies are not exported when the account verification route is miss
   await assert.rejects(browserLogin(f.options,{chromium:testChromium,allowTestOrigin:true}),e=>{
     assert.equal(e.diagnostics.httpStatus,404);assert.equal(e.diagnostics.stage,'account_check');return e.reason==='browser_account_http_error'&&e.requiresUserAction;
   });assert.equal(f.state().posts,1);assert.equal(f.state().accountChecks,1);
+});
+
+test('a slow page body reproduces the old three-second timeout and now signs in once',async t=>{
+  const f=await fixture(t,{bodyDelay:3500});
+  const browser=await testChromium.launch({headless:true});
+  try{
+    const page=await browser.newPage();
+    await page.goto(f.options.siteOrigin+'/ng/',{waitUntil:'domcontentloaded'});
+    await assert.rejects(page.locator('body').innerText({timeout:3000}),error=>error.name==='TimeoutError');
+  }finally{await browser.close();}
+  assert.equal(f.state().posts,0);
+  const result=await browserLogin(f.options,{chromium:testChromium,allowTestOrigin:true});
+  assert.ok(result.verifiedAt);assert.equal(f.state().posts,1);assert.equal(f.state().accountChecks,1);
+});
+test('a large odds board with hidden warnings does not require a full-body text read',async t=>{
+  const f=await fixture(t,{hiddenWarnings:true,oddsRows:3000});let fullBodyReads=0;
+  const wrapped=instrumentedChromium(page=>{
+    const locate=page.locator.bind(page);
+    page.locator=(selector,...args)=>{
+      const locator=locate(selector,...args);
+      if(selector==='body')locator.innerText=async()=>{fullBodyReads++;throw Object.assign(Error('Fixture old page-check timeout'),{name:'TimeoutError'});};
+      return locator;
+    };
+  });
+  const result=await browserLogin(f.options,{chromium:wrapped,allowTestOrigin:true});
+  assert.ok(result.verifiedAt);assert.equal(fullBodyReads,0);assert.equal(f.state().posts,1);
+});
+test('a visible browser challenge stops before the dummy credentials are filled',async t=>{
+  const f=await fixture(t,{challenge:true});
+  await assert.rejects(browserLogin(f.options,{chromium:testChromium,allowTestOrigin:true}),error=>{
+    assert.equal(error.diagnostics.pageCheck,'verification_messages');return error.reason==='browser_verification_required'&&error.requiresUserAction;
+  });assert.equal(f.state().posts,0);
+});
+test('an OTP already on the page stops before any password submission',async t=>{
+  const f=await fixture(t,{initialVerification:true});
+  await assert.rejects(browserLogin(f.options,{chromium:testChromium,allowTestOrigin:true}),error=>{
+    assert.equal(error.diagnostics.pageCheck,'verification_inputs');return error.reason==='verification_required'&&error.requiresUserAction;
+  });assert.equal(f.state().posts,0);
+});
+test('a challenge appearing during form loading is rechecked before credentials are entered',async t=>{
+  const f=await fixture(t,{formDelay:500,challengeDelay:250});
+  await assert.rejects(browserLogin(f.options,{chromium:testChromium,allowTestOrigin:true}),error=>error.reason==='browser_verification_required');
+  assert.equal(f.state().posts,0);
+});
+test('one temporary page-check timeout recovers before the only password submission',async t=>{
+  const f=await fixture(t);let bodyChecks=0;
+  const wrapped=instrumentedChromium(page=>{
+    const locate=page.locator.bind(page);
+    page.locator=(selector,...args)=>{
+      const locator=locate(selector,...args);
+      if(selector==='body'){
+        const wait=locator.waitFor.bind(locator);
+        locator.waitFor=async options=>{
+          bodyChecks++;assert.equal(options.state,'attached');
+          if(bodyChecks===1)throw Object.assign(Error('Fixture page busy'),{name:'TimeoutError'});
+          return wait(options);
+        };
+      }
+      if(selector==='input[name="phone"]:visible'){
+        const fill=locator.fill.bind(locator);
+        locator.fill=async value=>{assert.ok(bodyChecks>=2);return fill(value);};
+      }
+      return locator;
+    };
+  });
+  const result=await browserLogin(f.options,{chromium:wrapped,allowTestOrigin:true});
+  assert.ok(result.verifiedAt);assert.equal(f.state().posts,1);assert.equal(f.state().accountChecks,1);
+});
+test('a persistent page-check timeout stops after two checks with safe substep diagnostics',async t=>{
+  const f=await fixture(t);let bodyChecks=0;
+  const wrapped=instrumentedChromium(page=>{
+    const locate=page.locator.bind(page);
+    page.locator=(selector,...args)=>{
+      const locator=locate(selector,...args);
+      if(selector==='body')locator.waitFor=async()=>{bodyChecks++;throw Object.assign(Error('Call log: fixture-password fixture-private-token'),{name:'TimeoutError'});};
+      return locator;
+    };
+  });
+  await assert.rejects(browserLogin(f.options,{chromium:wrapped,allowTestOrigin:true}),error=>{
+    assert.equal(error.reason,'browser_page_timeout');assert.equal(error.diagnostics.stage,'page_check');
+    assert.equal(error.diagnostics.pageCheck,'body_ready');assert.equal(error.diagnostics.pageCheckAttempt,2);
+    assert.match(error.message,/pageCheck=body_ready/);assert.doesNotMatch(error.message,/fixture-password|fixture-private-token/);
+    return !error.requiresUserAction;
+  });assert.equal(bodyChecks,2);assert.equal(f.state().posts,0);assert.equal(f.state().accountChecks,0);
+});
+test('retrying a slow page check still stops at a verification prompt',async t=>{
+  const f=await fixture(t,{challengeDelay:100});let bodyChecks=0;
+  const wrapped=instrumentedChromium(page=>{
+    const locate=page.locator.bind(page);
+    page.locator=(selector,...args)=>{
+      const locator=locate(selector,...args);
+      if(selector==='body'){
+        const wait=locator.waitFor.bind(locator);
+        locator.waitFor=async options=>{
+          if(++bodyChecks===1)throw Object.assign(Error('Fixture page busy'),{name:'TimeoutError'});
+          return wait(options);
+        };
+      }return locator;
+    };
+  });
+  await assert.rejects(browserLogin(f.options,{chromium:wrapped,allowTestOrigin:true}),error=>{
+    assert.equal(error.diagnostics.pageCheckAttempt,2);return error.reason==='browser_verification_required';
+  });assert.equal(bodyChecks,2);assert.equal(f.state().posts,0);
 });
 
 const mockOptions={siteOrigin:'https://www.sportybet.com',baseUrl:'https://www.sportybet.com/api/ng',userInfo:'/patron/account/info',

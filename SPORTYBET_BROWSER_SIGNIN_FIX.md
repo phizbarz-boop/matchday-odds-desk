@@ -1,5 +1,9 @@
 # SportyBet browser sign-in and cache restart update
 
+For the subsequently identified `page_check` timeout, see
+[SPORTYBET_PAGE_CHECK_FIX.md](SPORTYBET_PAGE_CHECK_FIX.md). The current archive
+includes that fix alongside the changes described below.
+
 The October 7 Render log confirms that the pinned Chromium installation now
 succeeds and npm reports zero vulnerabilities. The remaining failure happens
 after Chromium starts, inside automatic website sign-in. The previous generic
@@ -36,16 +40,16 @@ cache refresh keeps the last readable snapshot.
 
 ## Deploy
 
-Download `matchday-odds-desk-browser-signin-fix.zip` into Downloads, then run:
+Download `matchday-odds-desk-page-check-fix.zip` into Downloads, then run:
 
 ```bash
 cd ~/Documents &&
 signin_dir=$(mktemp -d /tmp/plot207-signin.XXXXXX) &&
-unzip -q ~/Downloads/matchday-odds-desk-browser-signin-fix.zip -d "$signin_dir" &&
+unzip -q ~/Downloads/matchday-odds-desk-page-check-fix.zip -d "$signin_dir" &&
 rsync -a --delete --exclude=.git --exclude='.env*' --exclude=node_modules --exclude=data --exclude='.sportybet-*' "$signin_dir/matchday-odds-desk/" matchday-odds-desk/ &&
 cd matchday-odds-desk &&
 git add -A &&
-git commit -m "Improve SportyBet browser recovery and diagnose sign-in failures" &&
+git commit -m "Fix SportyBet page-check timeout during automatic sign-in" &&
 git push origin main
 ```
 
@@ -97,7 +101,7 @@ reports that separately and does not submit the password repeatedly.
 
 ## Validation
 
-All 309 Node tests pass. Checks also passed for 80 JavaScript files, the inline
+All 319 Node tests pass. Checks also passed for 80 JavaScript files, the inline
 website script, 13 workflow YAML files and Git whitespace. `npm audit` reports
 zero vulnerabilities.
 

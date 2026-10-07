@@ -9,7 +9,8 @@ const {boards} = require('./sportybet-live-format');
 const fixture = boards();
 const state = {logins:0, ciphers:0, accountChecks:0, marketReads:0, bookings:0};
 const automated=process.env.SESSION_TEST_MODE==='automated';
-const browserFailure=process.env.SESSION_TEST_MODE==='browser-failure';
+const pageCheckFailure=process.env.SESSION_TEST_MODE==='page-check-failure';
+const browserFailure=process.env.SESSION_TEST_MODE==='browser-failure'||pageCheckFailure;
 const successful = process.env.SESSION_TEST_MODE === 'browser'||automated;
 if(automated) {
   state.browserLogins=0;
@@ -21,8 +22,10 @@ if(automated) {
 }
 if(browserFailure){
   state.browserLogins=0;
-  direct.setBrowserLoginForTesting(async()=>{state.browserLogins++;throw Object.assign(Error('Fixture navigation timed out'),
-    {code:'SPORTYBET_AUTH_FAILED',reason:'browser_navigation_timeout',diagnostics:{reason:'browser_navigation_timeout',stage:'navigation',proxyConfigured:false}});});
+  direct.setBrowserLoginForTesting(async()=>{state.browserLogins++;throw Object.assign(Error('Fixture browser step timed out'),
+    {code:'SPORTYBET_AUTH_FAILED',reason:pageCheckFailure?'browser_page_timeout':'browser_navigation_timeout',
+      diagnostics:pageCheckFailure?{reason:'browser_page_timeout',stage:'page_check',pageCheck:'body_ready',pageCheckAttempt:2,httpStatus:200,
+        proxyConfigured:false,raw:'fixture-private-call-log'}:{reason:'browser_navigation_timeout',stage:'navigation',proxyConfigured:false}});});
 }
 const bySportId = new Map(Object.entries(SPORT_IDS).map(([sport, id]) => [id, fixture[sport]]));
 const response = payload => ({ok:true, status:200,

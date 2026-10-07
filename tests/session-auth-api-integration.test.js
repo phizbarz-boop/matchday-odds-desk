@@ -16,7 +16,7 @@ async function server(t, mode) {
   const child = fork(path.join(__dirname, 'fixtures/session-auth-api-server.js'), [], {cwd:path.join(__dirname, '..'), silent:true,
     env:{...process.env, NODE_ENV:'production', PORT:'0', REDIS_URL:'', HTTPS_PROXY:'', SPORTYBET_PROXY_URL:'',
       SPORTYBET_SESSION_FILE:sessionFile, SPORTYBET_ENDPOINT_LOGIN:'', SPORTYBET_ENDPOINT_LOGIN_CANDIDATES:'',
-      SPORTYBET_PHONE:'2348000000000', SPORTYBET_PASSWORD:'mock-test-password',SPORTYBET_LOGIN_METHOD:['automated','browser-failure'].includes(mode)?'browser':'api',
+      SPORTYBET_PHONE:'2348000000000', SPORTYBET_PASSWORD:'mock-test-password',SPORTYBET_LOGIN_METHOD:['automated','browser-failure','page-check-failure'].includes(mode)?'browser':'api',
       SPORTYBET_BOOTSTRAP_COOKIES:mode === 'browser' ? 'accessToken=fresh-browser-token; refreshToken=fresh-refresh; deviceId=fresh-device' : '',
       SPORTYBET_LIVE_MAX_PAGES:'1', SESSION_TEST_MODE:mode, WEBSITE_ACCESS_CODE:''}});
   let logs = '';
@@ -88,4 +88,17 @@ test('public diagnostics still read SportyBet anonymously when automatic browser
   assert.equal(diagnostics.status,200);assert.equal(diagnostics.body.publicDataProbe.ok,true);
   assert.equal(diagnostics.body.session.lastLoginFailure.reason,'browser_navigation_timeout');
   const state=await api.state();assert.equal(state.browserLogins,1);assert.ok(state.marketReads>0);
+});
+test('Auto Analyser and session status preserve the page-check substep through the shared cooldown',async t=>{
+  const api=await server(t,'page-check-failure');
+  const result=await api.post('/api/sportybet/auto-pick',request);
+  assert.equal(result.status,503);assert.equal(result.body.authFailure.reason,'browser_page_timeout');
+  assert.equal(result.body.authFailure.pageCheck,'body_ready');assert.equal(result.body.authFailure.pageCheckAttempt,2);
+  const retry=await api.post('/api/sportybet/auto-pick',request);
+  assert.equal(retry.body.authFailure.pageCheck,'body_ready');assert.ok(retry.body.retryAt);
+  const diagnostics=await api.get('/api/sportybet/diagnostics');
+  assert.equal(diagnostics.body.session.lastLoginFailure.pageCheck,'body_ready');
+  assert.equal(diagnostics.body.publicDataProbe.ok,true);
+  assert.doesNotMatch(JSON.stringify([result.body,retry.body,diagnostics.body]),/fixture-private-call-log|mock-test-password/);
+  assert.equal((await api.state()).browserLogins,1);
 });

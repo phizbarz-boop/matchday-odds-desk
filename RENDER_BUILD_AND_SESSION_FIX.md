@@ -3,7 +3,7 @@
 The later October 7 build confirms that Chromium installation succeeds.
 For its remaining browser sign-in error, use the updated recovery and
 diagnostics described in
-[SPORTYBET_BROWSER_SIGNIN_FIX.md](SPORTYBET_BROWSER_SIGNIN_FIX.md).
+[SPORTYBET_PAGE_CHECK_FIX.md](SPORTYBET_PAGE_CHECK_FIX.md).
 
 The supplied Render log shows a successful deployment and running schedulers.
 The `patron/refresh -> 404` line means the configured refresh route was not
@@ -70,7 +70,7 @@ does not establish that a cache refresh or ticket generation succeeded.
 
 ## Validation
 
-All 309 Node tests pass, including the additional browser sign-in and cache
+All 319 Node tests pass, including the additional browser sign-in and cache
 lease scenarios. The updated installed dependency tree reports zero
 vulnerabilities in `npm audit`. The pinned Playwright CLI dry-run confirms
 the browser destination is inside the deployed package.
