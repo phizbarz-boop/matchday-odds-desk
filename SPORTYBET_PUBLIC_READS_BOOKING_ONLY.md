@@ -2,6 +2,9 @@
 
 Current update: booking also uses the public website's anonymous sharing operation. See [SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md). The website retains recoverable requests instead of aborting the operation after 18 seconds.
 
+Telegram workflows now use recoverable jobs too; see
+[TELEGRAM_AUTO_PICK_FIX.md](TELEGRAM_AUTO_PICK_FIX.md) for the latest archive and installation.
+
 User requests read SportyBet's public website JSON feeds. Fixtures, odds, full event markets, live/QC analysis, imported booking-code analysis, replacement selections, result checks and public cache refreshes do not load or send dummy-account credentials. The optional football statistics collector opens public match pages in a fresh browser context.
 
 There is no startup login or background session keep-alive in the website. An expired dummy session or failed sign-in cooldown cannot prevent public analysis. A public-feed error is reported as a source error; it does not trigger an account login or substitute old market prices.

@@ -24,7 +24,7 @@ function testCandidates(probability = 92) {
   }));
 }
 
-function mockRunner(candidates) {
+function mockRunner(candidates,{bookingError=null,sendError=null}={}) {
   const messages = [], bookings = [], stored = [], tracked = [];
   const ctx = vm.createContext({
     process: { env: { TELEGRAM_PICK_TRIALS: '50', TELEGRAM_MIXED_PICK_TRIALS: '50' } },
@@ -35,8 +35,8 @@ function mockRunner(candidates) {
     fixtureDateKeyInTimeZone: () => '2026-09-18',
     getRedis: async () => ({}),
     saveTelegramDailyCodes: async (_, date, data) => { stored.push({date, codes:data.codes.slice()}); },
-    sendTelegramMessage: async message => { messages.push(message); },
-    bookBet: async selections => { bookings.push(selections); return {shareCode:`TEST${bookings.length}`}; },
+    sendTelegramMessage: async message => { messages.push(message); if(sendError&&messages.length>1)throw sendError; },
+    bookBet: async selections => { bookings.push(selections); if(bookingError)throw bookingError;return {shareCode:`TEST${bookings.length}`}; },
     telegramSlipText: (label, result) => `${label} odds actual ${result.combinedOdds}`,
     trackTelegramSlip: async (_, data) => { tracked.push(data); },
     setTimeout: callback => { callback(); },
@@ -63,6 +63,38 @@ test('below-85% candidates do not generate the morning SAFE ticket', async () =>
   assert.equal(runner.bookings.length, 0);
   assert.equal(result.results.length, 1);
   assert.match(result.results[0].error, /No selections met the 85%/);
+});
+
+test('a valid empty SportyBet slate reports no eligible SAFE games instead of failing with 502', async () => {
+  const runner = mockRunner([]);
+  const result = await runner.run();
+  assert.equal(runner.bookings.length, 0);
+  assert.equal(result.ticketsSent, 0);
+  assert.equal(result.reason, 'no_eligible_safe_games');
+  assert.match(result.results[0].error, /No selections met the 85%/);
+  assert.match(runner.messages.at(-1), /NOT GENERATED/);
+  assert.equal(runner.stored.length, 0, 'an empty run must not erase previously generated codes');
+});
+
+test('failed SportyBet feeds remain a source failure with useful diagnostics',async()=>{
+  const candidates=[];candidates.sourceErrors={'basketball winner':'SportyBet HTTP 503'};
+  const runner=mockRunner(candidates);
+  await assert.rejects(runner.run(),error=>error.code==='SPORTYBET_SOURCE_UNAVAILABLE'&&error.diagnostics.sourceErrors['basketball winner'].includes('503'));
+  assert.equal(runner.messages.length,0);assert.equal(runner.stored.length,0);
+});
+
+test('booking failures are propagated to workflow status without clearing existing codes',async()=>{
+  const error=Object.assign(Error('SportyBet selection is suspended'),{code:'SPORTYBET_HTTP'});
+  const runner=mockRunner(testCandidates(),{bookingError:error});
+  await assert.rejects(runner.run(),/selection is suspended/);
+  assert.equal(runner.stored.length,0);assert.equal(runner.messages.length,1);
+});
+
+test('a Telegram delivery failure retains the code and does not book or send a warning again',async()=>{
+  const runner=mockRunner(testCandidates(),{sendError:Error('Telegram chat is unavailable')});
+  await assert.rejects(runner.run(),/Telegram chat is unavailable/);
+  assert.equal(runner.bookings.length,1);assert.equal(runner.messages.length,2);
+  assert.equal(runner.stored.at(-1).codes[0].shareCode,'TEST1');
 });
 
 test('Today’s Codes retains previously sent QC/live codes and hides retired 2x/3x templates', () => {

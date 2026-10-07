@@ -65,6 +65,7 @@ function createHarness(runTelegramDailyPicks) {
     isScheduledTime: () => true,
     getRedis: async () => redis,
     runTelegramDailyPicks,
+    telegramDailyRuns:{wrap:fn=>fn},
     console: { log() {}, warn() {}, error() {} },
     Date, JSON, Promise, String,
   };
@@ -186,5 +187,6 @@ test('the actual picker rechecks cancellation after loading candidates and befor
   const endLoad = server.indexOf('  assertNotCancelled();', load);
   const startPosting = server.indexOf('  await onPostingStart();', endLoad);
   assert.ok(load > -1 && endLoad > load && startPosting > endLoad);
-  assert.match(server.slice(endLoad, startPosting), /assertNotCancelled\(\);[\s\S]*saveTelegramDailyCodes[\s\S]*assertNotCancelled\(\);/);
+  assert.match(server.slice(endLoad, startPosting), /assertNotCancelled\(\);/);
+  assert.doesNotMatch(server.slice(endLoad,startPosting),/saveTelegramDailyCodes/, 'a preparing run must not erase existing codes');
 });

@@ -5,6 +5,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const {safeAuthDiagnostics}=require('./lib/sportyAuthDiagnostics');
 const {createBookingRequests}=require('./lib/sportyBookingRequests');
+const {createTelegramRunRequests}=require('./lib/telegramRunRequests');
 
 const app = express();
 app.set('trust proxy', 1); // Render forwards the real client IP.
@@ -26,6 +27,10 @@ const {PLANS:NEXT12H_PLANS,runNext12hPicks}=require('./lib/telegramNext12h');
 const {refreshTicketResults,buildPerformanceReport,performanceText,registerTelegramPerformanceRoute}=require('./lib/telegramPerformance');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
 const bookingRequests=createBookingRequests({getRedis,runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
+const telegramDailyRuns=createTelegramRunRequests({name:'daily-picks',authorize:authorizeTelegramJob,getRedis,
+  runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
+const telegramNext12hRuns=createTelegramRunRequests({name:'next-12h-picks',authorize:authorizeTelegramJob,getRedis,
+  runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
 
 let redisClient = null;
 async function getRedis() {
@@ -2480,7 +2485,7 @@ function telegramCombinedResult(selections, targetOdds, candidateCount) {
   };
 }
 
-async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = () => false } = {}) {
+async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = () => false, onProgress = () => {} } = {}) {
   // A cancelled GitHub Actions curl does not automatically stop this Express
   // handler. Check before the *first* Telegram send so a cancelled build cannot
   // publish after its daily Redis lock has been released for a retry.
@@ -2491,6 +2496,7 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
     throw err;
   };
   assertNotCancelled();
+  await onProgress('scanning_sportybet');
   // Morning SAFE is independent of the twice-daily next-12-hours picks.
   const sportScope = 'all';
   const maxSelections = Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10)));
@@ -2510,6 +2516,7 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
     betTypes: TELEGRAM_HIGH_ODDS_BET_TYPES,
   });
   assertNotCancelled();
+  await onProgress('filtering_games');
   const allCandidates = globalCandidates;
 
   // SAFE considers all supported markets, with hockey/basketball priority.
@@ -2522,19 +2529,21 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
     .filter(c => TELEGRAM_HIGH_ODDS_BET_TYPE_SET.has(String(c.betType || '')));
   const dateRejected = allCandidates.length - todayCandidates.length;
   const redFlagRejected = todayCandidates.length - saneCandidates.length;
-  if (!saneCandidates.length && !safeTodayCandidates.length && !globalTodayCandidates.length) {
-    throw new Error('No eligible same-day (WAT) candidates remain after Telegram daily-picks filters');
+  if (!globalCandidates.length && Object.keys(globalCandidates.sourceErrors || {}).length) {
+    const error=new Error('SportyBet returned no usable selections; failed feeds: '+Object.keys(globalCandidates.sourceErrors).join(', '));
+    error.code='SPORTYBET_SOURCE_UNAVAILABLE';
+    error.diagnostics={sourceErrors:globalCandidates.sourceErrors,candidateCount:0};
+    throw error;
   }
 
   const watToday = fixtureDateKeyInTimeZone(new Date(), 'Africa/Lagos');
   const redis = await getRedis();
   const dailyCodes = [];
   assertNotCancelled();
-  await saveTelegramDailyCodes(redis, watToday, { generatedAt: new Date().toISOString(), codes: dailyCodes });
-  assertNotCancelled();
   // Once Telegram sending begins, never automatically clear the daily lock:
   // a timed-out request might have delivered the message despite an error.
   await onPostingStart();
+  await onProgress('sending_summary');
   await sendTelegramMessage([
     '🤖 PLOT207 SPORTS • DAILY PICKS',
     `📅 ${watToday} (WAT)`,
@@ -2591,56 +2600,60 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
       continue;
     }
 
+    let booking;
     try {
-      const booking = await bookBet(result.selections.map(x => ({
+      await onProgress('booking_code');
+      booking = await bookBet(result.selections.map(x => ({
         eventId: x.eventId,
         marketId: x.marketId,
         outcomeId: x.outcomeId,
         ...(x.specifier ? { specifier: x.specifier } : {}),
       })));
-      const planSportScope = plan.sportScopeLabel || (plan.allSports ? 'all' : sportScope);
-      await sendTelegramMessage(telegramSlipText(plan.label, result, booking, planSportScope));
-
-      await trackTelegramSlip(redis, {
-        shareCode: booking?.shareCode,
-        shareURL: booking?.shareURL,
-        targetOdds: plan.label,
-        combinedOdds: result.combinedOdds,
-        sportScope: planSportScope,
-        selections: result.selections,
-      });
-
-      if (booking?.shareCode) {
-        dailyCodes.push({ targetOdds: plan.label, combinedOdds: result.combinedOdds, shareCode: booking.shareCode });
-        await saveTelegramDailyCodes(redis, watToday, { generatedAt: new Date().toISOString(), codes: dailyCodes });
+      if(!booking?.shareCode || booking.unavailableOutcomes?.length) {
+        const error=new Error('SportyBet did not confirm a complete SAFE booking code');
+        error.code='SPORTYBET_BOOKING_INCOMPLETE';throw error;
       }
-
-      output.push({
-        targetOdds: plan.label,
-        combinedOdds: result.combinedOdds,
-        averageProbability: result.averageProbability,
-        estimatedSlipProbability: result.estimatedSlipProbability,
-        averageEdge: result.averageEdge,
-        averageQualityScore: result.averageQualityScore,
-        estimatedSlipEVPct: result.estimatedSlipEVPct,
-        selections: result.selections.length,
-        maxSelections: planMaxSelections,
-        shareCode: booking?.shareCode || null,
-        unavailable: Array.isArray(booking?.unavailableOutcomes) ? booking.unavailableOutcomes.length : 0,
-        prioritySportsOnly: !!picked.priorityOnly,
-        preferredCandidateCount: Number(picked.preferredCount || 0),
-        winnerSelections: result.selections.filter(isTelegramWinnerSelection).length,
-        supplementalSelections: result.selections.filter(c => !isTelegramWinnerSelection(c)).length,
-        allSportsScope: !!plan.allSports,
-        flexibleTarget: !!plan.flexibleTarget,
-        reachedTarget: !!result.reachedTarget,
-        sportScope: plan.sportScopeLabel || (plan.allSports ? 'all' : sportScope),
-      });
     } catch (err) {
-      output.push({ targetOdds: plan.label, combinedOdds: result.combinedOdds, error: err.message });
-      await sendTelegramMessage(`⚠️ ${plan.label} odds slip was built at ${result.combinedOdds}, but SportyBet code generation failed: ${err.message}`);
+      err.code ||= 'SPORTYBET_BOOKING_FAILED';
+      throw err;
     }
+    const planSportScope = plan.sportScopeLabel || (plan.allSports ? 'all' : sportScope);
+    await onProgress('saving_code');
+    dailyCodes.push({ targetOdds: plan.label, combinedOdds: result.combinedOdds, shareCode: booking.shareCode });
+    await saveTelegramDailyCodes(redis, watToday, { generatedAt: new Date().toISOString(), codes: dailyCodes });
+    await onProgress('sending_ticket');
+    await sendTelegramMessage(telegramSlipText(plan.label, result, booking, planSportScope));
+    await onProgress('tracking_results');
+    await trackTelegramSlip(redis, {
+      shareCode: booking?.shareCode,
+      shareURL: booking?.shareURL,
+      targetOdds: plan.label,
+      combinedOdds: result.combinedOdds,
+      sportScope: planSportScope,
+      selections: result.selections,
+    });
 
+    output.push({
+      targetOdds: plan.label,
+      combinedOdds: result.combinedOdds,
+      averageProbability: result.averageProbability,
+      estimatedSlipProbability: result.estimatedSlipProbability,
+      averageEdge: result.averageEdge,
+      averageQualityScore: result.averageQualityScore,
+      estimatedSlipEVPct: result.estimatedSlipEVPct,
+      selections: result.selections.length,
+      maxSelections: planMaxSelections,
+      shareCode: booking?.shareCode || null,
+      unavailable: Array.isArray(booking?.unavailableOutcomes) ? booking.unavailableOutcomes.length : 0,
+      prioritySportsOnly: !!picked.priorityOnly,
+      preferredCandidateCount: Number(picked.preferredCount || 0),
+      winnerSelections: result.selections.filter(isTelegramWinnerSelection).length,
+      supplementalSelections: result.selections.filter(c => !isTelegramWinnerSelection(c)).length,
+      allSportsScope: !!plan.allSports,
+      flexibleTarget: !!plan.flexibleTarget,
+      reachedTarget: !!result.reachedTarget,
+      sportScope: plan.sportScopeLabel || (plan.allSports ? 'all' : sportScope),
+    });
     await new Promise(resolve => setTimeout(resolve, 750));
   }
 
@@ -2658,6 +2671,10 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
     redFlagRejected,
     maxSelections,
     candidateCount: saneCandidates.length,
+    dateRejected,
+    sourceErrors:globalCandidates.sourceErrors || {},
+    ticketsSent:output.filter(row=>row.shareCode&&!row.error).length,
+    reason:output.some(row=>row.shareCode&&!row.error)?'tickets_sent':'no_eligible_safe_games',
     results: output
   };
 }
@@ -3679,7 +3696,8 @@ app.get('/api/telegram/daily-picks/run-status', async (req, res) => {
   }
 });
 
-app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
+app.get('/api/telegram/daily-picks/run-status/:runId',telegramDailyRuns.status);
+app.post('/api/telegram/daily-picks', express.json(), telegramDailyRuns.wrap(async (req, res) => {
   const secret = process.env.TELEGRAM_JOB_SECRET;
   if (!secret || req.headers['x-telegram-job-secret'] !== secret) {
     return res.status(401).json({ error: 'unauthorized' });
@@ -3762,6 +3780,7 @@ app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
     await writeRunStatus('preparing', { mode: manual ? 'manual' : 'scheduled' });
     const result = await runTelegramDailyPicks({
       shouldAbort: () => cancelledBeforePosting,
+      onProgress:stage=>res.jobStage?.(stage),
       onPostingStart: async () => {
         postingStarted = true;
         // Sending can be ambiguous if the request fails after reaching Telegram.
@@ -3773,6 +3792,7 @@ app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
     try {
       await writeRunStatus('completed', { completedAt: new Date().toISOString(), mode: manual ? 'manual' : 'scheduled' });
     } catch (statusError) { console.error('Telegram daily-picks status write failed:', statusError.message); }
+    await res.jobStage?.('completed');
     if (!res.destroyed) return res.json({ ok: true, runMode: manual ? 'manual' : 'scheduled', generatedAt: new Date().toISOString(), ...result });
   } catch (err) {
     if (redis) {
@@ -3793,9 +3813,10 @@ app.post('/api/telegram/daily-picks', express.json(), async (req, res) => {
       error: err.code === 'TELEGRAM_CONFIG_MISSING' ? 'Telegram integration is not configured yet' : 'Telegram picks job failed',
       code: err.code || null,
       detail: String(err.message || 'Unknown Telegram picks error').slice(0, 500),
+      diagnostics:err.diagnostics || undefined,
     });
   }
-});
+}));
 
 app.post('/api/telegram/test', express.json(), async (req, res) => {
   try {
@@ -3977,7 +3998,8 @@ app.get('/api/sportybet/public-cache/status',async(req,res)=>{
   try{await publicCache.read();res.json({...publicCache.status(),scheduler:publicCacheScheduler.status()});}
   catch(error){res.status(503).json({error:'Public cache status unavailable'});}
 });
-app.post('/api/telegram/next-12h-picks',express.json(),async(req,res)=>{
+app.get('/api/telegram/next-12h-picks/run-status/:runId',telegramNext12hRuns.status);
+app.post('/api/telegram/next-12h-picks',express.json(),telegramNext12hRuns.wrap(async(req,res)=>{
   if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});
   const now=new Date(),parts=watParts(now),manual=req.headers['x-matchday-run-mode']==='manual';
   const slotTime=parts.minute>=18*60?'18:00':'07:00';
@@ -3987,9 +4009,10 @@ app.post('/api/telegram/next-12h-picks',express.json(),async(req,res)=>{
   if(manual&&requestId&&!/^[a-zA-Z0-9_-]{1,160}$/.test(requestId))return res.status(400).json({error:'Invalid manual run ID'});
   const slotKey=manual?'manual:'+crypto.createHash('sha256').update(requestId||crypto.randomUUID()).digest('hex').slice(0,24):parts.date+'T'+slotTime;
   const controller=new AbortController();res.once('close',()=>{if(!res.writableEnded)controller.abort();});
+  await res.jobStage?.('building_next12h_tickets');
   const result=await next12hJob({slotKey,dateKey:parts.date,slotTime:manual?'MANUAL':slotTime,signal:controller.signal});
   if(!res.destroyed)res.status(result.statusCode).json(result.body);
-});
+}));
 
 app.post('/api/refresh', express.json(), (req, res) => {
   if (!process.env.REFRESH_SECRET || req.headers['x-refresh-secret'] !== process.env.REFRESH_SECRET) {

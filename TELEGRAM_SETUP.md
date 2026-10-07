@@ -2,6 +2,11 @@
 
 Telegram analysis and results read public SportyBet data. Creating a new code uses anonymous SportyBet sharing by default, without dummy credentials or session recovery. The hourly QC/live Telegram batch has been removed; legacy hourly settings cannot start it again.
 
+The latest auto-pick fix queues one recoverable job and polls its status instead
+of keeping a long HTTP connection open. Empty SAFE slates are normal outcomes;
+source, booking and delivery failures show their actual details in the workflow.
+See [TELEGRAM_AUTO_PICK_FIX.md](TELEGRAM_AUTO_PICK_FIX.md) for deployment and checks.
+
 | Ticket/update | Time in WAT | Scheduler |
 | --- | --- | --- |
 | Next 12h: 10,000, 2,500, 500, three 100 variations | 07:00 and 18:00 daily | App server |
@@ -25,6 +30,9 @@ TELEGRAM_JOB_SECRET=<your existing job secret>
 
 Keep the same job secret in GitHub Actions for retained scheduled jobs and manual triggers. `MATCHDAY_BASE_URL` can be a repository variable; the existing Render URL is the fallback. Booking defaults to `SPORTYBET_BOOKING_MODE=public`; see [SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md). No dummy credentials are needed.
 
+The app reports missing `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` or `REDIS_URL`
+before an asynchronous pick job scans SportyBet. These settings belong on Render.
+
 ## Deployment and manual picks
 
 Commit/push the updated archive and deploy. `npm start` starts the website, three public refresh slots and twice-daily next-12-hours scheduler. Check `GET /api/telegram/status` for SAFE, next-12-hours targets and the 12-hour result report. The service must stay running for its application schedules; Redis retains delivery locks, code history and tracked results across restarts.
@@ -32,6 +40,10 @@ Commit/push the updated archive and deploy. `npm start` starts the website, thre
 **Matchday Telegram Auto Picks → Run workflow** sends SAFE. **Plot207 Telegram Next 12 Hours Picks → Run workflow** sends the six next-12-hours targets. The separate results workflow remains available. The hourly QC/live workflow has been removed, and the old `/api/telegram/quick-cash` route returns HTTP 410 without booking or posting.
 
 Previously sent ticket records remain available for Today's Codes and result reports.
+The new workflows use `Prefer: respond-async` and `GITHUB_RUN_ID`; repeated
+requests retrieve the same job rather than posting another batch. A new manual
+workflow dispatch still requests a new batch at any time. Deploy the updated
+server before running the updated workflows.
 
 ## Website and interactive bot
 

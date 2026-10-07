@@ -67,5 +67,8 @@ test('Telegram keeps the scheduled daily lock but allows manual bypass', () => {
   assert.match(server, /telegram:daily-picks:once:/);
   assert.match(server, /x-telegram-job-secret/);
   assert.match(server, /if \(manual\)[\s\S]*Bypassing daily send lock/);
-  assert.match(workflow('telegram-picks.yml'), /x-matchday-run-mode: \$MODE/);
+  assert.match(workflow('telegram-picks.yml'), /telegram-picks-runner\.py --endpoint daily-picks/);
+  const runner=fs.readFileSync(path.join(root,'jobs/telegram-picks-runner.py'),'utf8');
+  assert.match(runner,/"scheduled" if args\.endpoint == "daily-picks" and event == "schedule" else "manual"/);
+  assert.match(runner,/"x-matchday-run-mode": mode/);
 });

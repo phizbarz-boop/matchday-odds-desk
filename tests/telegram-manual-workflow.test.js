@@ -16,16 +16,17 @@ function workflow(name) {
 async function harness(t,failSafe=false) {
   const calls=[];
   const server=http.createServer((req,res)=>{
-    assert.equal(req.method,'POST');assert.equal(req.headers['x-telegram-job-secret'],'test-workflow-secret');
+    assert.ok(['POST','GET'].includes(req.method));assert.equal(req.headers['x-telegram-job-secret'],'test-workflow-secret');
     calls.push({path:req.url,mode:req.headers['x-matchday-run-mode'],id:req.headers['x-matchday-run-id']});
     req.resume();res.setHeader('Content-Type','application/json');res.setHeader('Connection','close');
-    if(failSafe&&req.url.endsWith('/daily-picks')){res.statusCode=502;res.end(JSON.stringify({error:'Mock SAFE source failure'}));}
+    if(failSafe){res.statusCode=502;res.end(JSON.stringify({error:'Mock SAFE source failure',
+      ...(req.method==='GET'?{runRequestStatus:'failed',runId:'12345'}:{})}));}
     else res.end(JSON.stringify({ok:true,sent:true}));
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   t.after(()=>new Promise(resolve=>server.close(resolve)));
   const execute=(script,event)=>new Promise((resolve,reject)=>{
-    const child=spawn('bash',['-e','-c',script],{env:{...process.env,
+    const child=spawn('bash',['-e','-c',script],{cwd:path.join(__dirname,'..'),env:{...process.env,
       TELEGRAM_JOB_SECRET:'test-workflow-secret',MATCHDAY_BASE_URL:`http://127.0.0.1:${server.address().port}`,
       GH_EVENT_NAME:event,GITHUB_RUN_ID:'12345',GITHUB_RUN_ATTEMPT:'2'}});
     let stdout='',stderr='';child.stdout.on('data',data=>{stdout+=data;});child.stderr.on('data',data=>{stderr+=data;});
@@ -50,18 +51,20 @@ test('manual daily workflow calls only SAFE and never the retired hourly endpoin
   assert.equal(steps.length,1);assert.doesNotMatch(text,/api\/telegram\/quick-cash/);
   const results=await dispatch(steps,h,'workflow_dispatch');
   assert.equal(results.length,1);assert.notEqual(results[0].code,0);
-  assert.deepEqual(h.calls,[{path:'/api/telegram/daily-picks',mode:'manual',id:undefined}]);
+  assert.match(results[0].stdout,/Mock SAFE source failure/);
+  assert.deepEqual(h.calls,[{path:'/api/telegram/daily-picks',mode:'manual',id:'12345'},
+    {path:'/api/telegram/daily-picks/run-status/12345',mode:undefined,id:undefined}]);
 });
 
 test('daily cron still sends SAFE',async t=>{
   const {steps}=workflow('telegram-picks.yml'),h=await harness(t);
   const results=await dispatch(steps,h,'schedule');assert.equal(results.length,1);assert.equal(results[0].code,0);
-  assert.deepEqual(h.calls,[{path:'/api/telegram/daily-picks',mode:'scheduled',id:undefined}]);
+  assert.deepEqual(h.calls,[{path:'/api/telegram/daily-picks',mode:'scheduled',id:'12345'}]);
 });
 
 test('hourly workflow is removed while next-12h picks and 12-hour reports remain',()=>{
   const root=path.join(__dirname,'../.github/workflows');
   assert.equal(fs.existsSync(path.join(root,'telegram-quick-cash.yml')),false);
-  assert.match(workflow('telegram-next-12h.yml').text,/api\/telegram\/next-12h-picks/);
+  assert.match(workflow('telegram-next-12h.yml').text,/--endpoint next-12h-picks/);
   assert.match(workflow('telegram-performance.yml').text,/cron: '10 11,23 \* \* \*'/);
 });

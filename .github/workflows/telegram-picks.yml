@@ -19,18 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
+      - uses: actions/checkout@v4
       - name: Generate and send SAFE (manual runs may repeat anytime)
         env:
           TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
           GH_EVENT_NAME: ${{ github.event_name }}
           MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
         run: |
-          test -n "$TELEGRAM_JOB_SECRET" || (echo 'Missing GitHub secret TELEGRAM_JOB_SECRET' && exit 1)
-          if [ "$GH_EVENT_NAME" = 'workflow_dispatch' ]; then MODE=manual; else MODE=scheduled; fi
-          echo "Telegram run type: $MODE; UTC clock: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          curl --fail-with-body --show-error --silent --max-time 1080 \
-            -X POST "$MATCHDAY_BASE_URL/api/telegram/daily-picks" \
-            -H 'Content-Type: application/json' \
-            -H "x-telegram-job-secret: $TELEGRAM_JOB_SECRET" \
-            -H "x-matchday-run-mode: $MODE" \
-            --data '{}' -w '\nHTTP_STATUS:%{http_code}\n'
+          python3 jobs/telegram-picks-runner.py --endpoint daily-picks
