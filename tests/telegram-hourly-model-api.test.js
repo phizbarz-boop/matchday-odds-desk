@@ -26,12 +26,13 @@ test('app-server scans hourly and sends Live 3, QC 3 and Live 1000 through publi
   const api=await server(t);assert.equal((await api.rpc('state')).bookings.length,0);
   const initial=(await api.request('/api/telegram/status')).body;assert.equal(initial.hourlyScheduler.running,true);assert.equal(initial.hourlyScheduler.minute,5);
   assert.deepEqual(initial.rules.hourly.plans.map(p=>p.targetOdds),[3,3,1000]);assert.equal(initial.rules.hourly.cacheRequired,false);
-  assert.deepEqual(initial.rules.hourly.plans.map(p=>p.minProbability),[85,80,85]);
+  assert.deepEqual(initial.rules.hourly.plans.map(p=>p.minProbability),[0,0,0]);
+  assert.equal(initial.rules.hourly.probabilityFloorEnabled,false);assert.equal(initial.rules.hourly.plans[2].allowLowerTarget,true);
   await api.rpc('clock',{date:'2026-10-08T11:05:00Z'});
   let status=await api.finish(s=>s.hourlyScheduler.lastRun?.status==='completed');assert.equal(status.hourlyScheduler.lastRun.ticketsSent,3,api.logs());
   let state=await api.rpc('state');assert.equal(state.bookings.length,3);assert.equal(state.sessionChecks,0);
-  assert.ok(state.messages.some(m=>m.includes('HOURLY LIVE · 3 ODDS')));assert.ok(state.messages.some(m=>m.includes('HOURLY QC · 3 ODDS')));assert.ok(state.messages.some(m=>m.includes('HOURLY LIVE · 1,000 ODDS')));
-  assert.match(state.messages.find(m=>m.includes('HOURLY QC · 3 ODDS')),/80%/);
+  assert.ok(state.messages.some(m=>m.includes('HOURLY LIVE · 3 ODDS')));assert.ok(state.messages.some(m=>m.includes('HOURLY QC · 3 ODDS')));assert.ok(state.messages.some(m=>m.includes('HOURLY LIVE · UP TO 1,000 ODDS')));
+  assert.match(state.messages.find(m=>m.includes('HOURLY QC · 3 ODDS')),/no minimum probability cutoff/);
   assert.ok(state.bookings.every(s=>s.length<=40));assert.ok(state.reads.every(url=>!url.includes('/patron/')&&!url.includes('pcUpcomingEvents')));
   const codes=state.hashes.find(([key])=>key==='telegram:quick-cash:codes:2026-10-08')[1].map(([,raw])=>JSON.parse(raw));assert.equal(codes.length,3);
   const tracked=state.hashes.find(([key])=>key==='telegram:tracked-tickets:v2')[1].map(([,raw])=>JSON.parse(raw));assert.equal(tracked.length,3);assert.ok(tracked.every(t=>t.delivery==='posted'));
@@ -62,7 +63,7 @@ test('manual hourly workflow uses recoverable HTTP jobs and a repeated run ID ca
   assert.equal((await api.request('/api/telegram/hourly-picks',{})).status,401);
   const result=await api.workflow();assert.equal(result.code,0,result.output+'\n'+api.logs());assert.match(result.output,/"ticketsSent": 3/);
   const state=await api.rpc('state');assert.equal(state.bookings.length,3);assert.equal(state.sessionChecks,0);
-  assert.match(state.messages.find(m=>m.includes('HOURLY QC · 3 ODDS')),/80%/);
+  assert.match(state.messages.find(m=>m.includes('HOURLY QC · 3 ODDS')),/no minimum probability cutoff/);
   assert.equal((await api.request('/api/telegram/hourly-picks/run-status/fixture-hourly-123')).status,401);
   assert.equal((await api.workflow()).code,0);assert.equal((await api.rpc('state')).bookings.length,3);
 });
@@ -73,4 +74,12 @@ test('failed public live reads remain source errors and later recover without du
   const state=await api.rpc('state');assert.equal(state.bookings.length,0);assert.equal(state.messages.length,0);
   await api.rpc('configure',{failReads:false});await api.rpc('clock',{date:'2026-10-08T11:07:00Z'});
   await api.finish(s=>s.hourlyScheduler.lastRun?.status==='completed');assert.equal((await api.rpc('state')).bookings.length,3);
+});
+test('a sparse live board sends the lower large-ticket target with a sub-80% model estimate',async t=>{
+  const api=await server(t);await api.rpc('configure',{shortBoard:true,flip:true});await api.rpc('clock',{date:'2026-10-08T11:05:00Z'});
+  const status=await api.finish(s=>s.hourlyScheduler.lastRun?.status==='completed');assert.equal(status.hourlyScheduler.lastRun.ticketsSent,1);
+  const state=await api.rpc('state');assert.equal(state.bookings.length,1);assert.equal(state.bookings[0].length,1);assert.equal(state.sessionChecks,0);
+  const ticket=state.messages.find(m=>m.includes('SportyBet code:'));assert.match(ticket,/Lower available target used/);assert.match(ticket,/Actual odds: 1.80/);assert.match(ticket,/Model 51\./);
+  const codes=state.hashes.find(([key])=>key==='telegram:quick-cash:codes:2026-10-08')[1].map(([,raw])=>JSON.parse(raw));
+  assert.equal(codes.length,1);assert.equal(codes[0].planId,'live_1000');assert.equal(codes[0].combinedOdds,1.8);
 });

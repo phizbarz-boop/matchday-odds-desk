@@ -1,7 +1,7 @@
 # Telegram picks without waiting for the public cache
 
 Latest update: [TELEGRAM_HOURLY_MODEL_PICKS.md](TELEGRAM_HOURLY_MODEL_PICKS.md)
-adds hourly Live 3, QC 3 at an 80% minimum and Live 1,000 picks while preserving
+adds hourly safest Live 3, QC 3 and flexible Live up to 1,000 picks without probability floors while preserving
 the cache-independent SAFE and next-12-hours fix below.
 
 This update fixes the confirmed next-12-hours failure:

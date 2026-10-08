@@ -3,12 +3,14 @@
 The app now scans SportyBet's current public live board every hour and requests
 three additional tickets using the existing probability models:
 
-| Ticket | Combined odds target | Minimum probability per selection |
+| Ticket | Combined odds target | Selection ranking |
 | --- | --- | --- |
-| Live | 3.00 | 85% |
-| Quick Cash (QC) | 3.00 | **80%** |
-| Live | 1,000.00 | 85% |
+| Live | 3.00 | Highest estimated combined model chance |
+| Quick Cash (QC) | 3.00 | Highest estimated combined model chance |
+| Live | 1,000.00, or a lower available total | Highest estimated combined model chance |
 
+Hourly Live and QC picks have **no minimum probability percentage cutoff**.
+The model still estimates probabilities and ranks complete combinations.
 These are accumulator odds targets, not game counts. Football, Basketball, Ice
 Hockey, Handball, Volleyball and Tennis are considered, including every supported
 offered bet type and corner markets where current corner scores are available.
@@ -42,11 +44,12 @@ ticket can have a small combined winning chance despite strong individual picks;
 Telegram displays the combined estimate and its independence assumption.
 
 Before each booking, another public live scan rebuilds the probabilities and
-selection combination. The QC 80% minimum is checked again at this point. It
-cannot be lowered by a leftover zero-probability configuration. Suspended,
-removed, losing or below-minimum selections are excluded. If enough qualifying
-games cannot reach a target, no lower-odds code is substituted; an hourly check
-message explains which targets were unavailable.
+selection combination. Suspended, removed, losing or unmodelled selections
+are excluded. Live 3 and QC 3 must reach 3 odds. If the larger Live ticket cannot
+reach 1,000 within the offered board and 40-selection limit, the bounded search
+finds a lower achievable total and ranks combinations at that total by model
+chance. Telegram labels this fallback and shows the actual odds. An empty board
+still produces an hourly check message rather than an empty booking.
 
 Booking uses anonymous SportyBet sharing by default. This feature generates
 reservation codes and sends the selected games to Telegram; it does not place
@@ -80,28 +83,27 @@ The new batch defaults to enabled. Optional settings:
 ```text
 TELEGRAM_HOURLY_MODEL_ENABLED=true
 TELEGRAM_HOURLY_MINUTE=5
-TELEGRAM_HOURLY_LIVE_MIN_PROBABILITY=85
-TELEGRAM_HOURLY_QC_MIN_PROBABILITY=80
 TELEGRAM_HOURLY_MAX_SELECTIONS=40
 ```
 
-`TELEGRAM_HOURLY_QC_MIN_PROBABILITY` may raise the QC minimum but cannot lower
-it below 80%. An old `TELEGRAM_HOURLY_ENABLED=false` for the retired batch does
-not disable the new batch. Set `TELEGRAM_HOURLY_MODEL_ENABLED=false` to stop its
+`TELEGRAM_HOURLY_LIVE_MIN_PROBABILITY` and
+`TELEGRAM_HOURLY_QC_MIN_PROBABILITY` are ignored by this hourly batch. An old
+`TELEGRAM_HOURLY_ENABLED=false` for the retired batch does not disable the new
+batch. Set `TELEGRAM_HOURLY_MODEL_ENABLED=false` to stop its
 automatic timer. Manual requests remain available.
 
 ## Install on your Mac
 
-Download `matchday-odds-desk-hourly-live-qc-picks.zip` into Downloads, then run:
+Download `matchday-odds-desk-hourly-safest-flexible.zip` into Downloads, then run:
 
 ```bash
 cd ~/Documents &&
 update_dir=$(mktemp -d /tmp/matchday.XXXXXX) &&
-unzip -q ~/Downloads/matchday-odds-desk-hourly-live-qc-picks.zip -d "$update_dir" &&
+unzip -q ~/Downloads/matchday-odds-desk-hourly-safest-flexible.zip -d "$update_dir" &&
 rsync -a --delete --exclude=.git --exclude='.env*' --exclude=node_modules --exclude=data --exclude='.sportybet-*' "$update_dir/matchday-odds-desk/" matchday-odds-desk/ &&
 cd matchday-odds-desk &&
 git add -A &&
-git commit -m "Add hourly Live 3, QC 3 at 80%, and Live 1000 Telegram picks" &&
+git commit -m "Rank hourly Live and QC by model chance with flexible Live 1000 target" &&
 git push origin main
 ```
 
@@ -109,8 +111,9 @@ Wait for Render to finish deploying. Keep build command
 `npm ci --ignore-scripts=false` and start command `npm start`.
 
 `GET /api/telegram/status` should show `hourlyScheduler.running: true`,
-`source: app-server`, minute 5 and the three plans with probability minimums
-85, 80 and 85. It also reports missing bot/chat/Redis settings.
+`source: app-server`, minute 5, `probabilityFloorEnabled: false` under
+`rules.hourly`, and `allowLowerTarget: true` on the larger Live plan. It also
+reports missing bot/chat/Redis settings.
 
 To request all three tickets immediately, start a new manual run of
 **Actions → Plot207 Telegram Hourly Live and QC Picks → Run workflow**. It uses
@@ -121,13 +124,16 @@ a new workflow run to request a fresh batch at any time.
 
 ## Verification
 
-All **404 tests passed**, with no failures or skipped tests. JavaScript, inline
-website JavaScript, the Python runner and all 13 workflow files also passed
-syntax checks.
+The full regression run passed 408 of 409 tests; one local browser timeout
+passed when the 19 browser tests were rerun. The 31 hourly tests passed,
+including real app routes and the manual workflow runner. Syntax checks passed
+for 94 JavaScript files, inline website JavaScript, the Python runner and all
+13 workflows.
 
 The tests exercise the real app HTTP routes and Python workflow runner with
 controlled SportyBet, Redis and Telegram responses. They cover the three
-targets, all six sports, QC's exact 80% boundary, final probability checks,
+targets, all six sports, ignored historical probability floors, lower available
+Live totals, final probability ranking and market checks,
 hourly timing, empty boards, source failures, partial retries, preserved codes,
 lost ownership, cancellation and duplicate prevention. Existing daily,
 next-12-hours, public-cache and booking tests are also retained.

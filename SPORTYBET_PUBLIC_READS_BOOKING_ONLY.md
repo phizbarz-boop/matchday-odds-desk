@@ -19,7 +19,7 @@ The following remain active:
 
 | Pick or update | Schedule in WAT | Source/authentication |
 | --- | --- | --- |
-| Live 3 (85%), QC 3 (80%), Live 1,000 (85%) | :05 every hour, app server | Current public live board and anonymous booking |
+| Safest Live 3, QC 3, flexible Live up to 1,000; no probability floor | :05 every hour, app server | Current public live board and anonymous booking |
 | Morning SAFE | 08:25 daily, GitHub Actions | Public markets and anonymous booking |
 | Next 12 hours: 10,000, 2,500, 500, three 100 targets | 07:00 and 18:00 daily, app server | Current public board, fresh market checks and anonymous booking |
 | Results and hypothetical ₦100-per-ticket ROI | 00:10 and 12:10, GitHub Actions | Public booking-code lookup and event results |

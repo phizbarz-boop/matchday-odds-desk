@@ -92,7 +92,7 @@ object. A private `loggedIn` value is not required for anonymous booking.
   or lost HTTP connection.
 - Daily SAFE, twice-daily next-12-hours Telegram targets, public cache refreshes,
   existing ticket history and results/ROI reports.
-- New hourly Live 3, QC 3 at an 80% minimum, and Live 1,000 tickets; the older five-category hourly batch remains retired.
+- New hourly safest Live 3, QC 3, and flexible Live up to 1,000 (no probability floors) tickets; the older five-category hourly batch remains retired.
 
 ## Install on your Mac
 

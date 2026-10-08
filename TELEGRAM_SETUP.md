@@ -1,6 +1,6 @@
 # Telegram booking-code setup
 
-Telegram analysis and results read public SportyBet data. Creating a new code uses anonymous SportyBet sharing by default, without dummy credentials or session recovery. The new hourly batch sends Live 3 odds at 85%, QC 3 odds at **80%**, and Live 1,000 odds at 85%; see [TELEGRAM_HOURLY_MODEL_PICKS.md](TELEGRAM_HOURLY_MODEL_PICKS.md) for the latest archive and installation.
+Telegram analysis and results read public SportyBet data. Creating a new code uses anonymous SportyBet sharing by default, without dummy credentials or session recovery. The new hourly batch sends the safest Live 3 odds, QC 3 odds, and Live up to 1,000 odds (lower when unavailable), with no probability floors; see [TELEGRAM_HOURLY_MODEL_PICKS.md](TELEGRAM_HOURLY_MODEL_PICKS.md) for the latest archive and installation.
 
 All pick workflows scan the current public SportyBet board without waiting for
 the daily catalogue cache. The next-12-hours builder runs even when the cache is
@@ -14,7 +14,7 @@ See [TELEGRAM_AUTO_PICK_FIX.md](TELEGRAM_AUTO_PICK_FIX.md) for deployment and ch
 
 | Ticket/update | Time in WAT | Scheduler |
 | --- | --- | --- |
-| Live 3 odds (85%), QC 3 odds (80%), Live 1,000 odds (85%) | :05 every hour | App server |
+| Safest Live 3, QC 3, Live up to 1,000; no probability floor | :05 every hour | App server |
 | Next 12h: 10,000, 2,500, 500, three 100 variations | 07:00 and 18:00 daily | App server |
 | SAFE; 85%, combined odds 1.30–5.00 | 08:25 daily | GitHub Actions |
 | Results, closest/worst tickets and hypothetical ₦100 ROI | 00:10 and 12:10 | GitHub Actions |

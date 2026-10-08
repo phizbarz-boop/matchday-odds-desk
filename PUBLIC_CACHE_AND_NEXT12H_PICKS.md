@@ -1,6 +1,6 @@
 # Public SportyBet cache and next-12-hours Telegram picks
 
-Current update: all data reads and booking-code creation are public by default. The new hourly Live 3, QC 3 (80% minimum) and Live 1,000 batch is documented in [TELEGRAM_HOURLY_MODEL_PICKS.md](TELEGRAM_HOURLY_MODEL_PICKS.md). The earlier five-category hourly batch remains retired. The cache schedule and next-12-hours picks described below remain active.
+Current update: all data reads and booking-code creation are public by default. The new hourly safest Live 3, QC 3 and flexible Live up to 1,000 (no probability floors) batch is documented in [TELEGRAM_HOURLY_MODEL_PICKS.md](TELEGRAM_HOURLY_MODEL_PICKS.md). The earlier five-category hourly batch remains retired. The cache schedule and next-12-hours picks described below remain active.
 
 Next-12-hours tickets now scan the current public SportyBet board independently
 of this cache. A missing snapshot or busy refresh cannot stop ticket scanning.

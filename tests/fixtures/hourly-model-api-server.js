@@ -5,7 +5,7 @@ process.env.TELEGRAM_NEXT12H_ENABLED='false';
 const assert=require('node:assert/strict'),express=require('express');
 const {fakeRedis}=require('./fake-redis'),{market,outcome}=require('./sportybet-live-format');
 const redis=fakeRedis();require('redis');require.cache[require.resolve('redis')].exports={createClient:()=>redis};
-let time=Date.parse('2026-10-08T11:04:00Z'),empty=false,failReads=false,failBooking=false,failSending=false,flip=false;
+let time=Date.parse('2026-10-08T11:04:00Z'),empty=false,shortBoard=false,failReads=false,failBooking=false,failSending=false,flip=false;
 const RealDate=Date,realInterval=setInterval,realClear=clearInterval,ticks=new Map();
 global.Date=class extends RealDate{constructor(...args){super(...(args.length?args:[time]));}static now(){return time;}};
 global.setInterval=(fn,ms,...args)=>{if(ms!==30000)return realInterval(fn,ms,...args);const marker={unref(){}};ticks.set(marker,fn);return marker;};
@@ -21,6 +21,7 @@ function event(sport,id,fields={}){return {eventId:`sr:match:hourly-model-${spor
   status:1,live:true,estimateStartTime:time-55*60000,matchStatus:'P3',playedSeconds:'55:00',setScore:'3:1',markets:[winner('406','Winner (incl. overtime and penalties)')],...fields};}
 function slate(sport){
   if(empty)return [];
+  if(shortBoard)return sport==='hockey'?[event(sport,'only',{markets:flip?[market('406','Winner (incl. overtime and penalties)',[outcome('4','Home',1.8),outcome('5','Away',1.9)])]:[winner('406','Winner (incl. overtime and penalties)')]} )]:[];
   if(sport==='hockey')return [...Array.from({length:34},(_,i)=>event(sport,i)),event(sport,'finished',{live:false,matchStatus:'FT'}),event(sport,'unknown',{setScore:undefined})];
   if(sport==='football')return [event(sport,'late',{matchStatus:'H2',playedSeconds:'80:00',setScore:'2:0',cornerScore:'6:3',markets:[winner('1','1X2',true),market('166','Total Corners Over/Under',[outcome('12','Over 8.5',1.25),outcome('13','Under 8.5',8)],{specifier:'total=8.5'})]}),
     event(sport,'early',{matchStatus:'H1',playedSeconds:'20:00',markets:[winner('1','1X2',true)]}),
@@ -54,7 +55,7 @@ direct.setFetchForTesting(async(url,options)=>{
 });
 process.on('message',async({id,action,...message})=>{
   if(action==='clock'){time=Date.parse(message.date);for(const tick of ticks.values())tick();}
-  if(action==='configure'){if('empty'in message)empty=message.empty;if('failReads'in message)failReads=message.failReads;if('failBooking'in message)failBooking=message.failBooking;if('failSending'in message)failSending=message.failSending;if('flip'in message)flip=message.flip;}
+  if(action==='configure'){if('empty'in message)empty=message.empty;if('shortBoard'in message)shortBoard=message.shortBoard;if('failReads'in message)failReads=message.failReads;if('failBooking'in message)failBooking=message.failBooking;if('failSending'in message)failSending=message.failSending;if('flip'in message)flip=message.flip;}
   process.send({id,data:action==='state'?{messages,bookings,reads,aiMessages,messageAttempts,bookingAttempts,sessionChecks,
     data:[...redis.data],hashes:[...redis.hashes].map(([key,rows])=>[key,[...rows]])}:true});
 });
