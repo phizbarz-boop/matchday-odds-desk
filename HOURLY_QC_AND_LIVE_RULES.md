@@ -1,6 +1,6 @@
 # Hourly Quick Cash and live selection rules
 
-> Historical instructions for the earlier hourly batch. For the current safest Live 3, QC 3, and flexible Live up to 1,000 picks without probability floors, see [TELEGRAM_HOURLY_MODEL_PICKS.md](TELEGRAM_HOURLY_MODEL_PICKS.md).
+> Historical instructions for the earlier hourly batch. For the current safest Live 3, QC 3, and flexible Live up to 1,000 picks with an 80% probability floor, see [TELEGRAM_HOURLY_MODEL_PICKS.md](TELEGRAM_HOURLY_MODEL_PICKS.md).
 
 > Current update: hourly Telegram QC/live generation and its workflow are removed. Website live/QC, SAFE, next-12-hours picks and result reports remain. This earlier guide records the previous hourly implementation. See [SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md](SPORTYBET_PUBLIC_READS_BOOKING_ONLY.md).
 

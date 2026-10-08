@@ -5,12 +5,13 @@ three additional tickets using the existing probability models:
 
 | Ticket | Combined odds target | Selection ranking |
 | --- | --- | --- |
-| Live | 3.00 | Highest estimated combined model chance |
-| Quick Cash (QC) | 3.00 | Highest estimated combined model chance |
-| Live | 1,000.00, or a lower available total | Highest estimated combined model chance |
+| Live | 3.00 | Highest estimated combined model chance; each leg ≥80% |
+| Quick Cash (QC) | 3.00 | Highest estimated combined model chance; each leg ≥80% |
+| Live | 1,000.00, or a lower available total | Highest estimated combined model chance; each leg ≥80% |
 
-Hourly Live and QC picks have **no minimum probability percentage cutoff**.
-The model still estimates probabilities and ranks complete combinations.
+Hourly Live and QC picks require **at least 80% model probability per selection**.
+The floor is checked during selection and again immediately before booking.
+The model estimates probabilities and ranks complete combinations.
 These are accumulator odds targets, not game counts. Football, Basketball, Ice
 Hockey, Handball, Volleyball and Tennis are considered, including every supported
 offered bet type and corner markets where current corner scores are available.
@@ -44,7 +45,7 @@ ticket can have a small combined winning chance despite strong individual picks;
 Telegram displays the combined estimate and its independence assumption.
 
 Before each booking, another public live scan rebuilds the probabilities and
-selection combination. Suspended, removed, losing or unmodelled selections
+selection combination. Suspended, removed, losing, below-80% or unmodelled selections
 are excluded. Live 3 and QC 3 must reach 3 odds. If the larger Live ticket cannot
 reach 1,000 within the offered board and 40-selection limit, the bounded search
 finds a lower achievable total and ranks combinations at that total by model
@@ -87,23 +88,30 @@ TELEGRAM_HOURLY_MAX_SELECTIONS=40
 ```
 
 `TELEGRAM_HOURLY_LIVE_MIN_PROBABILITY` and
-`TELEGRAM_HOURLY_QC_MIN_PROBABILITY` are ignored by this hourly batch. An old
+`TELEGRAM_HOURLY_QC_MIN_PROBABILITY` are superseded by the fixed 80% floor in this hourly batch. An old
 `TELEGRAM_HOURLY_ENABLED=false` for the retired batch does not disable the new
 batch. Set `TELEGRAM_HOURLY_MODEL_ENABLED=false` to stop its
 automatic timer. Manual requests remain available.
 
+## Website and Today’s Codes
+
+The website leaderboard panel, controls and ranking requests have been removed.
+The bot’s Today’s Codes shows one line per permitted code: `ABC123 · 3.12 odds`.
+It omits ticket labels, timestamps, match details and explanatory paragraphs.
+Free-plan access restrictions still apply.
+
 ## Install on your Mac
 
-Download `matchday-odds-desk-hourly-safest-flexible.zip` into Downloads, then run:
+Download `matchday-odds-desk-hourly-80-clean-codes.zip` into Downloads, then run:
 
 ```bash
 cd ~/Documents &&
 update_dir=$(mktemp -d /tmp/matchday.XXXXXX) &&
-unzip -q ~/Downloads/matchday-odds-desk-hourly-safest-flexible.zip -d "$update_dir" &&
+unzip -q ~/Downloads/matchday-odds-desk-hourly-80-clean-codes.zip -d "$update_dir" &&
 rsync -a --delete --exclude=.git --exclude='.env*' --exclude=node_modules --exclude=data --exclude='.sportybet-*' "$update_dir/matchday-odds-desk/" matchday-odds-desk/ &&
 cd matchday-odds-desk &&
 git add -A &&
-git commit -m "Rank hourly Live and QC by model chance with flexible Live 1000 target" &&
+git commit -m "Set hourly probability floor to 80%, hide leaderboard, and simplify bot codes" &&
 git push origin main
 ```
 
@@ -111,7 +119,7 @@ Wait for Render to finish deploying. Keep build command
 `npm ci --ignore-scripts=false` and start command `npm start`.
 
 `GET /api/telegram/status` should show `hourlyScheduler.running: true`,
-`source: app-server`, minute 5, `probabilityFloorEnabled: false` under
+`source: app-server`, minute 5, `probabilityFloorEnabled: true` under
 `rules.hourly`, and `allowLowerTarget: true` on the larger Live plan. It also
 reports missing bot/chat/Redis settings.
 
@@ -124,15 +132,13 @@ a new workflow run to request a fresh batch at any time.
 
 ## Verification
 
-The full regression run passed 408 of 409 tests; one local browser timeout
-passed when the 19 browser tests were rerun. The 31 hourly tests passed,
-including real app routes and the manual workflow runner. Syntax checks passed
+All 410 tests passed with no failures or skipped tests. Syntax checks passed
 for 94 JavaScript files, inline website JavaScript, the Python runner and all
-13 workflows.
+13 workflow files.
 
 The tests exercise the real app HTTP routes and Python workflow runner with
 controlled SportyBet, Redis and Telegram responses. They cover the three
-targets, all six sports, ignored historical probability floors, lower available
+targets, all six sports, the 80% boundary and stale-estimate rejection, lower available
 Live totals, final probability ranking and market checks,
 hourly timing, empty boards, source failures, partial retries, preserved codes,
 lost ownership, cancellation and duplicate prevention. Existing daily,

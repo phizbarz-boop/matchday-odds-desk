@@ -30,7 +30,8 @@ test('hourly removal preserves historical tickets, public results and interactiv
       {'x-telegram-bot-api-secret-token':'hook-secret'});
     assert.equal(ack.status,200);assert.equal(await rpc('await_ai',{after:before}),true);
     const text=(await rpc('state')).aiMessages.at(-1);assert.match(text,/DAILY-SAFE/);assert.match(text,/QC-TEST-1/);
-    assert.doesNotMatch(text,/tickets run hourly|RETIRED-TWO/);
+    assert.doesNotMatch(text,/tickets run hourly|RETIRED-TWO|TODAY|Date:|SAFE 1.30|FOOTBALL|QC FOOTBALL|Codes only|Pro\/Elite/);
+    assert.ok(text.split('\n').every(line=>/^[A-Z0-9-]+ · (?:\d+\.\d{2} odds|Odds unavailable)$/.test(line)));
   });
   await t.test('12-hour public results retain winners and 100-naira ROI without dummy login',async()=>{
     await rpc('report_configuration',{settled:true});

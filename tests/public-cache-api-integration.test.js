@@ -29,7 +29,7 @@ test('the real app refreshes public data and sends two additional six-ticket Tel
   await rpc('daily',{date:'2026-10-07',codes:[{targetOdds:'1.30–5.00 SAFE',combinedOdds:1.5,shareCode:'SAFE-PRESERVED'}]});
   await request('/api/telegram/bot/webhook',{callback_query:{id:'fixture-callback',data:'action:dailycodes',from:{id:6001},message:{chat:{id:6001},text:'/start'}}},{'x-telegram-bot-api-secret-token':'fixture-hook-secret'});
   for(let i=0;i<100;i++){state=await rpc('state');if(state.aiMessages.length)break;await new Promise(r=>setTimeout(r,10));}
-  const text=state.aiMessages.at(-1);assert.match(text,/SAFE-PRESERVED/);assert.match(text,/PUBLIC-TEST-6/);assert.match(text,/NEXT 12H/);assert.doesNotMatch(text,/🔒 NEXT 12H/);
+  const text=state.aiMessages.at(-1);assert.match(text,/SAFE-PRESERVED/);assert.match(text,/PUBLIC-TEST-6/);assert.doesNotMatch(text,/NEXT 12H|TODAY|Date:|Codes only/);assert.equal(text.split('\n').length,7);assert.ok(text.split('\n').every(line=>/^[A-Z0-9-]+ · \d+\.\d{2} odds$/.test(line)));
   for(const date of ['2026-10-07T11:30:00Z','2026-10-07T16:30:00Z']){
     await rpc('clock',{date});await complete('/api/sportybet/public-cache/status',p=>p.scheduler.lastRun?.status==='completed'&&p.lastRun?.startedAt===date.replace('Z','.000Z'));
   }

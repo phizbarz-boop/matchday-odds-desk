@@ -450,42 +450,13 @@ async function saveTelegramHourlyModelCode(redis,dateKey,slotKey,plan,booking,re
 }
 
 function telegramDailyCodesText(snapshot, plan) {
-  const codes = (Array.isArray(snapshot?.codes) ? snapshot.codes : []).filter(c=>/safe|^(?:QC|LIVE|NEXT 12H)\b/i.test(String(c.targetOdds||'')));
-  const isFree = plan?.id === 'free';
-  const lines = ['🎟 TODAY’S AUTO-PICK CODES', '', `Date: ${snapshot?.date || fixtureDateKeyInTimeZone(new Date(), 'Africa/Lagos')} (WAT)`, ''];
-  if (!codes.length) {
-    lines.push('No Auto Pick codes have been generated yet today.');
-  } else {
-    // Retired 2x/3x/1000 sport templates are not shown after the update.
-    const labelFor = target => {
-      const raw = String(target || '');
-      if (/safe/i.test(raw)) return 'SAFE 1.30–5.00';
-      const m = raw.match(/^(\d+(?:\.\d+)?)\s*(.*)$/);
-      if (m) return m[2] ? `${m[1]}x ${m[2]}` : `${m[1]}x`;
-      return raw;
-    };
-    const priority = target => {
-      const raw = String(target || '');
-      if (/safe/i.test(raw)) return 0;
-      return 1;
-    };
-    const sorted = codes.slice().sort((a, b) => priority(a.targetOdds) - priority(b.targetOdds)||(b.hourKey||'').localeCompare(a.hourKey||''));
-    for (const row of sorted) {
-      const label = labelFor(row.targetOdds);
-      if (isFree && !telegramDailyCodeVisibleForPlan('free', row.targetOdds)) {
-        lines.push(`🔒 ${label} — Pro/Elite only`);
-      } else {
-        const oddsPart = Number(row.combinedOdds) > 1 ? ` (${Number(row.combinedOdds).toFixed(2)} odds)` : '';
-        lines.push(`${label}: ${row.shareCode}${oddsPart}`);
-      }
-    }
-  }
-  lines.push('', 'Codes only — game selections are not shown here.');
-  if (isFree) lines.push('Free access: SAFE codes.');
-  return lines.join('\n');
+  const codes=(Array.isArray(snapshot?.codes)?snapshot.codes:[])
+    .filter(c=>c.shareCode&&/safe|^(?:QC|LIVE|NEXT 12H)\b/i.test(String(c.targetOdds||'')))
+    .filter(c=>plan?.id!=='free'||telegramDailyCodeVisibleForPlan('free',c.targetOdds))
+    .sort((a,b)=>Number(!/safe/i.test(a.targetOdds))-Number(!/safe/i.test(b.targetOdds))||(b.hourKey||'').localeCompare(a.hourKey||''));
+  return codes.length?codes.map(c=>`${c.shareCode} · ${Number(c.combinedOdds)>1?Number(c.combinedOdds).toFixed(2)+' odds':'Odds unavailable'}`).join('\n'):
+    'No codes available today.';
 }
-
-
 
 function sanitizeTelegramSlip(items) {
   if (!Array.isArray(items)) return [];
@@ -3719,7 +3690,7 @@ app.get('/api/telegram/status', (req, res) => {
     rules: {
       safe: {minProbability:85,combinedOddsMin:1.30,combinedOddsMax:5.00,selectionCap:15,
         cron:'25 7 * * *',redFlagProtection:true},
-      hourly:{intervalMinutes:60,plans:hourlyModelPlans(),probabilityFloorEnabled:false,selectionRanking:'estimated combined winning probability',dataSource:'SportyBet current public live board',cacheRequired:false,
+      hourly:{intervalMinutes:60,plans:hourlyModelPlans(),probabilityFloorEnabled:true,minimumProbability:80,selectionRanking:'estimated combined winning probability',dataSource:'SportyBet current public live board',cacheRequired:false,
         halfwayRequired:true,currentlyWinningRequired:true,bookingMode:sportyDirect.sessionStatus().bookingMode,enabledSetting:'TELEGRAM_HOURLY_MODEL_ENABLED'},
       performance: {intervalHours:12,stakePerTicket:100,currency:'NGN',cron:'10 11,23 * * *',
         endpoint:'/api/telegram/performance-report',roiBasis:'settled and priced tickets; unresolved stake shown separately'},

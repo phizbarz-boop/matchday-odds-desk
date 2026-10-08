@@ -21,11 +21,11 @@ function harness({rows=Array.from({length:34},(_,i)=>row(i)),...overrides}={}){
 
 test('the requested hourly batch contains exactly Live 3, QC 3 and Live 1000 across all six sports',()=>{
   const plans=hourlyModelPlans({});assert.deepEqual(plans.map(p=>p.targetOdds),[3,3,1000]);assert.deepEqual(plans.map(p=>p.liveMode),['live','quick_cash','live']);
-  assert.deepEqual(plans.map(p=>p.minProbability),[0,0,0]);assert.ok(plans.every(p=>p.maxSelections===40&&p.sports.length===6));
+  assert.deepEqual(plans.map(p=>p.minProbability),[80,80,80]);assert.ok(plans.every(p=>p.maxSelections===40&&p.sports.length===6));
   assert.deepEqual(hourlyModelPlans({TELEGRAM_QC_TARGET_ODDS:2,TELEGRAM_LIVE_TARGET_ODDS:2}).map(p=>p.targetOdds),[3,3,1000]);
   assert.ok(hourlyModelPlans({TELEGRAM_HOURLY_MAX_SELECTIONS:999}).every(p=>p.maxSelections===40));
-  for(const value of [0,20,79.9,''])assert.equal(hourlyModelPlans({TELEGRAM_HOURLY_QC_MIN_PROBABILITY:value})[1].minProbability,0);
-  assert.ok(hourlyModelPlans({TELEGRAM_HOURLY_QC_MIN_PROBABILITY:99,TELEGRAM_HOURLY_LIVE_MIN_PROBABILITY:99}).every(p=>p.minProbability===0));
+  for(const value of [0,20,79.9,''])assert.equal(hourlyModelPlans({TELEGRAM_HOURLY_QC_MIN_PROBABILITY:value})[1].minProbability,80);
+  assert.ok(hourlyModelPlans({TELEGRAM_HOURLY_QC_MIN_PROBABILITY:99,TELEGRAM_HOURLY_LIVE_MIN_PROBABILITY:99}).every(p=>p.minProbability===80));
 });
 test('one initial scan builds three target tickets, tracking every selection and combined model chance',async()=>{
   const h=harness(),result=await h.run();assert.equal(result.ticketsSent,3);assert.equal(h.scans(),1);assert.equal(h.validations(),3);
@@ -45,12 +45,12 @@ test('halfway Live 3 is eligible while QC 3 requires the late stage',async()=>{
   const h=harness({rows:[row('football',{sport:'Football',marketId:'1',outcomeId:'1',betType:'home_win',odds:3,liveState:{phase:'2nd half',minute:55,homeScore:2,awayScore:0}})]});
   const result=await h.run();assert.equal(result.ticketsSent,2);assert.equal(result.results[0].sent,true);assert.equal(result.results[1].reason,'no_eligible_live_games');
 });
-test('hourly Live and QC accept lower estimates despite configured historical floors',async()=>{
-  const h=harness({rows:[row('available',{odds:3,probability:20})],env:{TELEGRAM_HOURLY_LIVE_MIN_PROBABILITY:99,TELEGRAM_HOURLY_QC_MIN_PROBABILITY:99}});
-  const result=await h.run();assert.equal(result.ticketsSent,3);assert.ok(result.results.every(r=>r.minProbability===0));
-  assert.ok(h.messages.every(m=>m.includes('no minimum probability cutoff')));
-  for(const probability of [0,-1,101,NaN]){
-    const invalid=harness({rows:[row('invalid',{odds:3,probability})]});assert.equal((await invalid.run()).ticketsSent,0);
+test('all hourly plans accept 80% and exclude below-floor estimates even with old zero settings',async()=>{
+  const h=harness({rows:[row('boundary',{odds:3,probability:80})],env:{TELEGRAM_HOURLY_LIVE_MIN_PROBABILITY:0,TELEGRAM_HOURLY_QC_MIN_PROBABILITY:0}});
+  const result=await h.run();assert.equal(result.ticketsSent,3);assert.ok(result.results.every(r=>r.minProbability===80));
+  assert.ok(h.messages.every(m=>m.includes('minimum leg probability: 80%')));
+  for(const probability of [0,20,79.99,-1,101,NaN]){
+    const invalid=harness({rows:[row('invalid',{odds:3,probability})]});assert.equal((await invalid.run()).ticketsSent,0);assert.equal(invalid.bookings.length,0);
   }
 });
 test('early, finished, losing, tied-winner, prematch and unknown-score matches cannot be booked',async()=>{
@@ -65,21 +65,21 @@ test('each ticket has one selection per fixture and the larger Live plan accepts
   const result=await h.run();assert.equal(result.ticketsSent,3);assert.ok(h.bookings.every(s=>s.length===1));assert.equal(result.results.at(-1).lowerTarget,true);
   assert.equal(h.codes.length,3);assert.match(h.messages.at(-1),/Lower available target used/);
 });
-test('fresh probabilities are used for reporting and ranking without an old floor',async()=>{
+test('fresh probabilities below 80% cannot be booked using earlier estimates',async()=>{
   const h=harness();h.deps.validate=async selections=>({valid:selections.map(c=>({...c,probability:50}))});
-  const result=await h.run();assert.equal(result.ticketsSent,3);assert.ok(h.messages.every(m=>m.includes('Model 50.0%')));
+  const result=await h.run();assert.equal(result.ticketsSent,0);assert.equal(h.bookings.length,0);
 });
 test('the final public scan rejects missing model estimates before any booking POST',async()=>{
   const h=harness();h.deps.validate=async selections=>({valid:selections.map(c=>({...c,probability:NaN}))});
   const result=await h.run();assert.equal(result.ticketsSent,0);assert.equal(h.bookings.length,0);
 });
 test('a short board produces a lower Live total while strict 3-odds plans remain unavailable',async()=>{
-  const h=harness({rows:[row('only',{odds:1.5,probability:75})]});const result=await h.run();
+  const h=harness({rows:[row('only',{odds:1.5,probability:80})]});const result=await h.run();
   assert.equal(result.ticketsSent,1);assert.equal(result.results[0].reason,'target_unreachable');assert.equal(result.results[1].reason,'target_unreachable');
   assert.equal(result.results[2].combinedOdds,1.5);assert.equal(result.results[2].lowerTarget,true);
 });
 test('a fresh live board chooses the safest combination at the lower achievable target',async()=>{
-  const h=harness();h.deps.validate=async()=>({valid:[],candidates:[row('one',{odds:4,probability:40}),row('one',{marketId:'other',odds:4,probability:90}),row('two',{odds:5,probability:70})]});
+  const h=harness();h.deps.validate=async()=>({valid:[],candidates:[row('one',{odds:4,probability:40}),row('one',{marketId:'other',odds:4,probability:90}),row('two',{odds:5,probability:80})]});
   const result=await h.run();assert.equal(result.ticketsSent,3);assert.equal(result.results[2].combinedOdds,20);
   assert.equal(h.bookings[2].find(c=>c.eventId==='live-one').marketId,'other');
 });
