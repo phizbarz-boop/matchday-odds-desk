@@ -1,0 +1,25 @@
+name: Plot207 Telegram Hourly Live and QC Picks
+
+on:
+  # Hourly automatic scans run on the app server, without GitHub cron delays.
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plot207-telegram-hourly-model-picks
+  cancel-in-progress: false
+
+jobs:
+  picks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate Live 3, QC 3 and Live 1000 tickets
+        env:
+          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
+          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
+        run: |
+          python3 jobs/telegram-picks-runner.py --endpoint hourly-picks

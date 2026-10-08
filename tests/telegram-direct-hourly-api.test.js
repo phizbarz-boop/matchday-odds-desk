@@ -4,11 +4,11 @@ const {fork}=require('node:child_process');
 const {mkdtempSync,rmSync}=require('node:fs');
 const path=require('node:path'),{tmpdir}=require('node:os');
 
-test('hourly Telegram QC/live is removed even when legacy hourly settings are enabled',async t=>{
+test('legacy hourly URLs stay retired and the new model timer can be disabled explicitly',async t=>{
   const scratch=mkdtempSync(path.join(tmpdir(),'plot207-direct-hourly-'));
   const child=fork(path.join(__dirname,'fixtures/hourly-qc-api-server.js'),[],{cwd:path.join(__dirname,'..'),silent:true,
     env:{...process.env,PORT:'0',REDIS_URL:'redis://test-only',TELEGRAM_BOT_TOKEN:'test-only',TELEGRAM_CHAT_ID:'test-only',
-      TELEGRAM_JOB_SECRET:'test-status-secret',TELEGRAM_HOURLY_ENABLED:'true',TELEGRAM_HOURLY_MINUTE:'0',
+      TELEGRAM_JOB_SECRET:'test-status-secret',TELEGRAM_HOURLY_ENABLED:'true',TELEGRAM_HOURLY_MODEL_ENABLED:'false',TELEGRAM_HOURLY_MINUTE:'0',
       TEST_HOURLY_CLOCK:'2026-10-06T16:32:00Z',TEST_HOURLY_ALL_SPORTS:'true',
       SPORTYBET_PHONE:'',SPORTYBET_PASSWORD:'',SPORTYBET_PROXY_URL:'',SPORTYBET_BOOTSTRAP_COOKIES:'',
       SPORTYBET_SESSION_FILE:path.join(scratch,'session.json'),SPORTYBET_LIVE_MAX_PAGES:'1',GITHUB_ACTIONS:''}});
@@ -31,7 +31,7 @@ test('hourly Telegram QC/live is removed even when legacy hourly settings are en
   await t.test('startup does not authenticate, book or send hourly tickets',async()=>{
     const status=await get('/api/telegram/status'),state=await rpc('state');
     assert.equal(state.messages.length,0);assert.equal(state.bookings.length,0);assert.equal(state.sessionChecks,0);
-    assert.equal(status.body.targets.length,7);assert.equal(status.body.hourlyScheduler,undefined);assert.equal(status.body.rules.hourly,undefined);
+    assert.equal(status.body.targets.length,10);assert.equal(status.body.hourlyScheduler.running,false);assert.equal(status.body.rules.hourly.plans.length,3);
     assert.deepEqual(status.body.next12hRules.times,['07:00','18:00']);assert.equal(status.body.rules.performance.stakePerTicket,100);
   });
   await t.test('scheduled and manual legacy endpoints reject without booking or posting',async()=>{

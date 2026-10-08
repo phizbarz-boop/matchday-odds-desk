@@ -1,4 +1,5 @@
 'use strict';
+process.env.TELEGRAM_HOURLY_MODEL_ENABLED??='false';
 // Each fixture enables only the automation it exercises.
 process.env.SPORTYBET_PUBLIC_CACHE_ENABLED='false';
 process.env.TELEGRAM_NEXT12H_ENABLED='false';

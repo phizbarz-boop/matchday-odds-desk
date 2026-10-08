@@ -46,11 +46,11 @@ test('hourly removal preserves historical tickets, public results and interactiv
     const repeat=await post('/api/telegram/performance-report',{}, {'x-telegram-job-secret':'qc-secret'});
     assert.equal(repeat.body.reason,'already_reported_this_period');assert.equal((await rpc('state')).messages.length,state.messages.length);
   });
-  await t.test('Telegram advertises only SAFE and six next-12h targets',async()=>{
+  await t.test('Telegram advertises SAFE, next-12h and the new three hourly model targets',async()=>{
     const response=await fetch(`http://127.0.0.1:${port}/api/telegram/status`),data=await response.json();
-    assert.equal(data.targets.length,7);assert.ok(!data.targets.some(label=>/^(QC|LIVE) /.test(label)));
+    assert.equal(data.targets.length,10);assert.deepEqual(data.rules.hourly.plans.map(p=>p.targetOdds),[3,3,1000]);
     assert.deepEqual(data.next12hRules.targets.map(p=>p.targetOdds),[10000,2500,500,100,100,100]);
-    assert.equal(data.rules.performance.stakePerTicket,100);assert.equal(data.rules.hourly,undefined);
+    assert.equal(data.rules.performance.stakePerTicket,100);assert.equal(data.hourlyScheduler.running,false);
   });
   await t.test('website live mode still rejects early games at a zero probability floor',async()=>{
     await rpc('configure',{early:true});const picked=await post('/api/sportybet/auto-pick',{sports:['football'],liveMode:'live',minProbability:0,minEdge:-25,betTypes:['home_win'],targetOdds:1.05});

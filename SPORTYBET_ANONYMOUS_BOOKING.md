@@ -6,7 +6,7 @@ when old dummy credentials or an expired private session remain on the server.
 No access token, refresh token or browser-cookie renewal is needed for this flow.
 
 For the latest Telegram workflow and deployment update, see
-[TELEGRAM_PUBLIC_PICKS_FIX.md](TELEGRAM_PUBLIC_PICKS_FIX.md). Anonymous booking remains
+[TELEGRAM_HOURLY_MODEL_PICKS.md](TELEGRAM_HOURLY_MODEL_PICKS.md). Anonymous booking remains
 the default in that update.
 
 ## Live verification
@@ -92,7 +92,7 @@ object. A private `loggedIn` value is not required for anonymous booking.
   or lost HTTP connection.
 - Daily SAFE, twice-daily next-12-hours Telegram targets, public cache refreshes,
   existing ticket history and results/ROI reports.
-- Removal of hourly Telegram QC and live picks remains in effect.
+- New hourly Live 3, QC 3 at an 80% minimum, and Live 1,000 tickets; the older five-category hourly batch remains retired.
 
 ## Install on your Mac
 

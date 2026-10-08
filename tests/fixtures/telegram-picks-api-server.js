@@ -1,4 +1,5 @@
 'use strict';
+process.env.TELEGRAM_HOURLY_MODEL_ENABLED??='false';
 const assert=require('node:assert/strict'),express=require('express');
 const {fakeRedis}=require('./fake-redis'),{market,outcome}=require('./sportybet-live-format');
 const redis=fakeRedis();require('redis');require.cache[require.resolve('redis')].exports={createClient:()=>redis};

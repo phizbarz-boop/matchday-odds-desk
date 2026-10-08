@@ -47,3 +47,24 @@ test('a busy public-refresh slot logs its lock outcome without copying an upstre
   assert.ok(messages.some(line=>line.includes('outcome=slot_in_progress')));
   assert.equal(messages.some(line=>line.includes('fixture-private-upstream-message')),false);scheduler.stop();
 });
+test('a replaced Redis lease blocks an old worker action without releasing the new owner',async()=>{
+  const redis=fakeRedis(),context={slotKey:'2026-10-08T12',dateKey:'2026-10-08',slotTime:'12:05'};
+  const lock='lease-test:once:'+context.slotKey;let actions=0;
+  const job=createWatSlotJob({namespace:'lease-test',getRedis:async()=>redis,timers,run:async({assertLease})=>{
+    await assertLease();await redis.set(lock,'replacement-worker');
+    await assertLease();actions++;return {ticketsSent:1};
+  }});
+  const result=await job(context);assert.equal(result.statusCode,502);assert.equal(result.body.code,'TELEGRAM_RUN_LEASE_LOST');
+  assert.equal(actions,0);assert.equal(await redis.get(lock),'replacement-worker');assert.equal(await redis.get('lease-test:done:'+context.slotKey),null);
+});
+test('a heartbeat that loses ownership prevents a stale slot being marked complete',async()=>{
+  const redis=fakeRedis(),context={slotKey:'2026-10-08T13',dateKey:'2026-10-08',slotTime:'13:05'};
+  let beat,abortSeen=false;
+  const heartbeatTimers={setInterval:fn=>{beat=fn;return {unref(){}};},clearInterval(){}};
+  const job=createWatSlotJob({namespace:'heartbeat-test',getRedis:async()=>redis,timers:heartbeatTimers,run:async({shouldAbort})=>{
+    await redis.set('heartbeat-test:once:'+context.slotKey,'replacement-worker');beat();await flush();
+    abortSeen=shouldAbort();return {ticketsSent:0};
+  }});
+  const result=await job(context);assert.equal(abortSeen,true);assert.equal(result.body.code,'TELEGRAM_RUN_LEASE_LOST');
+  assert.equal(await redis.get('heartbeat-test:done:'+context.slotKey),null);
+});

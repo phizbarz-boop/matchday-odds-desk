@@ -3,7 +3,7 @@
 Current update: booking also uses the public website's anonymous sharing operation. See [SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md). The website retains recoverable requests instead of aborting the operation after 18 seconds.
 
 Telegram workflows now use recoverable jobs too; see
-[TELEGRAM_PUBLIC_PICKS_FIX.md](TELEGRAM_PUBLIC_PICKS_FIX.md) for the latest archive and installation. Both pick workflows scan the current public board without requiring the catalogue cache.
+[TELEGRAM_HOURLY_MODEL_PICKS.md](TELEGRAM_HOURLY_MODEL_PICKS.md) for the latest archive and installation. All pick workflows scan the current public board without requiring the catalogue cache.
 
 User requests read SportyBet's public website JSON feeds. Fixtures, odds, full event markets, live/QC analysis, imported booking-code analysis, replacement selections, result checks and public cache refreshes do not load or send dummy-account credentials. The optional football statistics collector opens public match pages in a fresh browser context.
 
@@ -13,12 +13,13 @@ Creating a booking code uses anonymous `POST /orders/share` by default. The serv
 
 ## Telegram schedules
 
-The hourly QC and Live All Sports Telegram picks are removed, including startup catch-up, hourly retries, manual hourly batches and the hourly GitHub workflow. Legacy calls to `POST /api/telegram/quick-cash` return HTTP 410 without booking or sending. Old `TELEGRAM_HOURLY_*` settings cannot enable that retired endpoint.
+The former five-category hourly QC and Live All Sports batch remains retired. Legacy calls to `POST /api/telegram/quick-cash` return HTTP 410 without booking or sending. The new three-ticket hourly model batch uses its own `/api/telegram/hourly-picks` route and `TELEGRAM_HOURLY_MODEL_ENABLED` switch.
 
 The following remain active:
 
 | Pick or update | Schedule in WAT | Source/authentication |
 | --- | --- | --- |
+| Live 3 (85%), QC 3 (80%), Live 1,000 (85%) | :05 every hour, app server | Current public live board and anonymous booking |
 | Morning SAFE | 08:25 daily, GitHub Actions | Public markets and anonymous booking |
 | Next 12 hours: 10,000, 2,500, 500, three 100 targets | 07:00 and 18:00 daily, app server | Current public board, fresh market checks and anonymous booking |
 | Results and hypothetical ₦100-per-ticket ROI | 00:10 and 12:10, GitHub Actions | Public booking-code lookup and event results |

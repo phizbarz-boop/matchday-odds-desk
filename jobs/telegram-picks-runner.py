@@ -13,7 +13,7 @@ import urllib.request
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--endpoint", choices=["daily-picks", "next-12h-picks"], default="daily-picks")
+    parser.add_argument("--endpoint", choices=["daily-picks", "next-12h-picks", "hourly-picks"], default="daily-picks")
     args = parser.parse_args()
     secret = os.environ.get("TELEGRAM_JOB_SECRET", "")
     base = os.environ.get("MATCHDAY_BASE_URL", "https://matchday-odds-desk.onrender.com").rstrip("/")

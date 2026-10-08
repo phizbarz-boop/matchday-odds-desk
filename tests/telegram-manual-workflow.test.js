@@ -62,9 +62,15 @@ test('daily cron still sends SAFE',async t=>{
   assert.deepEqual(h.calls,[{path:'/api/telegram/daily-picks',mode:'scheduled',id:'12345'}]);
 });
 
-test('hourly workflow is removed while next-12h picks and 12-hour reports remain',()=>{
+test('the old hourly workflow stays removed while next-12h picks and 12-hour reports remain',()=>{
   const root=path.join(__dirname,'../.github/workflows');
   assert.equal(fs.existsSync(path.join(root,'telegram-quick-cash.yml')),false);
   assert.match(workflow('telegram-next-12h.yml').text,/--endpoint next-12h-picks/);
   assert.match(workflow('telegram-performance.yml').text,/cron: '10 11,23 \* \* \*'/);
+});
+test('new hourly model workflow manually requests its own batch while automatic timing stays in the app',async t=>{
+  const {steps,text}=workflow('telegram-hourly-model-picks.yml'),h=await harness(t);
+  assert.match(text,/workflow_dispatch/);assert.doesNotMatch(text,/cron:/);assert.equal(steps.length,1);
+  const results=await dispatch(steps,h,'workflow_dispatch');assert.equal(results[0].code,0);
+  assert.deepEqual(h.calls,[{path:'/api/telegram/hourly-picks',mode:'manual',id:'12345'}]);
 });

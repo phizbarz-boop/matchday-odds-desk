@@ -1,5 +1,9 @@
 # Telegram picks without waiting for the public cache
 
+Latest update: [TELEGRAM_HOURLY_MODEL_PICKS.md](TELEGRAM_HOURLY_MODEL_PICKS.md)
+adds hourly Live 3, QC 3 at an 80% minimum and Live 1,000 picks while preserving
+the cache-independent SAFE and next-12-hours fix below.
+
 This update fixes the confirmed next-12-hours failure:
 
 ```text
@@ -49,7 +53,8 @@ update creates share codes and sends tickets; it does not place a funded wager.
 Next-12-hours tickets retain separate matches and bet types, with the existing
 three-ticket exception for identical selections at 90% or higher. Unreachable
 targets and an empty eligible slate do not produce fabricated or under-target
-codes. Hourly QC/live Telegram picks remain removed. Website live/QC and the
+codes. The earlier five-category hourly batch stays retired; the new three-ticket
+hourly model batch is described in the latest update above. Website live/QC and the
 interactive bot remain available.
 
 The asynchronous request/status handling remains active. A repeated run ID

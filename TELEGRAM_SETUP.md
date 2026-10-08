@@ -1,8 +1,8 @@
 # Telegram booking-code setup
 
-Telegram analysis and results read public SportyBet data. Creating a new code uses anonymous SportyBet sharing by default, without dummy credentials or session recovery. The hourly QC/live Telegram batch has been removed; legacy hourly settings cannot start it again.
+Telegram analysis and results read public SportyBet data. Creating a new code uses anonymous SportyBet sharing by default, without dummy credentials or session recovery. The new hourly batch sends Live 3 odds at 85%, QC 3 odds at **80%**, and Live 1,000 odds at 85%; see [TELEGRAM_HOURLY_MODEL_PICKS.md](TELEGRAM_HOURLY_MODEL_PICKS.md) for the latest archive and installation.
 
-Both pick workflows scan the current public SportyBet board without waiting for
+All pick workflows scan the current public SportyBet board without waiting for
 the daily catalogue cache. The next-12-hours builder runs even when the cache is
 empty and another refresh holds its lease. See
 [TELEGRAM_PUBLIC_PICKS_FIX.md](TELEGRAM_PUBLIC_PICKS_FIX.md) for the latest update.
@@ -14,6 +14,7 @@ See [TELEGRAM_AUTO_PICK_FIX.md](TELEGRAM_AUTO_PICK_FIX.md) for deployment and ch
 
 | Ticket/update | Time in WAT | Scheduler |
 | --- | --- | --- |
+| Live 3 odds (85%), QC 3 odds (80%), Live 1,000 odds (85%) | :05 every hour | App server |
 | Next 12h: 10,000, 2,500, 500, three 100 variations | 07:00 and 18:00 daily | App server |
 | SAFE; 85%, combined odds 1.30–5.00 | 08:25 daily | GitHub Actions |
 | Results, closest/worst tickets and hypothetical ₦100 ROI | 00:10 and 12:10 | GitHub Actions |
@@ -40,9 +41,9 @@ before an asynchronous pick job scans SportyBet. These settings belong on Render
 
 ## Deployment and manual picks
 
-Commit/push the updated archive and deploy. `npm start` starts the website, three public refresh slots and twice-daily next-12-hours scheduler. Check `GET /api/telegram/status` for SAFE, next-12-hours targets and the 12-hour result report. The service must stay running for its application schedules; Redis retains delivery locks, code history and tracked results across restarts.
+Commit/push the updated archive and deploy. `npm start` starts the website, hourly model picks, three public refresh slots and twice-daily next-12-hours scheduler. Check `GET /api/telegram/status` for the hourly scheduler, SAFE, next-12-hours targets and the 12-hour result report. The service must stay running for its application schedules; Redis retains delivery locks, code history and tracked results across restarts.
 
-**Matchday Telegram Auto Picks → Run workflow** sends SAFE. **Plot207 Telegram Next 12 Hours Picks → Run workflow** sends the six next-12-hours targets. The separate results workflow remains available. The hourly QC/live workflow has been removed, and the old `/api/telegram/quick-cash` route returns HTTP 410 without booking or posting.
+**Matchday Telegram Auto Picks → Run workflow** sends SAFE. **Plot207 Telegram Next 12 Hours Picks → Run workflow** sends the six next-12-hours targets. **Plot207 Telegram Hourly Live and QC Picks → Run workflow** requests the new three hourly tickets immediately. The separate results workflow remains available. The retired five-category workflow stays removed, and its old `/api/telegram/quick-cash` route returns HTTP 410 without booking or posting.
 
 Previously sent ticket records remain available for Today's Codes and result reports.
 The new workflows use `Prefer: respond-async` and `GITHUB_RUN_ID`; repeated
