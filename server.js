@@ -21,7 +21,7 @@ const { selectTelegramMixedWithSportPriority } = require('./lib/telegramMixedSel
 const { enrichSportyFixtures, cleanPredictions, STATS_KEY, STATS_FILE } = require('./lib/sportyFootballModel');
 const {sportyRequest,withFreshSportyRequest,withPublicSportyRequest,memoSportyRead}=require('./lib/sportyRequest');
 const { sanitizeStats } = require('./lib/sportyFootballStats');
-const {createPublicCache,publicCandidates,validatePublicSelections,marketInputs}=require('./lib/sportyPublicCache');
+const {createPublicCache,validatePublicSelections,marketInputs}=require('./lib/sportyPublicCache');
 const {createWatScheduler,createWatSlotJob,watParts}=require('./lib/watScheduler');
 const {PLANS:NEXT12H_PLANS,runNext12hPicks}=require('./lib/telegramNext12h');
 const {refreshTicketResults,buildPerformanceReport,performanceText,registerTelegramPerformanceRoute}=require('./lib/telegramPerformance');
@@ -2467,6 +2467,25 @@ const TELEGRAM_FALLBACK_BET_TYPES = [
 const TELEGRAM_HIGH_ODDS_BET_TYPES = [...TELEGRAM_WINNER_BET_TYPES, ...TELEGRAM_FALLBACK_BET_TYPES];
 const TELEGRAM_HIGH_ODDS_BET_TYPE_SET = new Set(TELEGRAM_HIGH_ODDS_BET_TYPES);
 
+async function loadTelegramPublicCandidates({marketHours=null,leagues=null,betTypes=null,signal}={}) {
+  // The full daily catalogue can be empty, expired or collecting in another
+  // process. Ticket requests use the current public board independently of its
+  // refresh lease, sharing list/detail reads only within this request.
+  return withPublicSportyRequest(async()=>{
+    if(signal?.aborted)throw Object.assign(new Error('Telegram public scan cancelled'),{code:'SPORTYBET_COLLECTION_CANCELLED'});
+    const candidates=await loadAutoCandidates({sportScope:'all',minProbability:0,minEdge:-25,
+      marketHours,leagues,betTypes});
+    if(signal?.aborted)throw Object.assign(new Error('Telegram public scan cancelled'),{code:'SPORTYBET_COLLECTION_CANCELLED'});
+    if(!candidates.length&&Object.keys(candidates.sourceErrors||{}).length){
+      const error=new Error('SportyBet returned no usable selections; failed feeds: '+Object.keys(candidates.sourceErrors).join(', '));
+      error.code='SPORTYBET_SOURCE_UNAVAILABLE';
+      error.diagnostics={sourceErrors:candidates.sourceErrors,candidateCount:0};
+      throw error;
+    }
+    return candidates;
+  },{signal});
+}
+
 function telegramCombinedResult(selections, targetOdds, candidateCount) {
   if (!selections.length) return { selections: [], targetOdds, combinedOdds: 1, reachedTarget: false, candidateCount };
   const n = selections.length;
@@ -2511,10 +2530,7 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
 
   // One current market scan covers all six sports for every target.
   // Removed 1UP and first-half team-corner markets are never reintroduced.
-  const globalCandidates = await loadAutoCandidates({
-    sportScope: 'all', minProbability: 0, minEdge: -25, leagues,
-    betTypes: TELEGRAM_HIGH_ODDS_BET_TYPES,
-  });
+  const globalCandidates = await loadTelegramPublicCandidates({leagues,betTypes:TELEGRAM_HIGH_ODDS_BET_TYPES});
   assertNotCancelled();
   await onProgress('filtering_games');
   const allCandidates = globalCandidates;
@@ -2529,12 +2545,6 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
     .filter(c => TELEGRAM_HIGH_ODDS_BET_TYPE_SET.has(String(c.betType || '')));
   const dateRejected = allCandidates.length - todayCandidates.length;
   const redFlagRejected = todayCandidates.length - saneCandidates.length;
-  if (!globalCandidates.length && Object.keys(globalCandidates.sourceErrors || {}).length) {
-    const error=new Error('SportyBet returned no usable selections; failed feeds: '+Object.keys(globalCandidates.sourceErrors).join(', '));
-    error.code='SPORTYBET_SOURCE_UNAVAILABLE';
-    error.diagnostics={sourceErrors:globalCandidates.sourceErrors,candidateCount:0};
-    throw error;
-  }
 
   const watToday = fixtureDateKeyInTimeZone(new Date(), 'Africa/Lagos');
   const redis = await getRedis();
@@ -3626,7 +3636,7 @@ const publicCacheJob=createWatSlotJob({namespace:'sportybet:public-refresh',getR
 const publicCacheScheduler=createWatScheduler({name:'SportyBet public refresh',times:['06:30','12:30','17:30'],runJob:publicCacheJob,
   enabled:!['false','0','off'].includes(String(process.env.SPORTYBET_PUBLIC_CACHE_ENABLED||'true').toLowerCase()),maxRunMilliseconds:3300000});
 const next12hJob=createWatSlotJob({namespace:'telegram:next12h',getRedis,run:context=>runNext12hPicks({
-  now:()=>new Date(),loadPool:async({signal})=>publicCandidates(await publicCache.usable({signal})),
+  now:()=>new Date(),loadPool:({signal})=>loadTelegramPublicCandidates({marketHours:12,signal}),
   validate:validatePublicSelections,assertBookingReady:()=>sportyDirect.assertBookingReady(),
   book:selections=>bookBet(selections.map(row=>({eventId:row.eventId,marketId:row.marketId,outcomeId:row.outcomeId,...(row.specifier?{specifier:row.specifier}:{})}))),
   send:(text,{signal})=>sendTelegramMessage(text,{}, {signal}),track:trackTelegramSlip,updateTrack:updateTrackedTicket,saveCode:saveTelegramNext12hCode,
@@ -3662,7 +3672,7 @@ app.get('/api/telegram/status', (req, res) => {
     next12hScheduler:next12hScheduler.status(),
     next12hRules:{targets:NEXT12H_PLANS,times:['07:00','18:00'],timezone:'Africa/Lagos',horizonHours:12,
       maxSelections:40,exclusiveMatches:true,exclusiveBetTypes:true,repeatProbabilityThreshold:90,maxRepeatTickets:3,
-      dataSource:'SportyBet public cache',dummySessionForBooking:true},
+      dataSource:'SportyBet current public board',cacheRequired:false,dummySessionForBooking:sportyDirect.sessionStatus().bookingLoginRequired,bookingMode:sportyDirect.sessionStatus().bookingMode},
     aiBot: {
       enabled: String(process.env.TELEGRAM_AI_ENABLED || 'true').toLowerCase() !== 'false',
       tokenConfigured: Boolean(process.env.TELEGRAM_AI_BOT_TOKEN),

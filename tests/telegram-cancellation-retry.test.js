@@ -183,7 +183,7 @@ test('pre-post failures unlock and allow a fresh manual retry', async () => {
 });
 
 test('the actual picker rechecks cancellation after loading candidates and before posting', () => {
-  const load = server.indexOf('const globalCandidates = await loadAutoCandidates(', 0);
+  const load = server.indexOf('const globalCandidates = await loadTelegramPublicCandidates(', 0);
   const endLoad = server.indexOf('  assertNotCancelled();', load);
   const startPosting = server.indexOf('  await onPostingStart();', endLoad);
   assert.ok(load > -1 && endLoad > load && startPosting > endLoad);

@@ -6,7 +6,7 @@ when old dummy credentials or an expired private session remain on the server.
 No access token, refresh token or browser-cookie renewal is needed for this flow.
 
 For the latest Telegram workflow and deployment update, see
-[TELEGRAM_AUTO_PICK_FIX.md](TELEGRAM_AUTO_PICK_FIX.md). Anonymous booking remains
+[TELEGRAM_PUBLIC_PICKS_FIX.md](TELEGRAM_PUBLIC_PICKS_FIX.md). Anonymous booking remains
 the default in that update.
 
 ## Live verification

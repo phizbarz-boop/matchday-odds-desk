@@ -2,7 +2,12 @@
 
 Telegram analysis and results read public SportyBet data. Creating a new code uses anonymous SportyBet sharing by default, without dummy credentials or session recovery. The hourly QC/live Telegram batch has been removed; legacy hourly settings cannot start it again.
 
-The latest auto-pick fix queues one recoverable job and polls its status instead
+Both pick workflows scan the current public SportyBet board without waiting for
+the daily catalogue cache. The next-12-hours builder runs even when the cache is
+empty and another refresh holds its lease. See
+[TELEGRAM_PUBLIC_PICKS_FIX.md](TELEGRAM_PUBLIC_PICKS_FIX.md) for the latest update.
+
+The auto-pick request handler queues one recoverable job and polls its status instead
 of keeping a long HTTP connection open. Empty SAFE slates are normal outcomes;
 source, booking and delivery failures show their actual details in the workflow.
 See [TELEGRAM_AUTO_PICK_FIX.md](TELEGRAM_AUTO_PICK_FIX.md) for deployment and checks.
@@ -44,6 +49,8 @@ The new workflows use `Prefer: respond-async` and `GITHUB_RUN_ID`; repeated
 requests retrieve the same job rather than posting another batch. A new manual
 workflow dispatch still requests a new batch at any time. Deploy the updated
 server before running the updated workflows.
+Use **Run workflow** to start a new run after this deployment. **Re-run jobs**
+on an old failed run retrieves its saved result under the same GitHub run ID.
 
 ## Website and interactive bot
 

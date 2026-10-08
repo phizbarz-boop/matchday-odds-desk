@@ -3,7 +3,7 @@
 Current update: booking also uses the public website's anonymous sharing operation. See [SPORTYBET_ANONYMOUS_BOOKING.md](SPORTYBET_ANONYMOUS_BOOKING.md). The website retains recoverable requests instead of aborting the operation after 18 seconds.
 
 Telegram workflows now use recoverable jobs too; see
-[TELEGRAM_AUTO_PICK_FIX.md](TELEGRAM_AUTO_PICK_FIX.md) for the latest archive and installation.
+[TELEGRAM_PUBLIC_PICKS_FIX.md](TELEGRAM_PUBLIC_PICKS_FIX.md) for the latest archive and installation. Both pick workflows scan the current public board without requiring the catalogue cache.
 
 User requests read SportyBet's public website JSON feeds. Fixtures, odds, full event markets, live/QC analysis, imported booking-code analysis, replacement selections, result checks and public cache refreshes do not load or send dummy-account credentials. The optional football statistics collector opens public match pages in a fresh browser context.
 
@@ -20,7 +20,7 @@ The following remain active:
 | Pick or update | Schedule in WAT | Source/authentication |
 | --- | --- | --- |
 | Morning SAFE | 08:25 daily, GitHub Actions | Public markets and anonymous booking |
-| Next 12 hours: 10,000, 2,500, 500, three 100 targets | 07:00 and 18:00 daily, app server | Public cache, fresh market checks and anonymous booking |
+| Next 12 hours: 10,000, 2,500, 500, three 100 targets | 07:00 and 18:00 daily, app server | Current public board, fresh market checks and anonymous booking |
 | Results and hypothetical ₦100-per-ticket ROI | 00:10 and 12:10, GitHub Actions | Public booking-code lookup and event results |
 | Public fixture/market cache | 06:30, 12:30 and 17:30 daily, app server | Public, no dummy account |
 

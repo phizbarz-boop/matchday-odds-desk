@@ -2,6 +2,11 @@
 
 Current update: all data reads and booking-code creation are public by default. Hourly Telegram QC/live picks are removed. The cache schedule and next-12-hours picks described below remain active.
 
+Next-12-hours tickets now scan the current public SportyBet board independently
+of this cache. A missing snapshot or busy refresh cannot stop ticket scanning.
+See [TELEGRAM_PUBLIC_PICKS_FIX.md](TELEGRAM_PUBLIC_PICKS_FIX.md) for the latest
+installation archive and cold-cache verification.
+
 The long Live/Quick Cash paragraph under Match Status has been removed. The
 mode dropdown and its existing selection rules remain available.
 

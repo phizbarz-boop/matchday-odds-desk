@@ -1,5 +1,9 @@
 # Telegram auto-pick 502 fix
 
+For the newer public-cache dependency fix and installation archive, see
+[TELEGRAM_PUBLIC_PICKS_FIX.md](TELEGRAM_PUBLIC_PICKS_FIX.md). The request polling
+and error handling described below remain active.
+
 The supplied GitHub log reports HTTP 502 after 57 seconds but does not include
 the app's error body, so it cannot establish the deployed failure's exact cause.
 The previous route kept the workflow connection open while scanning all six

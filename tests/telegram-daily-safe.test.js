@@ -30,6 +30,7 @@ function mockRunner(candidates,{bookingError=null,sendError=null}={}) {
     process: { env: { TELEGRAM_PICK_TRIALS: '50', TELEGRAM_MIXED_PICK_TRIALS: '50' } },
     selectAutoBet, selectTelegramMixedWithSportPriority,
     loadAutoCandidates: async () => candidates,
+    withPublicSportyRequest: fn => fn(),
     isCandidateToday: () => true,
     passesRedFlagFilter: () => true,
     fixtureDateKeyInTimeZone: () => '2026-09-18',
