@@ -7,16 +7,16 @@ const now=new Date('2026-10-07T06:00:00Z');
 const leg=(id,type='type',odds=3,probability=80)=>({sport:'Football',eventId:String(id),marketId:type,outcomeId:'1',specifier:null,betType:type,
   home:'Home '+id,away:'Away '+id,marketDesc:type,outcomeDesc:'Home',odds,probability,kickoffUtc:new Date(now.getTime()+3600000).toISOString(),live:false});
 const pool=()=>Array.from({length:6},(_,i)=>Array.from({length:15},(_,j)=>leg(`${i}-${j}`,'type'+i))).flat();
-test('six target variations use separate fixtures and bet types when probabilities are below 90%',()=>{
+test('six target variations avoid repeated selections below 90%',()=>{
   const pack=buildNext12hPack(pool(),{now});assert.deepEqual(pack.plans.map(p=>p.targetOdds),[10000,2500,500,100,100,100]);
   const used=emptyUsage();for(const plan of pack.plans){assert.equal(plan.reachedTarget,true,plan.id);assert.ok(plan.combinedOdds+1e-9>=plan.targetOdds);
-    for(const c of plan.selections){assert.equal(used.events.has(c.eventId),false);assert.equal(used.types.has(c.betType),false);}
+    for(const c of plan.selections){assert.equal(used.events.has(c.eventId),false);}
     recordSelections(used,plan.selections);}
 });
-test('the same 90% pick can recur on three tickets; no other outcome of that match or type can recur',()=>{
+test('90% repeats are limited to three tickets; different fixtures and bet types stay available',()=>{
   const c=leg('shared','home_win',1.1,90),used=emptyUsage();recordSelections(used,[c]);assert.equal(canUse(c,used),true);
-  assert.equal(canUse({...c,outcomeId:'2'},used),false);assert.equal(canUse(leg('other','home_win',2,95),used),false);
-  assert.equal(canUse({...c,betType:'over25',marketId:'18'},used),false);
+  assert.equal(canUse({...c,outcomeId:'2'},used),false);assert.equal(canUse(leg('other','home_win',2,95),used),true);
+  assert.equal(canUse({...c,betType:'over25',marketId:'18'},used),true);
   recordSelections(used,[c]);assert.equal(canUse(c,used),true);recordSelections(used,[c]);assert.equal(canUse(c,used),false);
   const weaker=emptyUsage();recordSelections(weaker,[{...c,probability:89.9}]);assert.equal(canUse(c,weaker),false);
 });
@@ -99,4 +99,10 @@ test('100 variations require 80%; high targets can fall back to 75% but never lo
 test('a fresh model probability below the chosen floor prevents booking',async()=>{
  const h=harness({validate:async rows=>rows.map(c=>({...c,probability:74}))});
  await runNext12hPicks(h.deps,h.context);assert.equal(h.bookings.length,0);
+});
+
+test('different fixtures freely reuse one market family across all six slips',()=>{
+ const candidates=Array.from({length:100},(_,i)=>leg('shared-type-'+i,'over15',3,85));
+ const pack=buildNext12hPack(candidates,{now});assert.ok(pack.plans.every(p=>p.reachedTarget));
+ const events=pack.plans.flatMap(p=>p.selections.map(c=>c.eventId));assert.equal(new Set(events).size,events.length);
 });

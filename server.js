@@ -3706,7 +3706,7 @@ app.get('/api/telegram/status', (req, res) => {
     hourlyScheduler:hourlyModelScheduler.status(),
     next12hScheduler:next12hScheduler.status(),
     next12hRules:{minimumProbability:80,highTargetsFallbackMinimumProbability:75,marketCoverage:'all currently modeled market families; unsupported markets excluded',targets:NEXT12H_PLANS,times:['07:00','18:00'],timezone:'Africa/Lagos',horizonHours:12,
-      maxSelections:40,exclusiveMatches:true,exclusiveBetTypes:true,repeatProbabilityThreshold:90,maxRepeatTickets:3,
+      maxSelections:40,exclusiveMatches:false,exclusiveMatchBetTypePairs:true,exclusiveBetTypes:false,repeatProbabilityThreshold:90,maxRepeatTickets:3,
       dataSource:'SportyBet current public board',cacheRequired:false,dummySessionForBooking:sportyDirect.sessionStatus().bookingLoginRequired,bookingMode:sportyDirect.sessionStatus().bookingMode},
     aiBot: {
       enabled: String(process.env.TELEGRAM_AI_ENABLED || 'true').toLowerCase() !== 'false',
