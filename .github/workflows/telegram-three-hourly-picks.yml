@@ -1,0 +1,27 @@
+name: Plot207 Hockey Tennis Every Three Hours
+
+on:
+  # Wake-up fallback shares the three-hour WAT slot with the app.
+  schedule:
+    - cron: '12 2,5,8,11,14,17,20,23 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plot207-telegram-three-hourly
+  cancel-in-progress: false
+
+jobs:
+  picks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate three hockey-only or tennis-only 100-odds picks
+        env:
+          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
+          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
+        run: |
+          python3 jobs/telegram-picks-runner.py --endpoint three-hourly-picks

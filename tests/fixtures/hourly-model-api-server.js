@@ -1,3 +1,4 @@
+process.env.TELEGRAM_THREE_HOURLY_ENABLED='false';
 'use strict';
 process.env.SPORTYBET_BOOKING_MODE='public';
 process.env.SPORTYBET_PUBLIC_CACHE_ENABLED='false';

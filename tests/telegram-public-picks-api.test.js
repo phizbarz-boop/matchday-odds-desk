@@ -60,3 +60,13 @@ test('failed public reads report source diagnostics instead of a missing-cache e
   assert.equal(result.status,502);assert.equal(result.body.code,'SPORTYBET_SOURCE_UNAVAILABLE');assert.ok(Object.keys(result.body.diagnostics.sourceErrors).length>0);
   assert.doesNotMatch(result.body.error,/cache is not ready/);const state=await api.rpc('state');assert.equal(state.bookings.length,0);assert.equal(state.messages.filter(m=>m.startsWith("🟢")).length,0);
 });
+
+test('new three-hourly endpoint creates three pure-sport public codes and deduplicates the current slot',async t=>{
+ const api=await server(t,'locked-cache');
+ const headers={Prefer:'respond-async','x-matchday-run-mode':'manual','x-matchday-run-id':'three-hourly-test'};
+ const submitted=await api.request('/api/telegram/three-hourly-picks',{},headers);assert.equal(submitted.status,202);
+ const finished=await api.finish(submitted.body.statusUrl);assert.equal(finished.status,200,JSON.stringify(finished.body));assert.equal(finished.body.ticketsSent,3);
+ const state=await api.rpc('state');assert.equal(state.bookings.length,3);assert.equal(state.sessionChecks,0);
+ for(const rows of state.bookings){const sports=new Set(rows.map(c=>c.eventId.match(/public-api-([a-z]+)-/)[1]));assert.equal(sports.size,1);assert.ok(['hockey','tennis'].includes([...sports][0]));}
+ const repeated=await api.request('/api/telegram/three-hourly-picks',{}, {'x-matchday-run-id':'new-same-slot','x-matchday-run-mode':'manual'});assert.equal(repeated.body.reason,'already_processed_this_slot');
+});
