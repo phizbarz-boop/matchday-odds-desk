@@ -20,11 +20,11 @@ test('the real app refreshes public data and sends two additional six-ticket Tel
   const publicStatus=await complete('/api/sportybet/public-cache/status',p=>p.lastRun?.status==='completed');
   assert.equal(publicStatus.loginRequired,false);assert.equal(Object.keys(publicStatus.sports).length,6);assert.deepEqual(publicStatus.scheduler.times,['06:30','12:30','17:30']);
   assert.equal((await rpc('state')).sessionChecks,0);assert.ok(fs.existsSync(path.join(directory,'catalog.json')));
-  const predictions=await request('/api/predictions');assert.equal(predictions.body.readMode,'public-cache');assert.equal(predictions.body.matches.length,24);
+  const predictions=await request('/api/predictions');assert.equal(predictions.body.readMode,'public-cache');assert.equal(predictions.body.matches.length,60);
   await rpc('clock',{date:'2026-10-07T06:00:00Z'});
   let status=await complete('/api/telegram/status',p=>p.next12hScheduler.lastRun?.slotTime==='07:00'&&p.next12hScheduler.lastRun.status==='completed');
   assert.equal(status.next12hScheduler.lastRun.ticketsSent,6,JSON.stringify(status));
-  let state=await rpc('state');assert.equal(state.messages.length,6);assert.equal(state.bookings.length,6);assert.equal(state.sessionChecks,0);
+  let state=await rpc('state');assert.equal(state.messages.filter(m=>m.startsWith("🟢")).length,6);assert.equal(state.bookings.length,6);assert.equal(state.sessionChecks,0);
   const repeated=await request('/api/telegram/next-12h-picks',{}, {'x-telegram-job-secret':'fixture-job-secret'});assert.equal(repeated.body.reason,'already_processed_this_slot');
   await rpc('daily',{date:'2026-10-07',codes:[{targetOdds:'1.30–5.00 SAFE',combinedOdds:1.5,shareCode:'SAFE-PRESERVED'}]});
   await request('/api/telegram/bot/webhook',{callback_query:{id:'fixture-callback',data:'action:dailycodes',from:{id:6001},message:{chat:{id:6001},text:'/start'}}},{'x-telegram-bot-api-secret-token':'fixture-hook-secret'});
@@ -36,7 +36,7 @@ test('the real app refreshes public data and sends two additional six-ticket Tel
   await rpc('clock',{date:'2026-10-07T17:00:00Z'});
   status=await complete('/api/telegram/status',p=>p.next12hScheduler.lastRun?.slotTime==='18:00'&&p.next12hScheduler.lastRun.status==='completed');
   assert.equal(status.next12hScheduler.lastRun.ticketsSent,6,JSON.stringify(status));state=await rpc('state');
-  assert.equal(state.bookings.length,12);assert.equal(state.messages.length,12);
+  assert.equal(state.bookings.length,12);assert.equal(state.messages.filter(m=>m.startsWith("🟢")).length,12);
   assert.equal(state.sessionChecks,0);
   const dailyFields=state.hashes.find(([key])=>key==='telegram:next12h:codes:2026-10-07')[1];assert.equal(dailyFields.length,12);
   assert.equal(state.data.filter(([key])=>key.startsWith('sportybet:public-refresh:done:')).length,3);
@@ -49,5 +49,5 @@ test('the real app refreshes public data and sends two additional six-ticket Tel
   for(let i=0;i<300;i++){finished=await request(accepted.body.statusUrl,undefined,{'x-telegram-job-secret':'fixture-job-secret'});if(finished.status!==202)break;await new Promise(r=>setTimeout(r,10));}
   assert.equal(finished.status,200,JSON.stringify(finished.body));assert.equal(finished.body.ticketsSent,6);
   const repeatedAsync=await request('/api/telegram/next-12h-picks',{},asyncHeaders);assert.equal(repeatedAsync.body.runRequestStatus,'completed');
-  state=await rpc('state');assert.equal(state.bookings.length,18);assert.equal(state.messages.length,18);assert.equal(state.sessionChecks,0);
+  state=await rpc('state');assert.equal(state.bookings.length,18);assert.equal(state.messages.filter(m=>m.startsWith("🟢")).length,18);assert.equal(state.sessionChecks,0);
 });

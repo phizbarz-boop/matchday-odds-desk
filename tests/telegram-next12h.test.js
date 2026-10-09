@@ -74,17 +74,29 @@ test('even shared 90% picks cannot produce three identical 100x variations',()=>
   assert.ok(pack.plans.every(p=>p.reachedTarget));assert.equal(new Set(pack.plans.slice(-3).map(p=>ticketSignature(p.selections))).size,3);
 });
 test('short-priced high-probability families are reserved for targets reachable within 40 games',()=>{
-  const odds=[1.2,2,3,4,5,6],probabilities=[95,80,75,70,65,60];
+  const odds=[1.2,2,3,4,5,6],probabilities=[95,80,80,80,80,80];
   const candidates=Array.from({length:6},(_,i)=>Array.from({length:40},(_,j)=>leg(i+'-'+j,'type'+i,odds[i],probabilities[i]))).flat();
   const pack=buildNext12hPack(candidates,{now});assert.ok(pack.plans.every(p=>p.reachedTarget));
-  assert.ok(pack.plans[0].assignedBetTypes.includes('type1'));assert.ok(pack.plans.every(p=>p.selections.length<=40));
+  assert.ok(!pack.plans[0].assignedBetTypes.includes('type0'));assert.ok(pack.plans.every(p=>p.selections.length<=40));
 });
 test('90% repeat tickets wait for their source ticket after a transient booking failure',async()=>{
-  const odds=[1.2,2,3,4,5,6],probabilities=[95,80,75,70,65,60];
+  const odds=[1.2,2,3,4,5,6],probabilities=[95,80,80,80,80,80];
   const candidates=Array.from({length:6},(_,i)=>Array.from({length:40},(_,j)=>leg(i+'-'+j,'type'+i,odds[i],probabilities[i]))).flat();
   const h=harness({loadPool:async()=>candidates}),book=h.deps.book;let failed=false;
   h.deps.book=async selections=>{if(!failed&&selections.some(c=>c.betType==='type0')){failed=true;throw new Error('source ticket temporarily unavailable');}return book(selections);};
   const first=await runNext12hPicks(h.deps,h.context);assert.equal(first.retryable,true);
   assert.ok(first.results.some(r=>r.reason==='shared_pick_source_ticket_unavailable'));
   const second=await runNext12hPicks(h.deps,h.context);assert.equal(first.ticketsSent+second.ticketsSent,6);assert.equal(h.messages.length,6);
+});
+test('100 variations require 80%; high targets can fall back to 75% but never lower',()=>{
+ const low=pool().map(c=>({...c,probability:75}));
+ const pack=buildNext12hPack(low,{now});
+ assert.ok(pack.plans.filter(p=>p.targetOdds>=500).some(p=>p.reachedTarget&&p.minProbability===75));
+ assert.ok(pack.plans.filter(p=>p.targetOdds===100).every(p=>!p.reachedTarget));
+ assert.ok(buildNext12hPack(low.map(c=>({...c,probability:74.99})),{now}).plans.every(p=>!p.reachedTarget));
+ assert.ok(buildNext12hPack(pool(),{now}).plans.every(p=>p.minProbability===80));
+});
+test('a fresh model probability below the chosen floor prevents booking',async()=>{
+ const h=harness({validate:async rows=>rows.map(c=>({...c,probability:74}))});
+ await runNext12hPicks(h.deps,h.context);assert.equal(h.bookings.length,0);
 });

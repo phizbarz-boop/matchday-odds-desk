@@ -61,6 +61,6 @@ test('real booking rejection fails the run and preserves the previous code',asyn
 test('real Telegram delivery rejection keeps the generated code and reports the delivery error',async t=>{
   const api=await server(t,'send-failure');await api.post();const done=await api.finish();
   assert.equal(done.status,502);assert.match(done.body.detail,/bot was blocked/);assert.equal(done.body.stage,'sending_ticket');
-  const state=await api.rpc('state');assert.equal(state.bookings.length,1);assert.equal(state.messageAttempts,2);assert.equal(state.storedCodes.codes[0].shareCode,'SAFE-API-1');
+  const state=await api.rpc('state');assert.equal(state.bookings.length,1);assert.equal(state.messageAttempts,2);assert.ok(state.storedCodes.codes.some(c=>c.shareCode==='SAFE-API-1'));
   assert.equal((await api.post()).status,502);assert.equal((await api.rpc('state')).messageAttempts,2);
 });

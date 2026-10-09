@@ -19,7 +19,7 @@ def main():
     base = os.environ.get("MATCHDAY_BASE_URL", "https://matchday-odds-desk.onrender.com").rstrip("/")
     run_id = os.environ.get("MATCHDAY_RUN_ID") or os.environ.get("GITHUB_RUN_ID", "")
     event = os.environ.get("GH_EVENT_NAME") or os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch")
-    mode = "scheduled" if args.endpoint == "daily-picks" and event == "schedule" else "manual"
+    mode = "scheduled" if event == "schedule" else "manual"
     if not secret:
         print("Missing GitHub secret TELEGRAM_JOB_SECRET", file=sys.stderr)
         return 1

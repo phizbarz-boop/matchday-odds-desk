@@ -1,7 +1,9 @@
 name: Plot207 Telegram Hourly Live and QC Picks
 
 on:
-  # Hourly automatic scans run on the app server, without GitHub cron delays.
+  # App scheduling remains primary; this scheduled request wakes a sleeping free host.
+  schedule:
+    - cron: '8 * * * *'
   workflow_dispatch: {}
 
 permissions:

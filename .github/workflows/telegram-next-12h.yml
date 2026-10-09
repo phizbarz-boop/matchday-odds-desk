@@ -1,7 +1,9 @@
 name: Plot207 Telegram Next 12 Hours Picks
 
 on:
-  # Automatic 07:00 and 18:00 WAT sends are owned by the app server.
+  # Wake-up fallback shares the app scheduler slot to prevent duplicate sends.
+  schedule:
+    - cron: '5 6,17 * * *'
   workflow_dispatch: {}
 
 permissions:

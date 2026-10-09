@@ -19,10 +19,10 @@ const events=new Map();
 const mode=process.env.PUBLIC_PICKS_TEST_MODE;
 if(mode)redis.data.set('sportybet:public-catalog:v1:refresh','another-refresh-worker');
 function slate(sport){const [marketId,desc]=sporting[sport],three=['football','hockey','handball'].includes(sport),batch=String(Math.floor(time/3600000));
-  return Array.from({length:24},(_,i)=>{
+  return Array.from({length:60},(_,i)=>{
     const eventId=`sr:match:public-api-${sport}-${batch}-${i}`;
     const e={eventId,homeTeamName:'Public Home '+sport+i,awayTeamName:'Public Away '+sport+i,status:0,matchStatus:'Not start',estimateStartTime:time+3*3600000,
-      markets:[market(marketId,desc,three?[outcome('1','Home',mode==='safe'?1.08:3),outcome('2','Draw',mode==='safe'?22:3),outcome('3','Away',mode==='safe'?22:3)]:[outcome('4','Home',mode==='safe'?1.08:3),outcome('5','Away',mode==='safe'?15:3)])]};
+      markets:[market(marketId,desc,three?[outcome('1','Home',mode==='safe'?1.08:1.3),outcome('2','Draw',22),outcome('3','Away',22)]:[outcome('4','Home',mode==='safe'?1.08:1.3),outcome('5','Away',15)])]};
     events.set(eventId,e);return e;
   });
 }
@@ -39,7 +39,7 @@ direct.setFetchForTesting(async(url,options)=>{
   if(mode==='source-failure')return response({message:'Mock public SportyBet feed unavailable'},503);
   if(u.searchParams.has('eventId'))return response({bizCode:10000,data:events.get(u.searchParams.get('eventId'))||{}});
   const sport=Object.keys(SPORT_IDS).find(s=>SPORT_IDS[s]===u.searchParams.get('sportId'));
-  return response({bizCode:10000,data:{totalNum:24,events:slate(sport)}});
+  return response({bizCode:10000,data:{totalNum:60,events:slate(sport)}});
 });
 process.on('message',async({id,action,...message})=>{
   if(action==='clock'){time=Date.parse(message.date);for(const tick of ticks.values())tick();}

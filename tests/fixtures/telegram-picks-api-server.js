@@ -46,7 +46,7 @@ direct.setFetchForTesting(async(url,options)=>{
 redis.data.set('telegram:daily-codes:2026-10-07',JSON.stringify({date:'2026-10-07',codes:[{targetOdds:'1.30–5.00 SAFE',combinedOdds:1.5,shareCode:'PREVIOUS-SAFE'}]}));
 process.on('message',({id,action})=>{
   if(action==='release')releaseRead();
-  process.send({id,data:{messages,bookings,reads,messageAttempts,storedCodes:JSON.parse(redis.data.get('telegram:daily-codes:2026-10-07')||'null')}});
+  process.send({id,data:{messages,bookings,reads,messageAttempts,storedCodes:{codes:[...JSON.parse(redis.data.get('telegram:daily-codes:2026-10-07')||'{"codes":[]}').codes,...[...(redis.hashes.get('telegram:all-codes:2026-10-07')?.values()||[])].map(row=>JSON.parse(row))]}}});
 });
 const listen=express.application.listen;express.application.listen=function(...args){const server=listen.apply(this,args);server.on('listening',()=>process.send({port:server.address().port}));return server;};
 require('../../server');

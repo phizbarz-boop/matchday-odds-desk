@@ -70,7 +70,7 @@ test('the old hourly workflow stays removed while next-12h picks and 12-hour rep
 });
 test('new hourly model workflow manually requests its own batch while automatic timing stays in the app',async t=>{
   const {steps,text}=workflow('telegram-hourly-model-picks.yml'),h=await harness(t);
-  assert.match(text,/workflow_dispatch/);assert.doesNotMatch(text,/cron:/);assert.equal(steps.length,1);
+  assert.match(text,/workflow_dispatch/);assert.match(text,/cron:/);assert.equal(steps.length,1);
   const results=await dispatch(steps,h,'workflow_dispatch');assert.equal(results[0].code,0);
   assert.deepEqual(h.calls,[{path:'/api/telegram/hourly-picks',mode:'manual',id:'12345'}]);
 });

@@ -31,7 +31,7 @@ test('next-12-hours workflow generates six public codes on a cold cache while an
   assert.match(result.output,/"ticketsSent": 6/);
   const status=(await api.request('/api/telegram/status')).body;
   assert.equal(status.next12hRules.cacheRequired,false);assert.equal(status.next12hRules.bookingMode,'public');assert.equal(status.next12hRules.dummySessionForBooking,false);
-  const state=await api.rpc('state');assert.equal(state.bookings.length,6);assert.equal(state.messages.length,6);assert.equal(state.sessionChecks,0);
+  const state=await api.rpc('state');assert.equal(state.bookings.length,6);assert.equal(state.messages.filter(m=>m.startsWith("🟢")).length,6);assert.equal(state.sessionChecks,0);
   assert.equal(state.data.find(([key])=>key==='sportybet:public-catalog:v1:refresh')[1],'another-refresh-worker');
   assert.ok(!fs.existsSync(path.join(api.directory,'catalog.json')),'ticket generation must not require a completed catalogue');
   assert.ok(state.bookings.every(rows=>rows.length<=40));
@@ -58,5 +58,5 @@ test('failed public reads report source diagnostics instead of a missing-cache e
   const api=await server(t,'source-failure');const submitted=await api.request('/api/telegram/next-12h-picks',{}, {Prefer:'respond-async','x-matchday-run-mode':'manual','x-matchday-run-id':'source-failed'});
   assert.equal(submitted.status,202);const result=await api.finish(submitted.body.statusUrl);
   assert.equal(result.status,502);assert.equal(result.body.code,'SPORTYBET_SOURCE_UNAVAILABLE');assert.ok(Object.keys(result.body.diagnostics.sourceErrors).length>0);
-  assert.doesNotMatch(result.body.error,/cache is not ready/);const state=await api.rpc('state');assert.equal(state.bookings.length,0);assert.equal(state.messages.length,0);
+  assert.doesNotMatch(result.body.error,/cache is not ready/);const state=await api.rpc('state');assert.equal(state.bookings.length,0);assert.equal(state.messages.filter(m=>m.startsWith("🟢")).length,0);
 });

@@ -45,7 +45,7 @@ async function getRedis() {
   const { createClient } = require('redis');
   redisClient = createClient({ url: process.env.REDIS_URL });
   redisClient.on('error', (e) => console.error('Redis error', e.message));
-  await redisClient.connect();
+  try { await redisClient.connect(); } catch(error) { redisClient=null; throw error; }
   return redisClient;
 }
 
@@ -404,8 +404,10 @@ async function saveTelegramDailyCodes(redis, dateKey, payload) {
       shareCode: String(x?.shareCode || ''),
     })).filter(x => x.targetOdds && x.shareCode) : [],
   };
+  const previous=telegramDailyCodesMemory.get(dateKey)?.codes||[];
+  safePayload.codes=[...new Map([...previous,...safePayload.codes].map(c=>[c.shareCode,c])).values()];
+  if(redis){for(const code of safePayload.codes)await redis.hSet(`telegram:all-codes:${dateKey}`,code.shareCode,JSON.stringify(code));}
   telegramDailyCodesMemory.set(dateKey, safePayload);
-  if (redis) await redis.set(telegramDailyCodesKey(dateKey), JSON.stringify(safePayload), { EX: 172800 });
   return safePayload;
 }
 
@@ -423,14 +425,16 @@ async function loadTelegramDailyCodes(redis, dateKey) {
     try { next12h=(await redis.hVals(`telegram:next12h:codes:${dateKey}`)).map(row=>JSON.parse(row)); }
     catch(e){console.warn('Next 12h codes Redis read failed:',e.message);}
   }
-  return {...snapshot,codes:[...(Array.isArray(snapshot.codes)?snapshot.codes:[]),...quickCash,...next12h].filter(c=>c.shareCode)
-    .filter(c=>/safe|^(?:QC|LIVE|NEXT 12H)\b/i.test(String(c.targetOdds||'')))};
+  let history=[];if(redis)history=(await redis.hVals(`telegram:all-codes:${dateKey}`)).map(row=>JSON.parse(row));
+  const all=[...history,...(Array.isArray(snapshot.codes)?snapshot.codes:[]),...quickCash,...next12h].filter(c=>c.shareCode);
+  return {...snapshot,codes:[...new Map(all.map(c=>[c.shareCode,c])).values()]};
 }
 
 async function saveTelegramNext12hCode(redis,dateKey,slotKey,plan,booking,combinedOdds) {
   const field=`${slotKey}:${plan.id}`,slot=slotKey.startsWith('manual:')?'MANUAL':slotKey.slice(11)+' WAT';
   const code={targetOdds:`NEXT 12H · ${plan.label} · ${slot}`,planId:plan.id,slotKey,combinedOdds:Number(combinedOdds),
     shareCode:String(booking.shareCode),generatedAt:new Date().toISOString()};
+  await saveTelegramDailyCodes(redis,dateKey,{codes:[code]});
   await redis.hSet(`telegram:next12h:codes:${dateKey}`,field,JSON.stringify(code));
   await redis.expire(`telegram:next12h:codes:${dateKey}`,172800);
   if(!telegramNext12hCodesMemory.has(dateKey))telegramNext12hCodesMemory.set(dateKey,new Map());
@@ -442,6 +446,7 @@ async function saveTelegramHourlyModelCode(redis,dateKey,slotKey,plan,booking,re
   const code={targetOdds:`${plan.label} · ${slotKey.startsWith('manual:')?'MANUAL':context.slotTime+' WAT'}`,
     planId:plan.id,slotKey,combinedOdds:result.combinedOdds,estimatedWinningProbability:result.estimatedWinningProbability,
     shareCode:String(booking.shareCode),generatedAt:new Date().toISOString()};
+  await saveTelegramDailyCodes(redis,dateKey,{codes:[code]});
   const field=`model:${slotKey}:${plan.id}`;
   await redis.hSet(`telegram:quick-cash:codes:${dateKey}`,field,JSON.stringify(code));
   await redis.expire(`telegram:quick-cash:codes:${dateKey}`,172800);
@@ -451,7 +456,7 @@ async function saveTelegramHourlyModelCode(redis,dateKey,slotKey,plan,booking,re
 
 function telegramDailyCodesText(snapshot, plan) {
   const codes=(Array.isArray(snapshot?.codes)?snapshot.codes:[])
-    .filter(c=>c.shareCode&&/safe|^(?:QC|LIVE|NEXT 12H)\b/i.test(String(c.targetOdds||'')))
+    .filter(c=>c.shareCode&&!/^(?:2|3|1000 ICE HOCKEY|1000 BASKETBALL|1000 HANDBALL \+ VOLLEYBALL)$/.test(String(c.targetOdds||'')))
     .filter(c=>plan?.id!=='free'||telegramDailyCodeVisibleForPlan('free',c.targetOdds))
     .sort((a,b)=>Number(!/safe/i.test(a.targetOdds))-Number(!/safe/i.test(b.targetOdds))||(b.hourKey||'').localeCompare(a.hourKey||''));
   return codes.length?codes.map(c=>`${c.shareCode} · ${Number(c.combinedOdds)>1?Number(c.combinedOdds).toFixed(2)+' odds':'Odds unavailable'}`).join('\n'):
@@ -3627,7 +3632,7 @@ const publicCacheScheduler=createWatScheduler({name:'SportyBet public refresh',t
   enabled:!['false','0','off'].includes(String(process.env.SPORTYBET_PUBLIC_CACHE_ENABLED||'true').toLowerCase()),maxRunMilliseconds:3300000});
 const next12hJob=createWatSlotJob({namespace:'telegram:next12h',getRedis,run:context=>runNext12hPicks({
   now:()=>new Date(),loadPool:({signal})=>loadTelegramPublicCandidates({marketHours:12,signal}),
-  validate:validatePublicSelections,assertBookingReady:()=>sportyDirect.assertBookingReady(),
+  validate:async(selections,{signal})=>{const pool=await loadTelegramPublicCandidates({marketHours:12,signal});const current=new Map(pool.map(c=>[sportySelectionKey(c)+'|'+c.betType,c]));return selections.map(c=>current.get(sportySelectionKey(c)+'|'+c.betType)).filter(Boolean);},assertBookingReady:()=>sportyDirect.assertBookingReady(),
   book:selections=>bookBet(selections.map(row=>({eventId:row.eventId,marketId:row.marketId,outcomeId:row.outcomeId,...(row.specifier?{specifier:row.specifier}:{})}))),
   send:(text,{signal})=>sendTelegramMessage(text,{}, {signal}),track:trackTelegramSlip,updateTrack:updateTrackedTicket,saveCode:saveTelegramNext12hCode,
 },context)});
@@ -3665,10 +3670,11 @@ app.post('/api/telegram/hourly-picks',express.json(),telegramHourlyRuns.wrap(asy
   if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});
   const id=String(req.headers['x-matchday-run-id']||'').trim();
   if(!/^[a-zA-Z0-9_-]{1,160}$/.test(id))return res.status(400).json({error:'A valid manual run ID is required'});
-  const slotKey='manual:'+crypto.createHash('sha256').update(id).digest('hex').slice(0,24);
+  const scheduled=req.headers['x-matchday-run-mode']==='scheduled';
+  const slotKey=scheduled?watHourKey(new Date()):'manual:'+crypto.createHash('sha256').update(id).digest('hex').slice(0,24);
   const controller=new AbortController();res.once('close',()=>{if(!res.writableEnded)controller.abort();});
   await res.jobStage?.('building_hourly_live_tickets');
-  const result=await hourlyModelJob({slotKey,dateKey:watHourKey(new Date()).slice(0,10),slotTime:'MANUAL',signal:controller.signal});
+  const result=await hourlyModelJob({slotKey,dateKey:watHourKey(new Date()).slice(0,10),slotTime:scheduled?slotKey.slice(11)+':05':'MANUAL',signal:controller.signal});
   if(!res.destroyed)res.status(result.statusCode).json(result.body);
 }));
 
@@ -3699,7 +3705,7 @@ app.get('/api/telegram/status', (req, res) => {
     scheduler: 'App server for hourly Live/QC and twice-daily next-12h picks; GitHub Actions for morning SAFE and 12-hour reports',
     hourlyScheduler:hourlyModelScheduler.status(),
     next12hScheduler:next12hScheduler.status(),
-    next12hRules:{targets:NEXT12H_PLANS,times:['07:00','18:00'],timezone:'Africa/Lagos',horizonHours:12,
+    next12hRules:{minimumProbability:80,highTargetsFallbackMinimumProbability:75,marketCoverage:'all currently modeled market families; unsupported markets excluded',targets:NEXT12H_PLANS,times:['07:00','18:00'],timezone:'Africa/Lagos',horizonHours:12,
       maxSelections:40,exclusiveMatches:true,exclusiveBetTypes:true,repeatProbabilityThreshold:90,maxRepeatTickets:3,
       dataSource:'SportyBet current public board',cacheRequired:false,dummySessionForBooking:sportyDirect.sessionStatus().bookingLoginRequired,bookingMode:sportyDirect.sessionStatus().bookingMode},
     aiBot: {
@@ -3881,6 +3887,7 @@ app.post('/api/telegram/send-slip', express.json(), async (req, res) => {
     if (!payload) return res.status(400).json({ error: 'Send token is invalid, expired, or already used. Generate the SportyBet code again.' });
     if (!payload.shareCode) return res.status(400).json({ error: 'No SportyBet code is attached to this send token' });
     await sendTelegramMessage(telegramManualSlipText(payload));
+    await saveTelegramDailyCodes(await getRedis(),watParts().date,{codes:[{targetOdds:'MANUAL',shareCode:payload.shareCode,combinedOdds:(payload.slip||[]).reduce((n,c)=>n*(Number(c.odds)||1),1)}]});
     res.json({ ok: true });
   } catch (err) {
     console.error('Telegram manual slip error:', err.message);
