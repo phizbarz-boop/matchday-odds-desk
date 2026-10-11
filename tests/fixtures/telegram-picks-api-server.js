@@ -1,3 +1,4 @@
+process.env.SPORTYBET_EXPANDED_MARKETS_ENABLED='false';
 process.env.TELEGRAM_THREE_HOURLY_ENABLED='false';
 'use strict';
 process.env.TELEGRAM_HOURLY_MODEL_ENABLED??='false';

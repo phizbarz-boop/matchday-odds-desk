@@ -116,7 +116,7 @@ test('buildCandidates defaults prematch rows to live:false', () => {
 
 test('server normalizes live mode and threads it through the builder pipeline', () => {
   assert.match(serverSrc, /function normalizeLiveMode\(value\)/);
-  assert.match(serverSrc, /liveMode\s*=\s*'prematch'\s*\}\s*=\s*\{\}/, 'loadAutoCandidates must accept liveMode');
+  assert.match(serverSrc, /liveMode\s*=\s*'prematch'[\s\S]*?includeAllMarkets\s*=\s*null/, 'loadAutoCandidates must accept liveMode');
   assert.match(serverSrc, /const wantsPrematch = !\['live','quick_cash'\]\.includes\(liveModeNorm\)/);
   assert.match(serverSrc, /const wantsLive = liveModeNorm !== 'prematch'/);
   assert.match(serverSrc, /if \(wantsLive\) \{/, 'live merge block must exist');
@@ -153,7 +153,7 @@ test('standalone live page is removed and Auto Builder carries the match-status 
   assert.match(indexSrc, /id="auto-live-mode"/);
   assert.match(indexSrc, /Live only \(halfway \+ winning\)/);
   assert.match(indexSrc, /state\.autoLiveMode=liveMode/);
-  assert.match(indexSrc, /maxSelections,todayOnly,liveMode,betTypes,leagues/, 'auto-pick POST body must include liveMode');
+  assert.match(indexSrc, /maxSelections,todayOnly,liveMode,betTypes,includeAllMarkets/, 'auto-pick POST body must include liveMode');
   assert.match(indexSrc, /x\.live===true\?\{live:true,quickCash:/, 'booking selections must carry live flag');
   assert.match(indexSrc, /🔴 LIVE /, 'slip rows must show the live badge');
   assert.match(indexSrc, /p\.droppedLive/, 'booking result must surface dropped live legs');

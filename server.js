@@ -1432,7 +1432,7 @@ function normalizeAutoBetTypesForSports(sports, betTypes) {
   return [...compatible];
 }
 
-async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch' } = {}) {
+async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch', includeAllMarkets = null } = {}) {
   return withFreshSportyRequest(async()=>{
     // Discover and model public SportyBet data independently of booking login.
     const liveModeNorm = normalizeLiveMode(liveMode);
@@ -1700,6 +1700,14 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
       if (sportName.includes('tennis')) return selectedSet.has('tennis');
       return false;
     });
+    if((includeAllMarkets===true||includeAllMarkets==null&&betTypes==null)&&!['false','0','off'].includes(String(process.env.SPORTYBET_EXPANDED_MARKETS_ENABLED||'true').toLowerCase())&&liveModeNorm!=='live'&&liveModeNorm!=='quick_cash'){
+      try{
+        const catalog=await require('./lib/sportyPublicCache').collectPublicCatalog({selectedSports,horizonHours:Number(marketHours)||24});
+        const expanded=require('./lib/offeredMarketModel').modelOfferedMarkets(Object.values(catalog.sports).flatMap(s=>s.rows||[]),{known:candidates,minProbability,minEdge});
+        const accepted=expanded.candidates.filter(c=>!leagues?.length||leagues.includes(c.tournament));
+        candidates.push(...accepted);candidates.marketCoverage={...expanded.coverage,collectionErrors:catalog.errors,pagination:Object.fromEntries(Object.entries(catalog.sports).map(([sport,s])=>[sport,s.coverage]))};
+      }catch(error){sourceErrors['expanded markets']=String(error.message).slice(0,160);}
+    }
     if(wantsLive) {
       for(const c of candidates){
         const format=sportyRequest()?.liveFormats?.get(String(c.eventId));
@@ -1755,6 +1763,7 @@ async function prepareAutoCandidatePool({
   marketMaxPages=null,
   todayOnly=false,
   liveMode='prematch',
+  includeAllMarkets=null,
 } = {}) {
   // Single source of truth for Website + Telegram AI candidate eligibility.
   // Keeping the complete filtering path here prevents one surface from finding
@@ -1775,6 +1784,7 @@ async function prepareAutoCandidatePool({
     marketHours,
     marketMaxPages,
     liveMode: liveModeNorm,
+    includeAllMarkets,
   });
 
   const todayFiltered = todayOnly
@@ -1810,6 +1820,7 @@ async function prepareAutoCandidatePool({
       dataSource:rawCandidates.dataSource,
       dataFetchedAt:rawCandidates.dataFetchedAt,
       sourceErrors:rawCandidates.sourceErrors||{},
+      marketCoverage:rawCandidates.marketCoverage||null,
     },
   };
 }
@@ -2291,7 +2302,7 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
     const todayOnly = body.todayOnly === true || String(body.todayOnly || '').toLowerCase() === 'true';
     const liveMode = normalizeLiveMode(body.liveMode);
 
-    const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly, liveMode });
+    const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly, liveMode,includeAllMarkets:body.includeAllMarkets===true });
     const oddsFilteredCandidates = prepared.candidates;
     const redFlagSafeCandidatesCount = prepared.diagnostics.afterRedFlag;
     const rawCandidatesCount = prepared.diagnostics.rawCandidates;
@@ -2320,6 +2331,7 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
         dataSource:prepared.diagnostics.dataSource,
         dataFetchedAt:prepared.diagnostics.dataFetchedAt,
         sourceErrors:prepared.diagnostics.sourceErrors,
+      marketCoverage:prepared.diagnostics.marketCoverage,
         teamGoalAvailability: prepared.diagnostics.teamGoalAvailability,
         cornerDiagnostics,
         hint: prepared.diagnostics.liveDiagnostics
@@ -2355,6 +2367,7 @@ app.post('/api/sportybet/auto-pick', express.json(), async (req, res) => {
       dataSource:prepared.diagnostics.dataSource,
       dataFetchedAt:prepared.diagnostics.dataFetchedAt,
       sourceErrors:prepared.diagnostics.sourceErrors,
+      marketCoverage:prepared.diagnostics.marketCoverage,
       generatedAt: new Date().toISOString(),
       note: 'Value engine: football uses 1X2, Corners O/U, GG/NG, Double Chance, Draw No Bet, Over 0.5/1.5/2.5, Under 2.5/4.5, Correct Score and Asian Handicap +0/+0.25/-0.25. DNB/AH use settlement-aware fair odds and EV; basketball/hockey/handball/volleyball totals and handicaps remain no-vig market estimates.',
     });
@@ -4062,6 +4075,9 @@ app.post('/api/refresh/sport/:sport', express.json(), async (req, res) => {
   }
 });
 
+app.get('/api/sportybet/market-coverage',async(req,res)=>{
+ try{const catalog=await publicCache.read();if(!catalog)return res.status(503).json({error:'Public catalogue is not ready'});const predictions=await require('./lib/sportyPublicCache').publicPredictions(catalog);const known=buildCandidates({...marketInputs(catalog),predictions,minProbability:0,minEdge:-100,sportScope:'all'});const modeled=require('./lib/offeredMarketModel').modelOfferedMarkets(Object.values(catalog.sports||{}).flatMap(s=>s.rows||[]),{known});res.json({generatedAt:catalog.generatedAt,sports:Object.keys(catalog.sports||{}),...modeled.coverage,note:'Market estimates are margin-adjusted prices, not independent performance predictions. Unconfirmed settlements are excluded.'});}catch(error){res.status(503).json({error:'Market coverage is unavailable'});}
+});
 app.get('/api/sportybet/public-cache/status',async(req,res)=>{
   try{await publicCache.read();res.json({...publicCache.status(),scheduler:publicCacheScheduler.status()});}
   catch(error){res.status(503).json({error:'Public cache status unavailable'});}

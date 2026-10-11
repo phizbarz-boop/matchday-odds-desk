@@ -20,6 +20,7 @@ test('the real app refreshes public data and sends two additional six-ticket Tel
   const publicStatus=await complete('/api/sportybet/public-cache/status',p=>p.lastRun?.status==='completed');
   assert.equal(publicStatus.loginRequired,false);assert.equal(Object.keys(publicStatus.sports).length,6);assert.deepEqual(publicStatus.scheduler.times,['06:30','12:30','17:30']);
   assert.equal((await rpc('state')).sessionChecks,0);assert.ok(fs.existsSync(path.join(directory,'catalog.json')));
+  const coverage=await request('/api/sportybet/market-coverage');assert.equal(coverage.status,200);assert.ok(coverage.body.discoveredMarketInstances>0);assert.ok(coverage.body.markets.every(m=>Array.isArray(m.outcomes)));
   const predictions=await request('/api/predictions');assert.equal(predictions.body.readMode,'public-cache');assert.equal(predictions.body.matches.length,60);
   await rpc('clock',{date:'2026-10-07T06:00:00Z'});
   let status=await complete('/api/telegram/status',p=>p.next12hScheduler.lastRun?.slotTime==='07:00'&&p.next12hScheduler.lastRun.status==='completed');
