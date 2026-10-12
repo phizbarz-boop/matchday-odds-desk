@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),{fork}=require('node:child_process'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
-test('the real app refreshes public data and sends two additional six-ticket Telegram batches without GitHub',async t=>{
+test('public prediction refresh keeps its three slots while automatic Telegram tickets are retired',async t=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'public-schedule-api-'));
   const child=fork(path.join(__dirname,'fixtures/public-cache-api-server.js'),[],{cwd:path.join(__dirname,'..'),silent:true,
     env:{...process.env,PORT:'0',REDIS_URL:'redis://test-only',TELEGRAM_BOT_TOKEN:'fixture-only',TELEGRAM_CHAT_ID:'fixture-only',TELEGRAM_JOB_SECRET:'fixture-job-secret',
@@ -22,33 +22,10 @@ test('the real app refreshes public data and sends two additional six-ticket Tel
   assert.equal((await rpc('state')).sessionChecks,0);assert.ok(fs.existsSync(path.join(directory,'catalog.json')));
   const coverage=await request('/api/sportybet/market-coverage');assert.equal(coverage.status,200);assert.ok(coverage.body.discoveredMarketInstances>0);assert.ok(coverage.body.markets.every(m=>Array.isArray(m.outcomes)));
   const predictions=await request('/api/predictions');assert.equal(predictions.body.readMode,'public-cache');assert.equal(predictions.body.matches.length,60);
-  await rpc('clock',{date:'2026-10-07T06:00:00Z'});
-  let status=await complete('/api/telegram/status',p=>p.next12hScheduler.lastRun?.slotTime==='07:00'&&p.next12hScheduler.lastRun.status==='completed');
-  assert.equal(status.next12hScheduler.lastRun.ticketsSent,6,JSON.stringify(status));
-  let state=await rpc('state');assert.equal(state.messages.filter(m=>m.startsWith("🟢")).length,6);assert.equal(state.bookings.length,6);assert.equal(state.sessionChecks,0);
-  const repeated=await request('/api/telegram/next-12h-picks',{}, {'x-telegram-job-secret':'fixture-job-secret'});assert.equal(repeated.body.reason,'already_processed_this_slot');
-  await rpc('daily',{date:'2026-10-07',codes:[{targetOdds:'1.30–5.00 SAFE',combinedOdds:1.5,shareCode:'SAFE-PRESERVED'}]});
-  await request('/api/telegram/bot/webhook',{callback_query:{id:'fixture-callback',data:'action:dailycodes',from:{id:6001},message:{chat:{id:6001},text:'/start'}}},{'x-telegram-bot-api-secret-token':'fixture-hook-secret'});
-  for(let i=0;i<100;i++){state=await rpc('state');if(state.aiMessages.length)break;await new Promise(r=>setTimeout(r,10));}
-  const text=state.aiMessages.at(-1);assert.match(text,/SAFE-PRESERVED/);assert.match(text,/PUBLIC-TEST-6/);assert.doesNotMatch(text,/NEXT 12H|TODAY|Date:|Codes only/);assert.equal(text.split('\n').length,7);assert.ok(text.split('\n').every(line=>/^[A-Z0-9-]+ · \d+\.\d{2} odds$/.test(line)));
+  const status=(await request('/api/telegram/status')).body;assert.equal(status.targets.length,7);
   for(const date of ['2026-10-07T11:30:00Z','2026-10-07T16:30:00Z']){
     await rpc('clock',{date});await complete('/api/sportybet/public-cache/status',p=>p.scheduler.lastRun?.status==='completed'&&p.lastRun?.startedAt===date.replace('Z','.000Z'));
   }
-  await rpc('clock',{date:'2026-10-07T17:00:00Z'});
-  status=await complete('/api/telegram/status',p=>p.next12hScheduler.lastRun?.slotTime==='18:00'&&p.next12hScheduler.lastRun.status==='completed');
-  assert.equal(status.next12hScheduler.lastRun.ticketsSent,6,JSON.stringify(status));state=await rpc('state');
-  assert.equal(state.bookings.length,12);assert.equal(state.messages.filter(m=>m.startsWith("🟢")).length,12);
-  assert.equal(state.sessionChecks,0);
-  const dailyFields=state.hashes.find(([key])=>key==='telegram:next12h:codes:2026-10-07')[1];assert.equal(dailyFields.length,12);
+  const state=await rpc('state');assert.equal(state.bookings.length,0);assert.equal(state.messages.length,0);
   assert.equal(state.data.filter(([key])=>key.startsWith('sportybet:public-refresh:done:')).length,3);
-  const tracked=state.hashes.find(([key])=>key==='telegram:tracked-tickets:v2')[1].map(([,raw])=>JSON.parse(raw));assert.equal(tracked.length,12);assert.ok(tracked.every(p=>p.delivery==='posted'));
-  const asyncHeaders={'x-telegram-job-secret':'fixture-job-secret','x-matchday-run-mode':'manual','x-matchday-run-id':'gh-next12h-test',Prefer:'respond-async',Connection:'close'};
-  const accepted=await request('/api/telegram/next-12h-picks',{},asyncHeaders);assert.equal(accepted.status,202);
-  assert.equal((await request(accepted.body.statusUrl)).status,401);
-  assert.ok([200,202].includes((await request('/api/telegram/next-12h-picks',{},asyncHeaders)).status));
-  let finished;
-  for(let i=0;i<300;i++){finished=await request(accepted.body.statusUrl,undefined,{'x-telegram-job-secret':'fixture-job-secret'});if(finished.status!==202)break;await new Promise(r=>setTimeout(r,10));}
-  assert.equal(finished.status,200,JSON.stringify(finished.body));assert.equal(finished.body.ticketsSent,6);
-  const repeatedAsync=await request('/api/telegram/next-12h-picks',{},asyncHeaders);assert.equal(repeatedAsync.body.runRequestStatus,'completed');
-  state=await rpc('state');assert.equal(state.bookings.length,18);assert.equal(state.messages.filter(m=>m.startsWith("🟢")).length,18);assert.equal(state.sessionChecks,0);
 });

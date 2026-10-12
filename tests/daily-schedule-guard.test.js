@@ -49,8 +49,7 @@ test('public refresh is manual-only on GitHub; three automatic slots belong to t
     assert.doesNotMatch(text, /cron:/, `${file} must not run on an automatic schedule`);
   }
 
-  const telegram = workflow('telegram-picks.yml');
-  assert.match(telegram, /cron: ['"]25 7 \* \* \*['"]/);
+
 });
 
 test('Basketball and Hockey daily refresh endpoint is protected and force-refreshes snapshots', () => {
@@ -62,13 +61,4 @@ test('Basketball and Hockey daily refresh endpoint is protected and force-refres
   assert.match(server, /const forceRefresh = options\.forceRefresh === true/);
 });
 
-test('Telegram keeps the scheduled daily lock but allows manual bypass', () => {
-  const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
-  assert.match(server, /telegram:daily-picks:once:/);
-  assert.match(server, /x-telegram-job-secret/);
-  assert.match(server, /if \(manual\)[\s\S]*Bypassing daily send lock/);
-  assert.match(workflow('telegram-picks.yml'), /telegram-picks-runner\.py --endpoint daily-picks/);
-  const runner=fs.readFileSync(path.join(root,'jobs/telegram-picks-runner.py'),'utf8');
-  assert.match(runner,/"scheduled" if event == "schedule" else "manual"/);
-  assert.match(runner,/"x-matchday-run-mode": mode/);
-});
+test('automatic Telegram ticket workflows are removed',()=>{for(const name of ['telegram-picks.yml','telegram-next-12h.yml','telegram-hourly-model-picks.yml','telegram-three-hourly-picks.yml'])assert.equal(fs.existsSync(path.join(root,'.github/workflows',name)),false);});

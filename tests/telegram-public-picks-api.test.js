@@ -25,48 +25,13 @@ async function server(t,mode){
   return {rpc,request,finish,runWorkflow,directory,logs:()=>logs};
 }
 
-test('next-12-hours workflow generates six public codes on a cold cache while another refresh owns the lease',async t=>{
-  const api=await server(t,'locked-cache');
-  const result=await api.runWorkflow('next-12h-picks');assert.equal(result.code,0,result.output+'\n'+api.logs());
-  assert.match(result.output,/"ticketsSent": 6/);
-  const status=(await api.request('/api/telegram/status')).body;
-  assert.equal(status.next12hRules.cacheRequired,false);assert.equal(status.next12hRules.bookingMode,'public');assert.equal(status.next12hRules.dummySessionForBooking,false);
-  const state=await api.rpc('state');assert.equal(state.bookings.length,6);assert.equal(state.messages.filter(m=>m.startsWith("🟢")).length,6);assert.equal(state.sessionChecks,0);
-  assert.equal(state.data.find(([key])=>key==='sportybet:public-catalog:v1:refresh')[1],'another-refresh-worker');
-  assert.ok(!fs.existsSync(path.join(api.directory,'catalog.json')),'ticket generation must not require a completed catalogue');
-  assert.ok(state.bookings.every(rows=>rows.length<=40));
-  const repeated=await api.runWorkflow('next-12h-picks');assert.equal(repeated.code,0,repeated.output);assert.equal((await api.rpc('state')).bookings.length,6);
-});
-
-test('app-server 07:00 next-12-hours slot completes while scheduled public cache refresh is waiting',async t=>{
-  const api=await server(t,'locked-cache');await api.rpc('clock',{date:'2026-10-07T06:00:00Z'});
-  let status;
-  for(let i=0;i<300;i++){status=(await api.request('/api/telegram/status')).body;if(status.next12hScheduler.lastRun?.status==='completed')break;await new Promise(r=>setTimeout(r,10));}
-  assert.equal(status.next12hScheduler.lastRun?.ticketsSent,6,JSON.stringify(status)+'\n'+api.logs());
-  const cache=(await api.request('/api/sportybet/public-cache/status')).body;assert.equal(cache.lastRun.status,'waiting');assert.equal(cache.generatedAt,null);
-  assert.equal((await api.rpc('state')).sessionChecks,0);
-});
-
-test('SAFE workflow uses public data without a cache or dummy session',async t=>{
-  const api=await server(t,'safe');
-  const result=await api.runWorkflow('daily-picks');assert.equal(result.code,0,result.output+'\n'+api.logs());assert.match(result.output,/"ticketsSent": 1/);
-  const state=await api.rpc('state');assert.equal(state.bookings.length,1);assert.equal(state.messages.length,2);assert.equal(state.sessionChecks,0);
-  assert.ok(!fs.existsSync(path.join(api.directory,'catalog.json')));assert.match(state.messages.at(-1),/PUBLIC-TEST-1/);
-});
-
-test('failed public reads report source diagnostics instead of a missing-cache error',async t=>{
-  const api=await server(t,'source-failure');const submitted=await api.request('/api/telegram/next-12h-picks',{}, {Prefer:'respond-async','x-matchday-run-mode':'manual','x-matchday-run-id':'source-failed'});
-  assert.equal(submitted.status,202);const result=await api.finish(submitted.body.statusUrl);
-  assert.equal(result.status,502);assert.equal(result.body.code,'SPORTYBET_SOURCE_UNAVAILABLE');assert.ok(Object.keys(result.body.diagnostics.sourceErrors).length>0);
-  assert.doesNotMatch(result.body.error,/cache is not ready/);const state=await api.rpc('state');assert.equal(state.bookings.length,0);assert.equal(state.messages.filter(m=>m.startsWith("🟢")).length,0);
-});
-
-test('new three-hourly endpoint creates three pure-sport public codes and deduplicates the current slot',async t=>{
+test('every retired automated route rejects requests without scanning, booking or sending',async t=>{
  const api=await server(t,'locked-cache');
- const headers={Prefer:'respond-async','x-matchday-run-mode':'manual','x-matchday-run-id':'three-hourly-test'};
- const submitted=await api.request('/api/telegram/three-hourly-picks',{},headers);assert.equal(submitted.status,202);
- const finished=await api.finish(submitted.body.statusUrl);assert.equal(finished.status,200,JSON.stringify(finished.body));assert.equal(finished.body.ticketsSent,3);
- const state=await api.rpc('state');assert.equal(state.bookings.length,3);assert.equal(state.sessionChecks,0);
- for(const rows of state.bookings){const sports=new Set(rows.map(c=>c.eventId.match(/public-api-([a-z]+)-/)[1]));assert.equal(sports.size,1);assert.ok(['hockey','tennis'].includes([...sports][0]));}
- const repeated=await api.request('/api/telegram/three-hourly-picks',{}, {'x-matchday-run-id':'new-same-slot','x-matchday-run-mode':'manual'});assert.equal(repeated.body.reason,'already_processed_this_slot');
+ for(const name of ['daily-picks','next-12h-picks','hourly-picks','three-hourly-picks','quick-cash']){
+  const denied=await api.request('/api/telegram/'+name,{}, {'x-telegram-job-secret':'wrong'});assert.equal(denied.status,401);
+  const retired=await api.request('/api/telegram/'+name,{}, {'x-matchday-run-mode':'manual','x-matchday-run-id':'removed-'+name});assert.equal(retired.status,410);assert.equal(retired.body.ticketsSent,0);
+ }
+ const status=(await api.request('/api/telegram/status')).body;assert.equal(status.targets.length,7);assert.equal(status.next12hScheduler.enabled,false);assert.equal(status.hourlyScheduler.enabled,false);assert.equal(status.threeHourlyScheduler.enabled,false);
+ const state=await api.rpc('state');assert.equal(state.bookings.length,0);assert.equal(state.messages.length,0);assert.equal(state.reads.length,0);
+ for(const name of ['telegram-picks.yml','telegram-next-12h.yml','telegram-hourly-model-picks.yml','telegram-three-hourly-picks.yml'])assert.equal(fs.existsSync(path.join(__dirname,'../.github/workflows',name)),false);
 });

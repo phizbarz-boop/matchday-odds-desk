@@ -23,25 +23,14 @@ const {sportyRequest,withFreshSportyRequest,withPublicSportyRequest,memoSportyRe
 const { sanitizeStats } = require('./lib/sportyFootballStats');
 const {createPublicCache,validatePublicSelections,marketInputs}=require('./lib/sportyPublicCache');
 const {createWatScheduler,createWatSlotJob,watParts}=require('./lib/watScheduler');
-const {TIMES:THREE_HOURLY_TIMES,runThreeHourly}=require('./lib/telegramThreeHourly');
 const {finalEvent,bookingLegs,matchingLeg,settleSelection}=require('./lib/liveSettlement');
 const {PLANS:NEXT12H_PLANS,runNext12hPicks}=require('./lib/telegramNext12h');
-const {hourlyModelPlans,runHourlyModelPicks}=require('./lib/telegramHourlyModelPicks');
 const {createTelegramHourlyScheduler}=require('./lib/telegramHourlyScheduler');
 const {watHourKey}=require('./lib/telegramQuickCash');
 const {selectionKey:sportySelectionKey}=require('./lib/sportyPublicCache');
 const {refreshTicketResults,buildPerformanceReport,performanceText,registerTelegramPerformanceRoute}=require('./lib/telegramPerformance');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
 const bookingRequests=createBookingRequests({getRedis,runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
-const telegramDailyRuns=createTelegramRunRequests({name:'daily-picks',authorize:authorizeTelegramJob,getRedis,
-  runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
-const telegramNext12hRuns=createTelegramRunRequests({name:'next-12h-picks',authorize:authorizeTelegramJob,getRedis,
-  runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
-const telegramHourlyRuns=createTelegramRunRequests({name:'hourly-picks',authorize:authorizeTelegramJob,getRedis,
-  runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
-
-const telegramThreeHourlyRuns=createTelegramRunRequests({name:'three-hourly-picks',authorize:authorizeTelegramJob,getRedis,runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
-
 let redisClient = null;
 async function getRedis() {
   if (!process.env.REDIS_URL) return null;
@@ -349,12 +338,9 @@ function plot207TelegramHelpText(plan = null) {
     'A SAFE pick is still a prediction, not a guaranteed win.',
     '',
     '🎟 TODAY’S CODES',
-    'This shows SportyBet codes from morning SAFE, next-12-hours and hourly Live/QC picks.',
-    '• Free: SAFE codes.',
-    '• Pro: all available daily codes.',
-    '• Elite: all available daily codes.',
-    'Next-12-hours picks run at 07:00 and 18:00 WAT. At 00:10 and 12:10 WAT, results show winners, closest/worst tickets and hypothetical ₦100-per-ticket ROI.',
-    'Hourly picks: Live 3 odds, Quick Cash 3 odds and Live 1,000 odds, ranked by estimated combined winning chance.',
+    'Probability-floor tickets arrive at 07:00 and 18:00 WAT.',
+    'Manual ticket building and sharing remain available.',
+    'Results reports continue at 00:10 and 12:10 WAT.',
     '',
     '🔎 ANALYZE CODE',
     'Use this to check an existing SportyBet booking code.',
@@ -460,8 +446,9 @@ async function saveTelegramHourlyModelCode(redis,dateKey,slotKey,plan,booking,re
 
 function telegramDailyCodesText(snapshot, plan) {
   const codes=(Array.isArray(snapshot?.codes)?snapshot.codes:[])
-    .filter(c=>c.shareCode&&!/^(?:2|3|1000 ICE HOCKEY|1000 BASKETBALL|1000 HANDBALL \+ VOLLEYBALL)$/.test(String(c.targetOdds||'')))
-    .filter(c=>plan?.id!=='free'||telegramDailyCodeVisibleForPlan('free',c.targetOdds))
+    .filter(c=>c.shareCode&&!/^(?:QC|LIVE|3-HOURLY|HOURLY|NEXT\s*12H)\b|safe|^1\.3(?:0|5)?(?:\D|$)/i.test(String(c.targetOdds||'')))
+    .filter(c=>! /^(?:2|3|1000 ICE HOCKEY|1000 BASKETBALL|1000 HANDBALL \+ VOLLEYBALL)$/.test(String(c.targetOdds||'')))
+    .filter(c=>/^MODEL FLOOR/.test(c.targetOdds)||plan?.id!=='free'||telegramDailyCodeVisibleForPlan('free',c.targetOdds))
     .sort((a,b)=>Number(!/safe/i.test(a.targetOdds))-Number(!/safe/i.test(b.targetOdds))||(b.hourKey||'').localeCompare(a.hourKey||''));
   return codes.length?codes.map(c=>`${c.shareCode} · ${Number(c.combinedOdds)>1?Number(c.combinedOdds).toFixed(2)+' odds':'Odds unavailable'}`).join('\n'):
     'No codes available today.';
@@ -3336,7 +3323,7 @@ async function handleTelegramAiUpdate(update) {
       user.preferences.builder.liveMode=order[(order.indexOf(cur)+1)%order.length];
       await saveTelegramAiUser(redis,user);
       const mode=user.preferences.builder.liveMode;
-      const note=mode==='quick_cash'?'💵 QUICK CASH: late live matches, at least halfway through, with selections currently winning under the offered SportyBet bet type. Your probability settings apply. Hourly scheduled QC uses 0% and appears in Today’s Codes.':mode==='live'
+      const note=mode==='quick_cash'?'💵 QUICK CASH: late live matches, at least halfway through, with selections currently winning under the offered SportyBet bet type. Your probability settings apply. Your current probability setting applies.':mode==='live'
         ?'🔴 LIVE ONLY: matches must be at least halfway through and the selected market must currently be winning. Progress, scores and live odds are re-checked before code generation.'
         :mode==='both'
           ?'🔴+🟢 LIVE + PREMATCH: upcoming games can be mixed with live selections that are at least halfway through and currently winning. Live legs are re-checked before booking.'
@@ -3664,102 +3651,56 @@ const publicCacheJob=createWatSlotJob({namespace:'sportybet:public-refresh',getR
 }});
 const publicCacheScheduler=createWatScheduler({name:'SportyBet public refresh',times:['06:30','12:30','17:30'],runJob:publicCacheJob,
   enabled:!['false','0','off'].includes(String(process.env.SPORTYBET_PUBLIC_CACHE_ENABLED||'true').toLowerCase()),maxRunMilliseconds:3300000});
-const next12hJob=createWatSlotJob({namespace:'telegram:next12h',getRedis,run:context=>runNext12hPicks({
-  now:()=>new Date(),loadPool:({signal})=>loadTelegramPublicCandidates({marketHours:12,signal}),
-  validate:async(selections,{signal})=>{const pool=await loadTelegramPublicCandidates({marketHours:12,signal});const current=new Map(pool.map(c=>[sportySelectionKey(c)+'|'+c.betType,c]));return selections.map(c=>current.get(sportySelectionKey(c)+'|'+c.betType)).filter(Boolean);},assertBookingReady:()=>sportyDirect.assertBookingReady(),
-  book:selections=>bookBet(selections.map(row=>({eventId:row.eventId,marketId:row.marketId,outcomeId:row.outcomeId,...(row.specifier?{specifier:row.specifier}:{})}))),
-  send:(text,{signal})=>sendTelegramMessage(text,{}, {signal}),track:trackTelegramSlip,updateTrack:updateTrackedTicket,saveCode:saveTelegramNext12hCode,
-},context)});
-const threeHourlyPool=({signal})=>loadTelegramPublicCandidates({sports:['hockey','tennis'],marketHours:12,minEdge:-100,signal});
-const threeHourlyJob=createWatSlotJob({namespace:'telegram:three-hourly',getRedis,run:context=>runThreeHourly({
- now:()=>new Date(),loadPool:threeHourlyPool,
- validate:async(selections,{signal})=>{const pool=await threeHourlyPool({signal});const offered=new Map(pool.map(c=>[sportySelectionKey(c)+'|'+c.betType,c]));return selections.map(c=>offered.get(sportySelectionKey(c)+'|'+c.betType)).filter(Boolean);},
- isSettled:async row=>withPublicSportyRequest(async()=>{let booking=null;if(row.shareCode)try{booking=await getBooking(row.shareCode);}catch{}const official=matchingLeg(bookingLegs(booking),row.selection);let result=settleSelection(row.selection,null,official);if(result.status==='pending'){const payload=await sportyDirect.fetchEventDetail(row.selection.eventId);result=settleSelection(row.selection,finalEvent(payload,row.selection.eventId),official);}return result.status!=='pending';}),
- assertBookingReady:()=>sportyDirect.assertBookingReady(),book:selections=>bookBet(selections.map(c=>({eventId:c.eventId,marketId:c.marketId,outcomeId:c.outcomeId,...(c.specifier?{specifier:c.specifier}:{})}))),
- track:trackTelegramSlip,updateTrack:updateTrackedTicket,
- saveCode:(redis,dateKey,slotKey,plan,booking,combinedOdds)=>saveTelegramDailyCodes(redis,dateKey,{codes:[{targetOdds:plan.label,shareCode:booking.shareCode,combinedOdds}]}),
- send:(text,{signal})=>sendTelegramMessage(text,{}, {signal}),
-},context)});
-const threeHourlyScheduler=createWatScheduler({name:'Telegram hockey/tennis 3-hourly',times:THREE_HOURLY_TIMES,runJob:threeHourlyJob,catchupMinutes:60,maxRunMilliseconds:780000,
- enabled:!['false','0','off'].includes(String(process.env.TELEGRAM_THREE_HOURLY_ENABLED||'true').toLowerCase()),configured:Boolean(process.env.REDIS_URL&&process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID)});
-app.get('/api/telegram/three-hourly-picks/run-status/:runId',telegramThreeHourlyRuns.status);
-app.post('/api/telegram/three-hourly-picks',express.json(),telegramThreeHourlyRuns.wrap(async(req,res)=>{
- if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});
- const p=watParts(),hour=Math.floor(p.minute/180)*3,slotTime=String(hour).padStart(2,'0')+':00';
- const result=await threeHourlyJob({slotKey:p.date+'T'+slotTime,dateKey:p.date,slotTime});res.status(result.statusCode).json(result.body);
+const {PLANS:FLOOR_PLANS,runFloorPicks}=require('./lib/telegramFloorPicks');
+const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>runFloorPicks({
+ now:()=>new Date(),
+ loadPool:({signal})=>withPublicSportyRequest(async()=>{const rows=await loadAutoCandidates({sportScope:'all',minProbability:60,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'});if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');return rows;},{signal}),
+ validate:validatePublicSelections,book:selections=>bookBet(selections),send:sendTelegramMessage,
+ saveCode:(redis,dateKey,code)=>saveTelegramDailyCodes(redis,dateKey,{codes:[code]}),track:trackTelegramSlip,updateTrack:updateTrackedTicket
+},ctx)});
+const floorScheduler=createWatScheduler({name:'Telegram probability floors',times:['07:00','18:00'],runJob:floorJob,
+ enabled:String(process.env.TELEGRAM_FLOOR_PICKS_ENABLED||'true')!=='false',configured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),catchupMinutes:120});
+const floorRequests=createTelegramRunRequests({name:'probability-picks',authorize:authorizeTelegramJob,getRedis});
+app.post('/api/telegram/probability-picks',express.json(),floorRequests.wrap(async(req,res)=>{
+ const parts=watParts(),slotTime=parts.minute>=18*60?'18:00':parts.minute>=7*60?'07:00':null;
+ if(!slotTime)return res.status(409).json({error:'The first batch opens at 07:00 WAT'});
+ const result=await floorJob({slotKey:parts.date+'T'+slotTime,dateKey:parts.date,slotTime,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);
 }));
-const next12hScheduler=createWatScheduler({name:'Telegram next 12h',times:['07:00','18:00'],runJob:next12hJob,catchupMinutes:60,maxRunMilliseconds:780000,
-  enabled:!['false','0','off'].includes(String(process.env.TELEGRAM_NEXT12H_ENABLED||'true').toLowerCase()),
-  configured:Boolean(process.env.REDIS_URL&&process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID)});
-async function currentTelegramLivePool({signal}={}){
-  const candidates=await loadTelegramPublicCandidates({liveMode:'live',signal});
-  return {candidates:candidates.filter(passesRedFlagFilter),diagnostics:{sourceErrors:candidates.sourceErrors,liveDiagnostics:candidates.liveDiagnostics}};
-}
-const hourlyModelJob=createWatSlotJob({namespace:'telegram:hourly-model:v1',getRedis,run:context=>runHourlyModelPicks({
-  now:()=>new Date(),env:process.env,loadPool:currentTelegramLivePool,
-  validate:async(selections,plan,{signal})=>{
-    const current=await currentTelegramLivePool({signal});
-    const offered=new Map(current.candidates.map(c=>[sportySelectionKey(c)+'|'+c.betType,{...c,quickCash:plan.liveMode==='quick_cash'}]));
-    return {valid:selections.map(c=>offered.get(sportySelectionKey(c)+'|'+c.betType)).filter(Boolean),candidates:[...offered.values()]};
-  },
-  assertBookingReady:()=>sportyDirect.assertBookingReady(),book:bookBet,
-  track:trackTelegramSlip,updateTrack:updateTrackedTicket,saveCode:saveTelegramHourlyModelCode,
-  send:(text,{signal})=>sendTelegramMessage(text,{}, {signal}),
-},{...context,hourKey:context.slotKey,runMode:context.slotKey.startsWith('manual:')?'manual':'scheduled'})});
-const hourlyModelScheduler=createTelegramHourlyScheduler({
-  // The requested model batch has its own switch. An old flag used to retire
-  // the five-category batch cannot silently disable these new three tickets.
-  env:{...process.env,TELEGRAM_HOURLY_ENABLED:process.env.TELEGRAM_HOURLY_MODEL_ENABLED??'true'},
-  runJob:({signal,shouldAbort})=>{
-    const hourKey=watHourKey(new Date());
-    return hourlyModelJob({slotKey:hourKey,dateKey:hourKey.slice(0,10),slotTime:hourKey.slice(11)+':'+String(hourlyModelScheduler.status().minute).padStart(2,'0'),signal,shouldAbort});
-  },
-});
+app.get('/api/telegram/probability-picks/run-status/:runId',floorRequests.status);
 registerTelegramPerformanceRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runReport:runTelegramPerformanceReport});
 
-app.get('/api/telegram/hourly-picks/run-status/:runId',telegramHourlyRuns.status);
-app.post('/api/telegram/hourly-picks',express.json(),telegramHourlyRuns.wrap(async(req,res)=>{
-  if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});
-  const id=String(req.headers['x-matchday-run-id']||'').trim();
-  if(!/^[a-zA-Z0-9_-]{1,160}$/.test(id))return res.status(400).json({error:'A valid manual run ID is required'});
-  const scheduled=req.headers['x-matchday-run-mode']==='scheduled';
-  const slotKey=scheduled?watHourKey(new Date()):'manual:'+crypto.createHash('sha256').update(id).digest('hex').slice(0,24);
-  const controller=new AbortController();res.once('close',()=>{if(!res.writableEnded)controller.abort();});
-  await res.jobStage?.('building_hourly_live_tickets');
-  const result=await hourlyModelJob({slotKey,dateKey:watHourKey(new Date()).slice(0,10),slotTime:scheduled?slotKey.slice(11)+':05':'MANUAL',signal:controller.signal});
-  if(!res.destroyed)res.status(result.statusCode).json(result.body);
-}));
+// All hourly and three-hourly automated ticket endpoints are retired.
+for(const name of ['daily-picks','next-12h-picks','hourly-picks','three-hourly-picks']){
+ app.post('/api/telegram/'+name,express.json(),(req,res)=>{if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});return res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});});
+ app.get('/api/telegram/'+name+'/run-status', (req,res)=>{if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});return res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});});
+ app.get('/api/telegram/'+name+'/run-status/:runId',(req,res)=>{if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});return res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});});
+}
 
 // Retired hourly URLs remain explicit so old cron callers cannot book or send.
 app.post('/api/telegram/quick-cash',express.json(),(req,res)=>{
   if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});
-  res.status(410).json({sent:false,ticketsSent:0,reason:'hourly_telegram_picks_removed'});
+  res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});
 });
 app.get('/api/telegram/quick-cash/run-status',(req,res)=>{
   if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});
-  res.json({enabled:false,running:false,reason:'hourly_telegram_picks_removed',plans:[]});
+  res.json({enabled:false,running:false,reason:'automatic_telegram_picks_removed',plans:[]});
 });
 
 app.get('/api/telegram/status', (req, res) => {
   res.json({
     configured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID && process.env.TELEGRAM_JOB_SECRET),
-    targets: ['1.30-5.00 SAFE',...NEXT12H_PLANS.map(p=>'NEXT 12H '+p.label),...hourlyModelPlans().map(p=>p.label)],
+    targets: FLOOR_PLANS,
     sportScope: 'all',
     rules: {
-      safe: {minProbability:85,combinedOddsMin:1.30,combinedOddsMax:5.00,selectionCap:15,
-        cron:'25 7 * * *',redFlagProtection:true},
-      hourly:{intervalMinutes:60,plans:hourlyModelPlans(),probabilityFloorEnabled:true,minimumProbability:80,selectionRanking:'estimated combined winning probability',dataSource:'SportyBet current public live board',cacheRequired:false,
-        halfwayRequired:true,currentlyWinningRequired:true,bookingMode:sportyDirect.sessionStatus().bookingMode,enabledSetting:'TELEGRAM_HOURLY_MODEL_ENABLED'},
+      automaticPicks:{enabled:true,plans:FLOOR_PLANS,maxSelections:20,fixedOddsTarget:false,betTypeSeparation:'across tickets',times:['07:00','18:00']},
       performance: {intervalHours:12,stakePerTicket:100,currency:'NGN',cron:'10 11,23 * * *',
         endpoint:'/api/telegram/performance-report',roiBasis:'settled and priced tickets; unresolved stake shown separately'},
     },
     maxSelections: Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10))),
-    scheduler: 'App server for hourly Live/QC and twice-daily next-12h picks; GitHub Actions for morning SAFE and 12-hour reports',
-    hourlyScheduler:hourlyModelScheduler.status(),
-    next12hScheduler:next12hScheduler.status(),threeHourlyScheduler:threeHourlyScheduler.status(),
-    next12hRules:{minimumProbability:80,highTargetsFallbackMinimumProbability:75,marketCoverage:'all currently modeled market families; unsupported markets excluded',targets:NEXT12H_PLANS,times:['07:00','18:00'],timezone:'Africa/Lagos',horizonHours:12,
-      maxSelections:40,exclusiveMatches:false,exclusiveMatchBetTypePairs:true,exclusiveBetTypes:false,repeatProbabilityThreshold:90,maxRepeatTickets:3,
-      dataSource:'SportyBet current public board',cacheRequired:false,dummySessionForBooking:sportyDirect.sessionStatus().bookingLoginRequired,bookingMode:sportyDirect.sessionStatus().bookingMode},
+    scheduler:floorScheduler.status(),
+    hourlyScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},
+    next12hScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},threeHourlyScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},
+    next12hRules:{enabled:false,targets:[],reason:'automatic_telegram_picks_removed'},
     aiBot: {
       enabled: String(process.env.TELEGRAM_AI_ENABLED || 'true').toLowerCase() !== 'false',
       tokenConfigured: Boolean(process.env.TELEGRAM_AI_BOT_TOKEN),
@@ -3773,148 +3714,6 @@ app.get('/api/telegram/status', (req, res) => {
 // configured target slips, creates SportyBet booking codes, and sends them to Telegram.
 // Read-only diagnosis of today's lock. Does not expose the Redis token and
 // deliberately offers no force-unlock action that might duplicate live picks.
-app.get('/api/telegram/daily-picks/run-status', async (req, res) => {
-  if (!authorizeTelegramJob(req)) return res.status(401).json({ error: 'unauthorized' });
-  try {
-    const redis = await getRedis();
-    if (!redis) return res.status(503).json({ error: 'REDIS_URL not configured' });
-    const date = watDateKey();
-    const [locked, raw] = await Promise.all([
-      redis.exists(`telegram:daily-picks:once:${date}`),
-      redis.get(`telegram:daily-picks:status:${date}`),
-    ]);
-    let lastRun = null;
-    try { lastRun = raw ? JSON.parse(raw) : null; } catch (_) {}
-    return res.json({ date, locked: !!locked, lastRun,
-      note: 'If locked, do not reset without verifying that no Telegram message was sent and the original server job has stopped.' });
-  } catch (err) {
-    console.error('Telegram run status check failed:', err.message);
-    return res.status(502).json({ error: 'Telegram run status unavailable' });
-  }
-});
-
-app.get('/api/telegram/daily-picks/run-status/:runId',telegramDailyRuns.status);
-app.post('/api/telegram/daily-picks', express.json(), telegramDailyRuns.wrap(async (req, res) => {
-  const secret = process.env.TELEGRAM_JOB_SECRET;
-  if (!secret || req.headers['x-telegram-job-secret'] !== secret) {
-    return res.status(401).json({ error: 'unauthorized' });
-  }
-  const manual = req.headers['x-matchday-run-mode'] === 'manual';
-  const today = watDateKey();
-  // Scheduled runs remain protected by a per-WAT-date Redis lock. Manual
-  // workflow_dispatch runs intentionally bypass that daily lock and may repeat.
-  let redis;
-  let token;
-  let lockKey;
-  let postingStarted = false;
-  let cancelledBeforePosting = false;
-  let lockAcquired = false;
-  let releasePromise = null;
-  let statusKey = `telegram:daily-picks:status:${today}`;
-  const writeRunStatus = async (status, extra = {}) => {
-    if (!redis) return;
-    await redis.set(statusKey, JSON.stringify({ status, at: new Date().toISOString(), ...extra }), { EX: 3 * 86400 });
-  };
-  const releaseIfUnsent = (status, detail) => {
-    if (!redis || postingStarted) return Promise.resolve();
-    if (releasePromise) return releasePromise;
-    releasePromise = (async () => {
-      // Record cancellation/failure for both scheduled and manual runs. Only
-      // scheduled runs own the once-per-day lock, so only they need unlocking.
-      try { await writeRunStatus(status, { detail, mode: manual ? 'manual' : 'scheduled' }); }
-      catch (statusErr) { console.error('Telegram cancellation status write failed:', statusErr.message); }
-      if (!lockAcquired || !lockKey) return;
-      try {
-        await redis.eval('if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end',
-          { keys: [lockKey], arguments: [token] });
-      } catch (unlockErr) { console.error('Telegram unsent lock release failed:', unlockErr.message); }
-    })();
-    return releasePromise;
-  };
-  // Canceling the GitHub workflow closes its curl connection. The server can
-  // otherwise keep fetching candidates and later publish despite cancellation.
-  // Only abort/unlock if NO Telegram message has been attempted yet.
-  res.once('close', () => {
-    if (res.writableEnded || postingStarted) return;
-    cancelledBeforePosting = true;
-    console.warn(`[Telegram] Client disconnected before posting for ${today}; cancelling unsent run`);
-    void releaseIfUnsent('cancelled_before_post', 'Workflow disconnected before the first Telegram message');
-  });
-  try {
-    redis = await getRedis();
-    // A process-local flag cannot guarantee one Telegram announcement after
-    // a Render restart or across instances. Do not send without shared Redis.
-    if (!redis) return res.status(503).json({ error: 'REDIS_URL required for Telegram run state and scheduled deduplication', code: 'TELEGRAM_REDIS_REQUIRED' });
-    token = crypto.randomUUID();
-    if (manual) {
-      // workflow_dispatch is intentionally repeatable. A manual run never
-      // consumes or checks the scheduled once-per-WAT-date lock.
-      statusKey = `telegram:daily-picks:manual-status:${today}:${token}`;
-      console.log(`[Telegram manual] Bypassing daily send lock for ${today}`);
-    } else {
-      lockKey = `telegram:daily-picks:once:${today}`;
-      const acquired = await redis.set(lockKey, token, { NX: true, EX: 3 * 86400 });
-      if (acquired !== 'OK') {
-        console.log(`[Telegram schedule guard] Skipped duplicate scheduled request for ${today}`);
-        const priorStatus = await redis.get(statusKey).catch(() => null);
-        let runStatus = 'unknown_or_in_progress';
-        if (priorStatus) {
-          try { runStatus = JSON.parse(priorStatus).status || runStatus; } catch (_) {}
-        }
-        // Only scheduled duplicates are blocked. Manual GitHub runs can be
-        // triggered at any time and intentionally bypass this daily lock.
-        return res.status(409).json({ ok: false, skipped: true,
-          code: 'TELEGRAM_ALREADY_STARTED_OR_SENT', reason: 'already_started_or_sent_today',
-          date: today, runStatus,
-          note: 'Scheduled auto-picks already started or sent today. Use the manual GitHub workflow if you intentionally want another run.' });
-      }
-      lockAcquired = true;
-    }
-    if (cancelledBeforePosting) {
-      await releaseIfUnsent('cancelled_before_post', 'Workflow disconnected before generating picks');
-      return;
-    }
-    await writeRunStatus('preparing', { mode: manual ? 'manual' : 'scheduled' });
-    const result = await runTelegramDailyPicks({
-      shouldAbort: () => cancelledBeforePosting,
-      onProgress:stage=>res.jobStage?.(stage),
-      onPostingStart: async () => {
-        postingStarted = true;
-        // Sending can be ambiguous if the request fails after reaching Telegram.
-        // Preserve the once-per-day lock as soon as the FIRST send is attempted.
-        try { await writeRunStatus('posting', { mode: manual ? 'manual' : 'scheduled' }); }
-        catch (statusErr) { console.error('Telegram posting status write failed:', statusErr.message); }
-      },
-    });
-    try {
-      await writeRunStatus('completed', { completedAt: new Date().toISOString(), mode: manual ? 'manual' : 'scheduled' });
-    } catch (statusError) { console.error('Telegram daily-picks status write failed:', statusError.message); }
-    await res.jobStage?.('completed');
-    if (!res.destroyed) return res.json({ ok: true, runMode: manual ? 'manual' : 'scheduled', generatedAt: new Date().toISOString(), ...result });
-  } catch (err) {
-    if (redis) {
-      if (!postingStarted) {
-        // No Telegram message was attempted: a cancelled/failed pre-post run
-        // should NOT block a subsequent manual retry for the entire WAT day.
-        await releaseIfUnsent(err.code === 'TELEGRAM_CANCELLED_BEFORE_POST' ? 'cancelled_before_post' : 'failed_before_post', String(err.message).slice(0, 250));
-      } else {
-        // Unknown/partial send: keep lock to avoid duplicating messages.
-        try {
-          await writeRunStatus('partial_or_unknown', { detail: String(err.message).slice(0, 250) });
-        } catch (statusError) { console.error('Telegram partial status write failed:', statusError.message); }
-      }
-    }
-    console.error('Telegram daily picks error:', err.message);
-    if (res.destroyed) return;
-    return res.status(err.code === 'TELEGRAM_CONFIG_MISSING' ? 503 : 502).json({
-      error: err.code === 'TELEGRAM_CONFIG_MISSING' ? 'Telegram integration is not configured yet' : 'Telegram picks job failed',
-      code: err.code || null,
-      detail: String(err.message || 'Unknown Telegram picks error').slice(0, 500),
-      diagnostics:err.diagnostics || undefined,
-    });
-  }
-}));
-
 app.post('/api/telegram/test', express.json(), async (req, res) => {
   try {
     const secret = process.env.TELEGRAM_JOB_SECRET;
@@ -4099,22 +3898,6 @@ app.get('/api/sportybet/public-cache/status',async(req,res)=>{
   try{await publicCache.read();res.json({...publicCache.status(),scheduler:publicCacheScheduler.status()});}
   catch(error){res.status(503).json({error:'Public cache status unavailable'});}
 });
-app.get('/api/telegram/next-12h-picks/run-status/:runId',telegramNext12hRuns.status);
-app.post('/api/telegram/next-12h-picks',express.json(),telegramNext12hRuns.wrap(async(req,res)=>{
-  if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});
-  const now=new Date(),parts=watParts(now),manual=req.headers['x-matchday-run-mode']==='manual';
-  const slotTime=parts.minute>=18*60?'18:00':'07:00';
-  const scheduledMinute=slotTime==='18:00'?18*60:7*60;
-  if(!manual&&(parts.minute<scheduledMinute||parts.minute-scheduledMinute>60))return res.json({skipped:true,reason:'outside_next12h_slot',times:['07:00','18:00'],timezone:'Africa/Lagos'});
-  const requestId=String(req.headers['x-matchday-run-id']||'').trim();
-  if(manual&&requestId&&!/^[a-zA-Z0-9_-]{1,160}$/.test(requestId))return res.status(400).json({error:'Invalid manual run ID'});
-  const slotKey=manual?'manual:'+crypto.createHash('sha256').update(requestId||crypto.randomUUID()).digest('hex').slice(0,24):parts.date+'T'+slotTime;
-  const controller=new AbortController();res.once('close',()=>{if(!res.writableEnded)controller.abort();});
-  await res.jobStage?.('building_next12h_tickets');
-  const result=await next12hJob({slotKey,dateKey:parts.date,slotTime:manual?'MANUAL':slotTime,signal:controller.signal});
-  if(!res.destroyed)res.status(result.statusCode).json(result.body);
-}));
-
 app.post('/api/refresh', express.json(), (req, res) => {
   if (!process.env.REFRESH_SECRET || req.headers['x-refresh-secret'] !== process.env.REFRESH_SECRET) {
     return res.status(401).json({ error: 'unauthorized' });
@@ -4129,10 +3912,10 @@ app.post('/api/refresh', express.json(), (req, res) => {
 
 const httpServer=app.listen(PORT, () => {
   console.log(`Matchday site listening on :${PORT}`);
-  publicCacheScheduler.start();next12hScheduler.start();hourlyModelScheduler.start();threeHourlyScheduler.start();
+  publicCacheScheduler.start();floorScheduler.start();
   console.log(`[SportyBet access] Public data reads; booking mode=${sportyDirect.sessionStatus().bookingMode}`);
 });
-const stopSchedulers=()=>{publicCacheScheduler.stop();next12hScheduler.stop();hourlyModelScheduler.stop();threeHourlyScheduler.stop();};
+const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();};
 httpServer.once('close',stopSchedulers);
 process.once('SIGTERM',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});
 process.once('SIGINT',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});

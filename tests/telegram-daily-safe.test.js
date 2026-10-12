@@ -98,7 +98,7 @@ test('a Telegram delivery failure retains the code and does not book or send a w
   assert.equal(runner.stored.at(-1).codes[0].shareCode,'TEST1');
 });
 
-test('Today’s Codes retains previously sent QC/live codes and hides retired 2x/3x templates', () => {
+test('Today’s Codes hides all retired automatic ticket codes', () => {
   const from = server.indexOf('function telegramDailyCodeVisibleForPlan(');
   const to = server.indexOf('function plot207TelegramHelpText(', from);
   const fromText = server.indexOf('function telegramDailyCodesText(');
@@ -122,8 +122,8 @@ test('Today’s Codes retains previously sent QC/live codes and hides retired 2x
   );
   for (const plan of ['free','pro','elite']) {
     const text = ctx.render(snapshot,{id:plan});
-    assert.match(text,/SAFE123/);
-    for (const code of ['QCF123','QCH123','QCB123','QCHV123','LIVE123']) assert.ok(text.includes(code));
+    assert.doesNotMatch(text,/SAFE123/);
+    for (const code of ['QCF123','QCH123','QCB123','QCHV123','LIVE123']) assert.ok(!text.includes(code));
     assert.doesNotMatch(text,/TWO123|THREE123|HOCKEY1000|BASKET1000|HVB1000|Pro\/Elite only/);
   }
 });
