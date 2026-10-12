@@ -24,3 +24,7 @@ test('fixture cap distributes reads across selected sports and reports partial c
  const result=await scanExpandedMarkets(rows,{sports:['tennis','hockey'],now:()=>now,env:{SPORTYBET_EXPANDED_MAX_EVENTS:2},client:{fetchEventDetail:async id=>{calls.push(id);return payload(rows.find(f=>f.eventId===id));}}});
  assert.deepEqual(new Set(calls),new Set(['t1','h1']));assert.equal(result.coverage.partial,true);assert.equal(result.coverage.discoveredFixtures,4);
 });
+test('imported specialty fixtures without kickoff metadata are read and accepted only after fresh details confirm the kickoff',async()=>{
+ const f=fixture('imported'),result=await scanExpandedMarkets([{...f,kickoffUtc:null}],{sports:['tennis'],now:()=>now,allowUnknownKickoff:true,client:{fetchEventDetail:async()=>payload(f)}});assert.equal(result.rows.length,2);
+ const expired=await scanExpandedMarkets([{...f,eventId:'expired-import',kickoffUtc:null}],{sports:['tennis'],now:()=>now,allowUnknownKickoff:true,client:{fetchEventDetail:async()=>payload({...f,eventId:'expired-import',kickoffUtc:now.toISOString()})}});assert.equal(expired.rows.length,0);
+});
