@@ -1702,10 +1702,11 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     });
     if((includeAllMarkets===true||includeAllMarkets==null&&betTypes==null)&&!['false','0','off'].includes(String(process.env.SPORTYBET_EXPANDED_MARKETS_ENABLED||'true').toLowerCase())&&liveModeNorm!=='live'&&liveModeNorm!=='quick_cash'){
       try{
-        const catalog=await require('./lib/sportyPublicCache').collectPublicCatalog({selectedSports,horizonHours:Number(marketHours)||24});
-        const expanded=require('./lib/offeredMarketModel').modelOfferedMarkets(Object.values(catalog.sports).flatMap(s=>s.rows||[]),{known:candidates,minProbability,minEdge});
-        const accepted=expanded.candidates.filter(c=>!leagues?.length||leagues.includes(c.tournament));
-        candidates.push(...accepted);candidates.marketCoverage={...expanded.coverage,collectionErrors:catalog.errors,pagination:Object.fromEntries(Object.entries(catalog.sports).map(([sport,s])=>[sport,s.coverage]))};
+        const fixtures=[f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners,basketballWinner,basketballTotals,basketballHandicap,hockeyWinner,hockeyTotals,hockeyHandicap,handballWinner,handballTotals,handballHandicap,volleyballWinner,volleyballTotals,volleyballSets,volleyballHandicap,tennisWinner,tennisTotals,tennisHandicap].flatMap(p=>p?.rows||[]);
+        const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets(fixtures,{sports:selectedSports,leagues,hours:Number(marketHours)||24});
+        const expanded=require('./lib/offeredMarketModel').modelOfferedMarkets(scan.rows,{known:candidates,minProbability,minEdge});
+        candidates.push(...expanded.candidates);candidates.marketCoverage={...expanded.coverage,collectionErrors:scan.errors,scan:scan.coverage};
+        if(!scan.rows.length&&Object.keys(scan.errors).length)sourceErrors['expanded markets']='Extra market detail requests were unavailable or timed out; regular candidates retained';
       }catch(error){sourceErrors['expanded markets']=String(error.message).slice(0,160);}
     }
     if(wantsLive) {
