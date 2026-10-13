@@ -61,4 +61,4 @@ test('Basketball and Hockey daily refresh endpoint is protected and force-refres
   assert.match(server, /const forceRefresh = options\.forceRefresh === true/);
 });
 
-test('automatic Telegram ticket workflows are removed',()=>{for(const name of ['telegram-picks.yml','telegram-next-12h.yml','telegram-hourly-model-picks.yml','telegram-three-hourly-picks.yml'])assert.equal(fs.existsSync(path.join(root,'.github/workflows',name)),false);});
+test('automatic Telegram ticket workflows are removed',()=>{for(const name of ['telegram-picks.yml','telegram-next-12h.yml','telegram-hourly-model-picks.yml'])assert.equal(fs.existsSync(path.join(root,'.github/workflows',name)),false);});

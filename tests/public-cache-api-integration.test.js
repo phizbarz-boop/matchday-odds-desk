@@ -22,7 +22,7 @@ test('public prediction refresh keeps its three slots while automatic Telegram t
   assert.equal((await rpc('state')).sessionChecks,0);assert.ok(fs.existsSync(path.join(directory,'catalog.json')));
   const coverage=await request('/api/sportybet/market-coverage');assert.equal(coverage.status,200);assert.ok(coverage.body.discoveredMarketInstances>0);assert.ok(coverage.body.markets.every(m=>Array.isArray(m.outcomes)));
   const predictions=await request('/api/predictions');assert.equal(predictions.body.readMode,'public-cache');assert.equal(predictions.body.matches.length,60);
-  const status=(await request('/api/telegram/status')).body;assert.equal(status.targets.length,7);
+  const status=(await request('/api/telegram/status')).body;assert.equal(status.targets.length,6);
   for(const date of ['2026-10-07T11:30:00Z','2026-10-07T16:30:00Z']){
     await rpc('clock',{date});await complete('/api/sportybet/public-cache/status',p=>p.scheduler.lastRun?.status==='completed'&&p.lastRun?.startedAt===date.replace('Z','.000Z'));
   }

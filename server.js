@@ -446,9 +446,10 @@ async function saveTelegramHourlyModelCode(redis,dateKey,slotKey,plan,booking,re
 
 function telegramDailyCodesText(snapshot, plan) {
   const codes=(Array.isArray(snapshot?.codes)?snapshot.codes:[])
+    .filter(c=>!/^MODEL FLOOR · ALL SPORTS 60%/.test(String(c.targetOdds||'')))
     .filter(c=>c.shareCode&&!/^(?:QC|LIVE|3-HOURLY|HOURLY|NEXT\s*12H)\b|safe|^1\.3(?:0|5)?(?:\D|$)/i.test(String(c.targetOdds||'')))
     .filter(c=>! /^(?:2|3|1000 ICE HOCKEY|1000 BASKETBALL|1000 HANDBALL \+ VOLLEYBALL)$/.test(String(c.targetOdds||'')))
-    .filter(c=>/^MODEL FLOOR/.test(c.targetOdds)||plan?.id!=='free'||telegramDailyCodeVisibleForPlan('free',c.targetOdds))
+    .filter(c=>/^(MODEL FLOOR|3H HOCKEY)/.test(c.targetOdds)||plan?.id!=='free'||telegramDailyCodeVisibleForPlan('free',c.targetOdds))
     .sort((a,b)=>Number(!/safe/i.test(a.targetOdds))-Number(!/safe/i.test(b.targetOdds))||(b.hourKey||'').localeCompare(a.hourKey||''));
   return codes.length?codes.map(c=>`${c.shareCode} · ${Number(c.combinedOdds)>1?Number(c.combinedOdds).toFixed(2)+' odds':'Odds unavailable'}`).join('\n'):
     'No codes available today.';
@@ -3654,7 +3655,7 @@ const publicCacheScheduler=createWatScheduler({name:'SportyBet public refresh',t
 const {PLANS:FLOOR_PLANS,runFloorPicks}=require('./lib/telegramFloorPicks');
 const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>runFloorPicks({
  now:()=>new Date(),
- loadPool:({signal})=>withPublicSportyRequest(async()=>{const rows=await loadAutoCandidates({sportScope:'all',minProbability:60,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'});if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');return rows;},{signal}),
+ loadPool:({signal})=>withPublicSportyRequest(async()=>{const rows=await loadAutoCandidates({sportScope:'all',minProbability:70,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'});if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');return rows;},{signal}),
  validate:validatePublicSelections,book:selections=>bookBet(selections),send:sendTelegramMessage,
  saveCode:(redis,dateKey,code)=>saveTelegramDailyCodes(redis,dateKey,{codes:[code]}),track:trackTelegramSlip,updateTrack:updateTrackedTicket
 },ctx)});
@@ -3667,10 +3668,27 @@ app.post('/api/telegram/probability-picks',express.json(),floorRequests.wrap(asy
  const result=await floorJob({slotKey:parts.date+'T'+slotTime,dateKey:parts.date,slotTime,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);
 }));
 app.get('/api/telegram/probability-picks/run-status/:runId',floorRequests.status);
+const {TIMES:THREE_HOURLY_TIMES,runThreeHourly}=require('./lib/telegramThreeHourly');
+const threeHourlyJob=createWatSlotJob({namespace:'telegram:three-hourly:hockey2',getRedis,run:ctx=>runThreeHourly({
+ now:()=>new Date(),
+ loadPool:({signal})=>withPublicSportyRequest(()=>loadAutoCandidates({sports:['hockey'],sportScope:'hockey',minProbability:0,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'}),{signal}),
+ validate:validatePublicSelections,assertBookingReady:async()=>{},book:bookBet,send:sendTelegramMessage,
+ isSettled:async row=>withPublicSportyRequest(async()=>{const event=finalEvent(await sportyDirect.fetchEventDetail(row.selection.eventId),row.selection.eventId);return settleSelection(row.selection,event,null).status!=='pending';}),
+ track:trackTelegramSlip,updateTrack:updateTrackedTicket,
+ saveCode:(redis,dateKey,slotKey,plan,booking,combinedOdds)=>saveTelegramDailyCodes(redis,dateKey,{codes:[{targetOdds:`3H HOCKEY · ${plan.id} · ${slotKey.slice(11)} WAT`,combinedOdds,shareCode:booking.shareCode}]})
+},ctx)});
+const threeHourlyScheduler=createWatScheduler({name:'Telegram 3H ice hockey',times:THREE_HOURLY_TIMES,runJob:threeHourlyJob,catchupMinutes:120,
+ enabled:String(process.env.TELEGRAM_THREE_HOURLY_ENABLED||'true')!=='false',configured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID)});
+const threeHourlyRequests=createTelegramRunRequests({name:'three-hourly-picks',authorize:authorizeTelegramJob,getRedis});
+app.post('/api/telegram/three-hourly-picks',express.json(),threeHourlyRequests.wrap(async(req,res)=>{
+ const parts=watParts(),slotTime=THREE_HOURLY_TIMES[Math.floor(parts.minute/180)];
+ const result=await threeHourlyJob({slotKey:parts.date+'T'+slotTime,dateKey:parts.date,slotTime,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);
+}));
+app.get('/api/telegram/three-hourly-picks/run-status/:runId',threeHourlyRequests.status);
 registerTelegramPerformanceRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runReport:runTelegramPerformanceReport});
 
 // All hourly and three-hourly automated ticket endpoints are retired.
-for(const name of ['daily-picks','next-12h-picks','hourly-picks','three-hourly-picks']){
+for(const name of ['daily-picks','next-12h-picks','hourly-picks']){
  app.post('/api/telegram/'+name,express.json(),(req,res)=>{if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});return res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});});
  app.get('/api/telegram/'+name+'/run-status', (req,res)=>{if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});return res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});});
  app.get('/api/telegram/'+name+'/run-status/:runId',(req,res)=>{if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});return res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});});
@@ -3699,7 +3717,7 @@ app.get('/api/telegram/status', (req, res) => {
     maxSelections: Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10))),
     scheduler:floorScheduler.status(),
     hourlyScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},
-    next12hScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},threeHourlyScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},
+    next12hScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},threeHourlyScheduler:{...threeHourlyScheduler.status(),variations:2,sports:['hockey'],targetOdds:100,minProbability:0},
     next12hRules:{enabled:false,targets:[],reason:'automatic_telegram_picks_removed'},
     aiBot: {
       enabled: String(process.env.TELEGRAM_AI_ENABLED || 'true').toLowerCase() !== 'false',
@@ -3912,10 +3930,10 @@ app.post('/api/refresh', express.json(), (req, res) => {
 
 const httpServer=app.listen(PORT, () => {
   console.log(`Matchday site listening on :${PORT}`);
-  publicCacheScheduler.start();floorScheduler.start();
+  publicCacheScheduler.start();floorScheduler.start();threeHourlyScheduler.start();
   console.log(`[SportyBet access] Public data reads; booking mode=${sportyDirect.sessionStatus().bookingMode}`);
 });
-const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();};
+const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();threeHourlyScheduler.stop();};
 httpServer.once('close',stopSchedulers);
 process.once('SIGTERM',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});
 process.once('SIGINT',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});

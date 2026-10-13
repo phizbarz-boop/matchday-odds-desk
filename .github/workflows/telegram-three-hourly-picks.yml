@@ -1,0 +1,21 @@
+name: Plot207 Three-Hourly Ice Hockey 100 Odds
+on:
+  schedule:
+    - cron: '0 2,5,8,11,14,17,20,23 * * *'
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: plot207-three-hourly-hockey
+  cancel-in-progress: false
+jobs:
+  picks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate two ice-hockey variations
+        env:
+          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
+          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
+        run: python3 jobs/telegram-picks-runner.py --endpoint three-hourly-picks
