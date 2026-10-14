@@ -1692,7 +1692,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
       try{
         const fixtures=[f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners,basketballWinner,basketballTotals,basketballHandicap,hockeyWinner,hockeyTotals,hockeyHandicap,handballWinner,handballTotals,handballHandicap,volleyballWinner,volleyballTotals,volleyballSets,volleyballHandicap,tennisWinner,tennisTotals,tennisHandicap].flatMap(p=>p?.rows||[]);
         const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets([...fixtures,...(requestedFixtures||[])],{sports:selectedSports,leagues,hours:Number(marketHours)||24,allowUnknownKickoff:Array.isArray(requestedFixtures)});
-        const expanded=require('./lib/offeredMarketModel').modelOfferedMarkets(scan.rows,{known:candidates,minProbability,minEdge});
+        const expanded=require('./lib/offeredMarketModel').modelOfferedMarkets(scan.rows,{known:candidates,predictions,minProbability,minEdge});
         candidates.push(...expanded.candidates);candidates.marketCoverage={...expanded.coverage,collectionErrors:scan.errors,scan:scan.coverage};
         if(!scan.rows.length&&Object.keys(scan.errors).length)sourceErrors['expanded markets']='Extra market detail requests were unavailable or timed out; regular candidates retained';
       }catch(error){sourceErrors['expanded markets']=String(error.message).slice(0,160);}
@@ -2127,7 +2127,7 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
         marketDesc: leg.marketDesc || best.marketDesc, outcomeDesc: leg.outcomeDesc || best.outcomeDesc, odds: leg.odds || Number(best.odds), currentOdds:Number(best.odds),
         supported: true, qualified,
         probability,
-        probabilitySource: best.probabilitySource || '',
+        probabilitySource: best.probabilitySource || '',modelBasis:best.modelBasis||null,accuracyStatus:best.accuracyStatus||null,pushProbability:best.pushProbability??null,fairEquivalentProbability:best.fairEquivalentProbability??null,
         impliedProbability: Number(best.impliedProbability) || null,
         edge: Number(best.edge) || 0,
         expectedValuePct: Number(best.expectedValuePct) || 0,
@@ -3084,7 +3084,7 @@ async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDa
         }
         return { index, ...leg, supported:false, qualified:false, replaced:false };
       }
-      return { index, ...leg,eventId:String(best.eventId),marketId:String(best.marketId),outcomeId:String(best.outcomeId),specifier:best.specifier||null,betType:best.betType,live:best.live===true,quickCash:best.quickCash===true, supported:true, qualified:Number(best.probability||0)>=minProbability, replaced:false, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:leg.outcomeDesc||best.outcomeDesc, marketDesc:leg.marketDesc||best.marketDesc, odds:Number(leg.odds||best.odds||0),currentOdds:Number(best.odds) };
+      return { index, ...leg,eventId:String(best.eventId),marketId:String(best.marketId),outcomeId:String(best.outcomeId),specifier:best.specifier||null,betType:best.betType,live:best.live===true,quickCash:best.quickCash===true, supported:true, qualified:Number(best.probability||0)>=minProbability, replaced:false, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:leg.outcomeDesc||best.outcomeDesc, marketDesc:leg.marketDesc||best.marketDesc, odds:Number(leg.odds||best.odds||0),currentOdds:Number(best.odds),modelBasis:best.modelBasis||null,accuracyStatus:best.accuracyStatus||null,probabilitySource:best.probabilitySource||'',pushProbability:best.pushProbability??null,fullWinProbability:best.fullWinProbability??null,fairEquivalentProbability:best.fairEquivalentProbability??null };
     });
     return { bookingCode, analyzed, supported: analyzed.filter(x=>x.supported).length, qualified: analyzed.filter(x=>x.qualified).length, replaced: analyzed.filter(x=>x.replaced).length, unsupported: analyzed.filter(x=>!x.supported).length, total: analyzed.length, minProbability, replaceUnsupported:!!replaceUnsupported, cacheOnlyMarkets:false, includeLive:!!includeLive,dataSource:candidates.dataSource,dataFetchedAt:candidates.dataFetchedAt };
   });
@@ -3102,6 +3102,8 @@ function telegramAiAnalysisText(a) {
       lines.push(`   ${x.outcomeDesc||x.marketDesc||'Selection'}${x.odds?` @ ${Number(x.odds).toFixed(2)}`:''}${x.supported?` | ${Number(x.probability).toFixed(1)}% | Q ${Number(x.qualityScore||0).toFixed(1)}`:' | NOT SCORED'}`);
     }
   });
+  if(a.analyzed.some(x=>x.modelBasis==='market_calibrated_poisson'))lines.push('Some scores are fitted to SportyBet prices, not independent statistical predictions.');
+  if(a.analyzed.some(x=>x.accuracyStatus==='not_empirically_validated'))lines.push('Extended models use explicit settlement rules; predictive accuracy has not yet been validated against settled results.');
   lines.push('', '✅ = keep · ❌ = below threshold · ♻️ = same-fixture current-market replacement · ⚪ = unsupported/unresolved');
   lines.push('Replacement stays on the same fixture and uses current SportyBet markets.');
   return lines.join('\n');
@@ -3834,7 +3836,7 @@ app.post('/api/refresh/sport/:sport', express.json(), async (req, res) => {
 });
 
 app.get('/api/sportybet/market-coverage',async(req,res)=>{
- try{const catalog=await publicCache.read();if(!catalog)return res.status(503).json({error:'Public catalogue is not ready'});const predictions=await require('./lib/sportyPublicCache').publicPredictions(catalog);const known=buildCandidates({...marketInputs(catalog),predictions,minProbability:0,minEdge:-100,sportScope:'all'});const modeled=require('./lib/offeredMarketModel').modelOfferedMarkets(Object.values(catalog.sports||{}).flatMap(s=>s.rows||[]),{known});res.json({generatedAt:catalog.generatedAt,sports:Object.keys(catalog.sports||{}),...modeled.coverage,note:'Market estimates are margin-adjusted prices, not independent performance predictions. Unconfirmed settlements are excluded.'});}catch(error){res.status(503).json({error:'Market coverage is unavailable'});}
+ try{const catalog=await publicCache.read();if(!catalog)return res.status(503).json({error:'Public catalogue is not ready'});const predictions=await require('./lib/sportyPublicCache').publicPredictions(catalog);const known=buildCandidates({...marketInputs(catalog),predictions,minProbability:0,minEdge:-100,sportScope:'all'});const modeled=require('./lib/offeredMarketModel').modelOfferedMarkets(Object.values(catalog.sports||{}).flatMap(s=>s.rows||[]),{known,predictions});res.json({generatedAt:catalog.generatedAt,sports:Object.keys(catalog.sports||{}),...modeled.coverage,note:'Market estimates are margin-adjusted prices, not independent performance predictions. Unconfirmed settlements are excluded.'});}catch(error){res.status(503).json({error:'Market coverage is unavailable'});}
 });
 app.get('/api/sportybet/public-cache/status',async(req,res)=>{
   try{await publicCache.read();res.json({...publicCache.status(),scheduler:publicCacheScheduler.status()});}
