@@ -2060,7 +2060,9 @@ app.post('/api/sportybet/replace-unsupported', express.json(), async (req, res) 
   }
 });
 
-app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
+const analysisJobs=require('./lib/analysisJobs').createAnalysisJobs({runInScope:(fn,options)=>withPublicSportyRequest(fn,options)});
+app.get('/api/sportybet/analysis-jobs/:id',analysisJobs.status);
+app.post('/api/sportybet/analyze-code', express.json(), analysisJobs.wrap(async (req, res) => {
   try {
     const bookingCode = String(req.body?.bookingCode || '').trim().toUpperCase();
     const minProbability = Math.min(95, Math.max(0, Number(req.body?.minProbability ?? 55) || 0));
@@ -2178,7 +2180,7 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
       detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
     });
   }
-});
+}));
 
 
 async function autoCornerDiagnostics(betTypes,liveMode='prematch') {
@@ -2204,7 +2206,7 @@ async function autoCornerDiagnostics(betTypes,liveMode='prematch') {
   }
 }
 
-app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), async (req, res) => {
+app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs.wrap(async (req, res) => {
   try {
     const body = req.body || {};
     const targetOdds = Math.min(100000, Math.max(1.05, Number(body.targetOdds) || 5));
@@ -2314,7 +2316,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), async (req, 
       requiresUserAction:sessionFailed?Boolean(err.requiresUserAction):undefined,
     });
   }
-});
+}));
 
 function parseTargetList(value) {
   const defaults = [1000, 750, 250, 100, 50, 20];
