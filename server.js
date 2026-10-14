@@ -1830,14 +1830,7 @@ function analyzerTeamMatch(a, b) {
 }
 
 
-function extractBookingOutcomes(booking) {
-  if (!booking || typeof booking !== 'object') return [];
-  for (const key of ['outcomes', 'selections', 'bets', 'items']) {
-    if (Array.isArray(booking[key])) return booking[key];
-  }
-  if (booking.data && typeof booking.data === 'object') return extractBookingOutcomes(booking.data);
-  return [];
-}
+function extractBookingOutcomes(booking) { return require('./lib/bookingDecoder').decodeBookingSelections(booking); }
 
 function analyzerBookingText(value) {
   if(value&&typeof value==='object')return String(value.desc??value.description??value.name??value.label??'');
@@ -1847,7 +1840,7 @@ function normalizeBookingLeg(row) {
   const home = row.homeTeamName ?? row.home_team ?? row.homeTeam ?? row.home ?? '';
   const away = row.awayTeamName ?? row.away_team ?? row.awayTeam ?? row.away ?? '';
   return {
-    sport: String(row.sport ?? row.sport_name ?? ''),
+    sport: analyzerBookingText(row.sport ?? row.sport_name ?? ''),
     eventId: String(row.eventId ?? row.event_id ?? row.matchId ?? row.match_id ?? ''),
     home: String(home),
     away: String(away),
