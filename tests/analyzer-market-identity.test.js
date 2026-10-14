@@ -1,0 +1,12 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const src=fs.readFileSync(require.resolve('../server'),'utf8');
+const start=src.indexOf('function analyzerNormText('),end=src.indexOf('function bookingMetaNumber',start);
+const ctx=vm.createContext({});vm.runInContext(src.slice(start,end)+';this.match=analyzerExactCandidate;this.repair=resolveGenericOver15Leg;',ctx);
+const row={eventId:'E',marketId:'18',outcomeId:'over',specifier:'total=2.5',marketDesc:'Over/Under',outcomeDesc:'Over 2.5',odds:1.8};
+test('analyzer cannot identify a market using match ID and price alone',()=>{assert.equal(ctx.match({eventId:'E',odds:1.8},[row]),null);});
+test('different outcomes, lines and handicap signs never match',()=>{for(const change of [{outcomeId:'under'},{specifier:'total=1.5'},{marketId:'other'}])assert.equal(ctx.match({...row,...change},[row]),null);assert.equal(ctx.match({...row,outcomeDesc:'Home -3.5'},[{...row,outcomeDesc:'Home +3.5'}]),null);});
+test('missing selection identity stays unresolved and never becomes Over 1.5',()=>{const leg={eventId:'E',marketDesc:'Over/Under',outcomeDesc:'Selection',odds:1.8};assert.equal(ctx.match(leg,[row]),null);assert.equal(ctx.repair(leg,[{...row,outcomeDesc:'Over 1.5'}]).outcomeDesc,'Selection');});
+test('text-only matches require exact labels, not Over 1.5 vs Over 1.50 or substrings',()=>{assert.equal(ctx.match({eventId:'E',marketDesc:'Over/Under',outcomeDesc:'Over 2'},[row]),null);assert.ok(ctx.match({eventId:'E',marketDesc:'Over/Under',outcomeDesc:'Over 2.5'},[row]));});
+test('multiple possible markets remain unresolved even if one price is closer',()=>{assert.equal(ctx.match({eventId:'E',marketDesc:'Winner',outcomeDesc:'Home',odds:1.8},[{...row,marketId:'1',specifier:null,marketDesc:'Winner',outcomeDesc:'Home'},{...row,marketId:'900',specifier:null,marketDesc:'Winner',outcomeDesc:'Home',odds:2}]),null);});
+test('signed specifiers remain distinct and ordered fields match',()=>{assert.equal(ctx.match({...row,specifier:'hcp=-3.5'},[{...row,specifier:'hcp=+3.5'}]),null);assert.ok(ctx.match({...row,specifier:'period=1|total=2.5'},[{...row,specifier:'total=2.5|period=1'}]));});
+test('exact selection identity works when odds move, without rewriting the imported ticket',()=>{assert.ok(ctx.match(row,[{...row,odds:2.2}]));assert.match(src,/marketDesc: leg.marketDesc \|\| best.marketDesc/);assert.match(src,/outcomeDesc:leg.outcomeDesc\|\|best.outcomeDesc/);assert.doesNotMatch(src,/consistentOver15/);});

@@ -16,7 +16,7 @@ test('analyzer results expose an explicit generation action and Elite markets ex
  const user=await bot.getUser(null,'keyboard');user.plan='elite';assert.ok(bot.marketsKeyboard(user).inline_keyboard.flat().some(b=>b.callback_data==='builder:extra'));
 });
 test('exact market identity prevents the analyzer scoring a different bet on the same fixture',()=>{
- const fs=require('node:fs'),vm=require('node:vm'),source=fs.readFileSync(require.resolve('../server'),'utf8'),start=source.indexOf('function analyzerCandidateScore('),end=source.indexOf('function isGenericAnalyzerSelection',start);
+ const fs=require('node:fs'),vm=require('node:vm'),source=fs.readFileSync(require.resolve('../server'),'utf8'),start=source.indexOf('function analyzerSpecifier('),end=source.indexOf('function isGenericAnalyzerSelection',start);
  const ctx=vm.createContext({analyzerNormText:x=>String(x||'').toLowerCase(),analyzerTeamMatch:(a,b)=>a===b});vm.runInContext(source.slice(start,end)+';this.score=analyzerCandidateScore;',ctx);
  assert.equal(ctx.score({eventId:'1',marketId:'900',outcomeId:'yes'},{eventId:'1',marketId:'1',outcomeId:'home'}),-1);
  assert.ok(ctx.score({eventId:'1',marketId:'900',outcomeId:'yes'},{eventId:'1',marketId:'900',outcomeId:'yes'})>=60);

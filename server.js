@@ -1839,6 +1839,10 @@ function extractBookingOutcomes(booking) {
   return [];
 }
 
+function analyzerBookingText(value) {
+  if(value&&typeof value==='object')return String(value.desc??value.description??value.name??value.label??'');
+  return String(value??'');
+}
 function normalizeBookingLeg(row) {
   const home = row.homeTeamName ?? row.home_team ?? row.homeTeam ?? row.home ?? '';
   const away = row.awayTeamName ?? row.away_team ?? row.awayTeam ?? row.away ?? '';
@@ -1848,37 +1852,42 @@ function normalizeBookingLeg(row) {
     home: String(home),
     away: String(away),
     tournament: String(row.tournament ?? row.tournament_name ?? row.league ?? ''),
-    marketId: String(row.marketId ?? row.market_id ?? ''),
-    marketDesc: String(row.marketDesc ?? row.market_name ?? row.market ?? row.bet_market ?? ''),
-    outcomeId: String(row.outcomeId ?? row.outcome_id ?? ''),
-    outcomeDesc: String(row.selectedOutcome ?? row.selected_outcome ?? row.outcomeDesc ?? row.outcome_name ?? row.outcome ?? row.pick ?? ''),
+    marketId: String(row.marketId ?? row.market_id ?? row.market?.id ?? ''),
+    marketDesc: analyzerBookingText(row.marketDesc ?? row.market_name ?? row.market ?? row.bet_market ?? ''),
+    outcomeId: String(row.outcomeId ?? row.outcome_id ?? row.outcome?.id ?? ''),
+    outcomeDesc: analyzerBookingText(row.selectedOutcome ?? row.selected_outcome ?? row.outcomeDesc ?? row.outcome_name ?? row.outcome ?? row.pick ?? ''),
     odds: Number(row.odds ?? row.price ?? row.selection_odds) || null,
-    specifier: row.specifier ?? row.market_specifier ?? null,
+    specifier: row.specifier ?? row.specifiers ?? row.market_specifier ?? row.market?.specifier ?? row.market?.specifiers ?? null,
   };
 }
 
-function analyzerCandidateScore(leg, c) {
-  if(leg.eventId&&String(leg.eventId)!==String(c.eventId))return -1;
-  if(leg.marketId&&String(leg.marketId)!==String(c.marketId))return -1;
-  if(leg.outcomeId&&String(leg.outcomeId)!==String(c.outcomeId))return -1;
-  if(leg.specifier&&analyzerNormText(leg.specifier)!==analyzerNormText(c.specifier))return -1;
-  let score = 0;
-  if (leg.eventId && c.eventId && leg.eventId === String(c.eventId)) score += 60;
-  if (leg.marketId && c.marketId && leg.marketId === String(c.marketId)) score += 18;
-  if (leg.outcomeId && c.outcomeId && leg.outcomeId === String(c.outcomeId)) score += 18;
-  if (leg.specifier && c.specifier && analyzerNormText(leg.specifier) === analyzerNormText(c.specifier)) score += 10;
-  if (analyzerTeamMatch(leg.home, c.home) && analyzerTeamMatch(leg.away, c.away)) score += 28;
-  if (analyzerNormText(leg.marketDesc) && analyzerNormText(c.marketDesc).includes(analyzerNormText(leg.marketDesc))) score += 8;
-  const lo = analyzerNormText(leg.outcomeDesc), co = analyzerNormText(c.outcomeDesc);
-  if (lo && co && (lo === co || lo.includes(co) || co.includes(lo))) score += 14;
-  const legOdds = Number(leg.odds), candOdds = Number(c.odds);
-  if (Number.isFinite(legOdds) && Number.isFinite(candOdds)) {
-    const diff = Math.abs(legOdds - candOdds);
-    if (diff <= 0.005) score += 24;
-    else if (diff <= 0.02) score += 18;
-    else if (diff <= 0.05) score += 10;
-  }
-  return score;
+function analyzerSpecifier(v) {
+  if(v&&typeof v==='object')return Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,x])=>`${k}=${x}`).join('|');
+  return String(v??'').trim().toLowerCase().split('|').map(x=>x.trim()).filter(Boolean).sort().join('|');
+}
+function analyzerCandidateScore(leg,c) {
+  const exactEvent=leg.eventId&&String(leg.eventId)===String(c.eventId);
+  if(leg.eventId&&!exactEvent)return -1;
+  if(!leg.eventId&&!(analyzerTeamMatch(leg.home,c.home)&&analyzerTeamMatch(leg.away,c.away)))return -1;
+  const lm=analyzerNormText(leg.marketDesc),cm=analyzerNormText(c.marketDesc),lo=analyzerNormText(leg.outcomeDesc),co=analyzerNormText(c.outcomeDesc);
+  if(leg.marketId){if(String(leg.marketId)!==String(c.marketId))return -1;}
+  else if(!lm||lm!==cm)return -1;
+  if(leg.outcomeId){if(String(leg.outcomeId)!==String(c.outcomeId))return -1;}
+  else if(!lo||/^(selection|pick|outcome)$/.test(lo)||lo!==co)return -1;
+  const ls=analyzerSpecifier(leg.specifier),cs=analyzerSpecifier(c.specifier);
+  if(ls&&ls!==cs)return -1;
+  // Without a line/specifier, only an explicit identical description that
+  // includes a line can establish the selection. Generic IDs span many lines.
+  if(!ls&&cs&&!(lm===cm&&lo===co&&/\d/.test(String(leg.outcomeDesc||''))))return -1;
+  // Preserve handicap direction: the generic text normalizer removes signs.
+  const signs=x=>String(x||'').match(/[+-]\s*\d+(?:\.\d+)?/g)?.map(x=>x.replace(/\s/g,'')).join('|')||'';
+  if(signs(leg.outcomeDesc)&&signs(leg.outcomeDesc)!==signs(c.outcomeDesc))return -1;
+  return 60+(exactEvent?20:0)+(leg.marketId?10:0)+(leg.outcomeId?10:0)+(ls?10:0);
+}
+function analyzerExactCandidate(leg,candidates) {
+  const matches=candidates.filter(c=>analyzerCandidateScore(leg,c)>=60);
+  const unique=new Map(matches.map(c=>[JSON.stringify([String(c.eventId),String(c.marketId),String(c.outcomeId),analyzerSpecifier(c.specifier)]),c]));
+  return unique.size===1?[...unique.values()][0]:null;
 }
 
 function isGenericAnalyzerSelection(v) {
@@ -1894,43 +1903,9 @@ function isAnalyzerOverUnderMarket(v) {
 // Some get_booking payloads identify the event/market correctly but return only
 // the generic word "Selection" for the chosen O/U outcome. Resolve those rows
 // against SportyBet's actual Over 1.5 market before the probability-model match.
-function resolveGenericOver15Leg(leg, over15Rows) {
-  if (!isAnalyzerOverUnderMarket(leg.marketDesc) || !isGenericAnalyzerSelection(leg.outcomeDesc)) {
-    return { ...leg, analyzerResolved: false };
-  }
-
-  const rows = Array.isArray(over15Rows) ? over15Rows : [];
-  let pool = [];
-  if (leg.eventId) pool = rows.filter(r => String(r.eventId || '') === String(leg.eventId));
-  if (!pool.length) {
-    pool = rows.filter(r => analyzerTeamMatch(leg.home, r.home) && analyzerTeamMatch(leg.away, r.away));
-  }
-  pool = pool.filter(r => {
-    const out = analyzerNormText(r.outcomeDesc);
-    const spec = analyzerNormText(r.specifier);
-    return out.includes('over') && (out.includes('1 5') || spec.includes('total 1 5'));
-  });
-  if (!pool.length) return { ...leg, analyzerResolved: false };
-
-  const targetOdds = Number(leg.odds);
-  pool.sort((a, b) => {
-    if (!Number.isFinite(targetOdds)) return 0;
-    return Math.abs(Number(a.odds) - targetOdds) - Math.abs(Number(b.odds) - targetOdds);
-  });
-  const hit = pool[0];
-  return {
-    ...leg,
-    eventId: String(hit.eventId || leg.eventId || ''),
-    marketId: String(hit.marketId || leg.marketId || ''),
-    outcomeId: String(hit.outcomeId || leg.outcomeId || ''),
-    specifier: hit.specifier || 'total=1.5',
-    marketDesc: hit.marketDesc || leg.marketDesc || 'Over/Under',
-    outcomeDesc: 'Over 1.5',
-    // Keep the booked ticket price on screen; current market identifiers are used for matching/re-booking.
-    odds: Number(leg.odds) || Number(hit.odds) || null,
-    analyzerResolved: true,
-    analyzerResolution: 'Resolved generic SportyBet O/U selection as Over 1.5 from the event market',
-  };
+function resolveGenericOver15Leg(leg,over15Rows) {
+  // Never infer one selection from other legs or a similar offered price.
+  return {...leg,analyzerResolved:false};
 }
 
 function bookingMetaNumber(booking, keys) {
@@ -2116,36 +2091,7 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
     else if (decodedSports.length && decodedSports.every(x => x.includes('basket'))) analyzerSportScope = 'basketball';
     else if (decodedSports.length && decodedSports.every(x => x.includes('hockey') || x.includes('ice hockey'))) analyzerSportScope = 'hockey';
 
-    const needsOver15Repair = analyzerSportScope === 'football' && decodedRows.some(
-      leg => isAnalyzerOverUnderMarket(leg.marketDesc) && isGenericAnalyzerSelection(leg.outcomeDesc)
-    );
-    const analyzerOver15 = needsOver15Repair
-      ? await loadSportyBetMarket('ou15', 'football', { hours: analyzerHours, maxPages: analyzerMaxPages,fixtures:decodedRows })
-      : { rows: [] };
-    let sourceRows = decodedRows.map(leg => resolveGenericOver15Leg(leg, analyzerOver15?.rows));
-
-    // Secondary repair for a known get_booking quirk: some legs on the same ticket expose
-    // "Over 1.5" while others expose only "Selection". If every explicit O/U pick on this
-    // booking is Over 1.5 and there are no conflicting O/U outcomes, classify the remaining
-    // generic O/U legs as Over 1.5 for model matching. Re-booking identifiers still come only
-    // from a real matched SportyBet candidate below, never from this inference alone.
-    const explicitOu = decodedRows
-      .filter(x => isAnalyzerOverUnderMarket(x.marketDesc) && !isGenericAnalyzerSelection(x.outcomeDesc))
-      .map(x => analyzerNormText(x.outcomeDesc));
-    const consistentOver15 = explicitOu.length > 0 && explicitOu.every(x => x.includes('over') && x.includes('1 5'));
-    if (consistentOver15) {
-      sourceRows = sourceRows.map(leg => {
-        if (!isAnalyzerOverUnderMarket(leg.marketDesc) || !isGenericAnalyzerSelection(leg.outcomeDesc) || leg.analyzerResolved) return leg;
-        return {
-          ...leg,
-          marketId: leg.marketId || '18',
-          specifier: leg.specifier || 'total=1.5',
-          outcomeDesc: 'Over 1.5',
-          analyzerResolved: true,
-          analyzerResolution: 'Resolved as Over 1.5 from the consistent Over 1.5 pattern in this booking code',
-        };
-      });
-    }
+    const sourceRows=decodedRows.map(leg=>({...leg,analyzerResolved:false}));
 
     // Build the complete supported candidate universe with filtering disabled. The Analyzer
     // then applies the user's chosen probability threshold to the exact imported selections.
@@ -2169,16 +2115,8 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
     });
     console.log(`[Analyzer] current SportyBet candidates=${candidates.length} loaded in ${Date.now()-candidateStartedAt}ms total=${Date.now()-startedAt}ms`);
     const analyzed = sourceRows.map((leg, index) => {
-      let best = null, bestScore = -1;
-      // Exact SportyBet event ID is the strongest signal. Only fall back to team-name
-      // matching when the imported booking does not provide a usable event ID.
-      const exactEventCandidates = leg.eventId ? candidates.filter(c => String(c.eventId || '') === leg.eventId) : [];
-      const pool = exactEventCandidates.length ? exactEventCandidates : candidates;
-      for (const c of pool) {
-        const sc = analyzerCandidateScore(leg, c);
-        if (sc > bestScore) { bestScore = sc; best = c; }
-      }
-      const supported = !!best && bestScore >= 60;
+      const best=analyzerExactCandidate(leg,candidates);
+      const supported=!!best;
       if (!supported) {
         const reason = leg.analyzerResolved
           ? 'Over 1.5 resolved correctly, but no current football probability-model prediction matched this fixture/competition'
@@ -2193,7 +2131,7 @@ app.post('/api/sportybet/analyze-code', express.json(), async (req, res) => {
         // Use current SportyBet identifiers/odds from the matched market candidate for re-booking.
         eventId: String(best.eventId), marketId: String(best.marketId), outcomeId: String(best.outcomeId), specifier: best.specifier || null,
         sport: best.sport || leg.sport, home: best.home || leg.home, away: best.away || leg.away, tournament: best.tournament || leg.tournament,
-        marketDesc: best.marketDesc || leg.marketDesc, outcomeDesc: best.outcomeDesc || leg.outcomeDesc, odds: Number(best.odds) || leg.odds,
+        marketDesc: leg.marketDesc || best.marketDesc, outcomeDesc: leg.outcomeDesc || best.outcomeDesc, odds: leg.odds || Number(best.odds), currentOdds:Number(best.odds),
         supported: true, qualified,
         probability,
         probabilitySource: best.probabilitySource || '',
@@ -3123,10 +3061,7 @@ async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDa
     else if (decodedSports.length && decodedSports.every(x => x.includes('hockey') || x.includes('ice hockey'))) sportScope = 'hockey';
 
     // Read current markets to match and replace selections from the submitted code.
-    const analyzerOver15 = sportScope === 'football'
-      ? await loadSportyBetMarket('ou15', 'football', { hours: analyzerHours, maxPages: 2,fixtures:decodedRows })
-      : { rows: [] };
-    const sourceRows = decodedRows.map(leg => resolveGenericOver15Leg(leg, analyzerOver15?.rows));
+    const sourceRows=decodedRows.map(leg=>({...leg,analyzerResolved:false}));
 
     // Read the supported market universe for the booking's sport. Live games
     // remain an explicit opt-in and use the same fresh request and model.
@@ -3138,12 +3073,8 @@ async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDa
     });
 
     const analyzed = sourceRows.map((leg, index) => {
-      let best=null, bestScore=-1;
-      const exact = leg.eventId ? candidates.filter(c => String(c.eventId||'') === String(leg.eventId)) : [];
-      for (const c of (exact.length ? exact : candidates)) {
-        const score=analyzerCandidateScore(leg,c); if(score>bestScore){bestScore=score;best=c;}
-      }
-      if (!best || bestScore < 60) {
+      const best=analyzerExactCandidate(leg,candidates);
+      if (!best) {
         if (replaceUnsupported) {
           const replacement = telegramAnalyzerReplacementFor(leg, candidates, minProbability);
           if (replacement) {
@@ -3160,7 +3091,7 @@ async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDa
         }
         return { index, ...leg, supported:false, qualified:false, replaced:false };
       }
-      return { index, ...leg,eventId:String(best.eventId),marketId:String(best.marketId),outcomeId:String(best.outcomeId),specifier:best.specifier||null,betType:best.betType,live:best.live===true,quickCash:best.quickCash===true, supported:true, qualified:Number(best.probability||0)>=minProbability, replaced:false, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:best.outcomeDesc, marketDesc:best.marketDesc, odds:Number(best.odds||leg.odds||0) };
+      return { index, ...leg,eventId:String(best.eventId),marketId:String(best.marketId),outcomeId:String(best.outcomeId),specifier:best.specifier||null,betType:best.betType,live:best.live===true,quickCash:best.quickCash===true, supported:true, qualified:Number(best.probability||0)>=minProbability, replaced:false, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:leg.outcomeDesc||best.outcomeDesc, marketDesc:leg.marketDesc||best.marketDesc, odds:Number(leg.odds||best.odds||0),currentOdds:Number(best.odds) };
     });
     return { bookingCode, analyzed, supported: analyzed.filter(x=>x.supported).length, qualified: analyzed.filter(x=>x.qualified).length, replaced: analyzed.filter(x=>x.replaced).length, unsupported: analyzed.filter(x=>!x.supported).length, total: analyzed.length, minProbability, replaceUnsupported:!!replaceUnsupported, cacheOnlyMarkets:false, includeLive:!!includeLive,dataSource:candidates.dataSource,dataFetchedAt:candidates.dataFetchedAt };
   });
