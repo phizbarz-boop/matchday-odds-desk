@@ -1842,6 +1842,7 @@ function normalizeBookingLeg(row) {
   return {
     sport: analyzerBookingText(row.sport ?? row.sport_name ?? ''),
     eventId: String(row.eventId ?? row.event_id ?? row.matchId ?? row.match_id ?? ''),
+    kickoffUtc:row.kickoffUtc||(Number.isFinite(Number(row.estimateStartTime))&&Number(row.estimateStartTime)>0?new Date(Number(row.estimateStartTime)).toISOString():null),
     home: String(home),
     away: String(away),
     tournament: String(row.tournament ?? row.tournament_name ?? row.league ?? ''),
@@ -2098,24 +2099,13 @@ app.post('/api/sportybet/analyze-code', express.json(), analysisJobs.wrap(async 
     console.log(`[Analyzer] scope=${analyzerSportScope} legs=${sourceRows.length} betTypes=${analyzerBetTypes ? analyzerBetTypes.join(',') : 'all-supported'}`);
 
     const candidateStartedAt = Date.now();
-    const candidates = await loadAutoCandidates({
-      sportScope: analyzerSportScope,
-      minProbability: 0,
-      minEdge: -25,
-      leagues: null,
-      betTypes: analyzerBetTypes,
-      marketHours: analyzerHours,
-      marketMaxPages: analyzerMaxPages,
-      requestedFixtures:sourceRows,includeAllMarkets:true,
-    });
+    const candidates=await require('./lib/analyzerCandidates').loadAnalyzerCandidates(sourceRows,{hours:analyzerHours,signal:sportyRequest()?.signal});;
     console.log(`[Analyzer] current SportyBet candidates=${candidates.length} loaded in ${Date.now()-candidateStartedAt}ms total=${Date.now()-startedAt}ms`);
     const analyzed = sourceRows.map((leg, index) => {
       const best=analyzerExactCandidate(leg,candidates);
       const supported=!!best;
       if (!supported) {
-        const reason = leg.analyzerResolved
-          ? 'Over 1.5 resolved correctly, but no current football probability-model prediction matched this fixture/competition'
-          : 'Could not resolve this imported selection to a market supported by the current probability model';
+        const reason=require('./lib/analyzerCandidates').unscoredReason(leg,candidates,analyzerHours);
         return { index, ...leg, supported: false, qualified: false, reason };
       }
       const probability = Number(best.probability) || 0;
@@ -3060,12 +3050,12 @@ async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDa
 
     // Read the supported market universe for the booking's sport. Live games
     // remain an explicit opt-in and use the same fresh request and model.
-    const candidates = await loadAutoCandidates({
+    const candidates=includeLive?await loadAutoCandidates({
       sportScope, minProbability:0, minEdge:-25, leagues:null, betTypes:null,
       marketHours:analyzerHours, marketMaxPages:2,
       requestedFixtures:sourceRows,includeAllMarkets:true,
       liveMode: includeLive ? 'both' : 'prematch'
-    });
+    }):await require('./lib/analyzerCandidates').loadAnalyzerCandidates(sourceRows,{hours:analyzerHours,signal:sportyRequest()?.signal});;
 
     const analyzed = sourceRows.map((leg, index) => {
       const best=analyzerExactCandidate(leg,candidates);
@@ -3084,7 +3074,7 @@ async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDa
             };
           }
         }
-        return { index, ...leg, supported:false, qualified:false, replaced:false };
+        return { index, ...leg, supported:false, qualified:false, replaced:false,reason:require('./lib/analyzerCandidates').unscoredReason(leg,candidates,analyzerHours) };
       }
       return { index, ...leg,eventId:String(best.eventId),marketId:String(best.marketId),outcomeId:String(best.outcomeId),specifier:best.specifier||null,betType:best.betType,live:best.live===true,quickCash:best.quickCash===true, supported:true, qualified:Number(best.probability||0)>=minProbability, replaced:false, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:leg.outcomeDesc||best.outcomeDesc, marketDesc:leg.marketDesc||best.marketDesc, odds:Number(leg.odds||best.odds||0),currentOdds:Number(best.odds),modelBasis:best.modelBasis||null,accuracyStatus:best.accuracyStatus||null,probabilitySource:best.probabilitySource||'',pushProbability:best.pushProbability??null,fullWinProbability:best.fullWinProbability??null,fairEquivalentProbability:best.fairEquivalentProbability??null };
     });
