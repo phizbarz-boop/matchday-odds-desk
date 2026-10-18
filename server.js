@@ -3089,10 +3089,11 @@ function telegramAiAnalysisText(a) {
     lines.push(`${icon} ${i+1}. ${x.live===true?'🔴 LIVE ':''}${x.home||'Unknown'} vs ${x.away||'Unknown'}`);
     if (x.replaced) {
       lines.push(`   ORIGINAL: ${x.originalOutcomeDesc||x.originalMarketDesc||'Unsupported selection'}${x.originalOdds?` @ ${Number(x.originalOdds).toFixed(2)}`:''}`);
-      lines.push(`   REPLACED → ${x.outcomeDesc||x.marketDesc||'Selection'}${x.odds?` @ ${Number(x.odds).toFixed(2)}`:''} | ${Number(x.probability).toFixed(1)}% | Q ${Number(x.qualityScore||0).toFixed(1)}`);
+      lines.push(`   REPLACED → ${[x.marketDesc,x.outcomeDesc].filter(Boolean).join(' · ')||'Selection'}${x.odds?` @ ${Number(x.odds).toFixed(2)}`:''} | ${Number(x.probability).toFixed(1)}% | Q ${Number(x.qualityScore||0).toFixed(1)}`);
     } else {
-      lines.push(`   ${x.outcomeDesc||x.marketDesc||'Selection'}${x.odds?` @ ${Number(x.odds).toFixed(2)}`:''}${x.supported?` | ${Number(x.probability).toFixed(1)}% | Q ${Number(x.qualityScore||0).toFixed(1)}`:' | NOT SCORED'}`);
+      lines.push(`   ${[x.marketDesc,x.outcomeDesc].filter(Boolean).join(' · ')||'Selection'}${x.odds?` @ ${Number(x.odds).toFixed(2)}`:''}${x.supported?` | ${Number(x.probability).toFixed(1)}% | Q ${Number(x.qualityScore||0).toFixed(1)}`:' | NOT SCORED'}`);
     }
+    if(x.supported&&Number(x.pushProbability)>0)lines.push(`   Full-stake refund: ${Number(x.pushProbability).toFixed(1)}%`);
   });
   if(a.analyzed.some(x=>x.modelBasis==='market_calibrated_poisson'))lines.push('Some scores are fitted to SportyBet prices, not independent statistical predictions.');
   if(a.analyzed.some(x=>x.accuracyStatus==='not_empirically_validated'))lines.push('Extended models use explicit settlement rules; predictive accuracy has not yet been validated against settled results.');
