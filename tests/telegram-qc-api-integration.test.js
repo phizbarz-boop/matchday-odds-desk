@@ -49,7 +49,7 @@ test('hourly removal preserves historical tickets, public results and interactiv
   });
   await t.test('Telegram reports automatic ticket generation disabled',async()=>{
     const response=await fetch(`http://127.0.0.1:${port}/api/telegram/status`),data=await response.json();
-    assert.equal(data.targets.length,6);assert.equal(data.rules.automaticPicks.enabled,true);
+    assert.equal(data.targets.length,13);assert.equal(data.rules.automaticPicks.enabled,true);
     assert.deepEqual(data.next12hRules.targets,[]);
     assert.equal(data.rules.performance.stakePerTicket,100);assert.equal(data.hourlyScheduler.running,false);
   });

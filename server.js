@@ -3586,8 +3586,17 @@ const publicCacheScheduler=createWatScheduler({name:'SportyBet public refresh',t
 const {PLANS:FLOOR_PLANS,runFloorPicks}=require('./lib/telegramFloorPicks');
 const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>runFloorPicks({
  now:()=>new Date(),
- loadPool:({signal})=>withPublicSportyRequest(async()=>{const rows=await loadAutoCandidates({sportScope:'all',minProbability:70,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'});if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');return rows;},{signal}),
- validate:validatePublicSelections,book:selections=>bookBet(selections),send:sendTelegramMessage,
+ loadPool:({signal})=>withPublicSportyRequest(async()=>{
+  const options={sportScope:'all',minProbability:70,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'};
+  const rows=await loadAutoCandidates(options);
+  if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');
+  const gapRows=await loadAutoCandidates({...options,winnerGapOnly:true,includeAllMarkets:false,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});
+  const qualified=new Set(gapRows.map(sportySelectionKey));return rows.map(c=>({...c,winnerGapQualified:qualified.has(sportySelectionKey(c))}));
+ },{signal}),
+ validate:async(selections,{signal,plan})=>{
+  const fresh=await validatePublicSelections(selections,{signal});if(!plan.winnerGapOnly)return fresh;
+  return withPublicSportyRequest(async()=>{const rows=await loadAutoCandidates({sportScope:'all',minProbability:70,minEdge:-100,includeAllMarkets:false,liveMode:'prematch',winnerGapOnly:true,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});const keys=new Set(rows.map(sportySelectionKey));return fresh.map(c=>({...c,winnerGapQualified:keys.has(sportySelectionKey(c))}));},{signal});
+ },book:selections=>bookBet(selections),send:sendTelegramMessage,
  saveCode:(redis,dateKey,code)=>saveTelegramDailyCodes(redis,dateKey,{codes:[code]}),track:trackTelegramSlip,updateTrack:updateTrackedTicket
 },ctx)});
 const floorScheduler=createWatScheduler({name:'Telegram probability floors',times:['07:00','18:00'],runJob:floorJob,
@@ -3599,27 +3608,10 @@ app.post('/api/telegram/probability-picks',express.json(),floorRequests.wrap(asy
  const result=await floorJob({slotKey:parts.date+'T'+slotTime,dateKey:parts.date,slotTime,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);
 }));
 app.get('/api/telegram/probability-picks/run-status/:runId',floorRequests.status);
-const {TIMES:THREE_HOURLY_TIMES,runThreeHourly}=require('./lib/telegramThreeHourly');
-const threeHourlyJob=createWatSlotJob({namespace:'telegram:three-hourly:hockey2',getRedis,run:ctx=>runThreeHourly({
- now:()=>new Date(),
- loadPool:({signal})=>withPublicSportyRequest(()=>loadAutoCandidates({sports:['hockey'],sportScope:'hockey',minProbability:0,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'}),{signal}),
- validate:validatePublicSelections,assertBookingReady:async()=>{},book:bookBet,send:sendTelegramMessage,
- isSettled:async row=>withPublicSportyRequest(async()=>{const event=finalEvent(await sportyDirect.fetchEventDetail(row.selection.eventId),row.selection.eventId);return settleSelection(row.selection,event,null).status!=='pending';}),
- track:trackTelegramSlip,updateTrack:updateTrackedTicket,
- saveCode:(redis,dateKey,slotKey,plan,booking,combinedOdds)=>saveTelegramDailyCodes(redis,dateKey,{codes:[{targetOdds:`3H HOCKEY · ${plan.id} · ${slotKey.slice(11)} WAT`,combinedOdds,shareCode:booking.shareCode}]})
-},ctx)});
-const threeHourlyScheduler=createWatScheduler({name:'Telegram 3H ice hockey',times:THREE_HOURLY_TIMES,runJob:threeHourlyJob,catchupMinutes:120,
- enabled:String(process.env.TELEGRAM_THREE_HOURLY_ENABLED||'true')!=='false',configured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID)});
-const threeHourlyRequests=createTelegramRunRequests({name:'three-hourly-picks',authorize:authorizeTelegramJob,getRedis});
-app.post('/api/telegram/three-hourly-picks',express.json(),threeHourlyRequests.wrap(async(req,res)=>{
- const parts=watParts(),slotTime=THREE_HOURLY_TIMES[Math.floor(parts.minute/180)];
- const result=await threeHourlyJob({slotKey:parts.date+'T'+slotTime,dateKey:parts.date,slotTime,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);
-}));
-app.get('/api/telegram/three-hourly-picks/run-status/:runId',threeHourlyRequests.status);
 registerTelegramPerformanceRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runReport:runTelegramPerformanceReport});
 
 // All hourly and three-hourly automated ticket endpoints are retired.
-for(const name of ['daily-picks','next-12h-picks','hourly-picks']){
+for(const name of ['daily-picks','next-12h-picks','hourly-picks','three-hourly-picks']){
  app.post('/api/telegram/'+name,express.json(),(req,res)=>{if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});return res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});});
  app.get('/api/telegram/'+name+'/run-status', (req,res)=>{if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});return res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});});
  app.get('/api/telegram/'+name+'/run-status/:runId',(req,res)=>{if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});return res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});});
@@ -3641,14 +3633,14 @@ app.get('/api/telegram/status', (req, res) => {
     targets: FLOOR_PLANS,
     sportScope: 'all',
     rules: {
-      automaticPicks:{enabled:true,plans:FLOOR_PLANS,maxSelections:20,fixedOddsTarget:false,betTypeSeparation:'across tickets',times:['07:00','18:00']},
+      automaticPicks:{enabled:true,plans:FLOOR_PLANS,maxSelections:40,fixedOddsTarget:false,betTypeSeparation:'none; one selection per match within a ticket',times:['07:00','18:00']},
       performance: {intervalHours:12,stakePerTicket:100,currency:'NGN',cron:'10 11,23 * * *',
         endpoint:'/api/telegram/performance-report',roiBasis:'settled and priced tickets; unresolved stake shown separately'},
     },
     maxSelections: Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10))),
     scheduler:floorScheduler.status(),
     hourlyScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},
-    next12hScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},threeHourlyScheduler:{...threeHourlyScheduler.status(),variations:2,sports:['hockey'],targetOdds:100,minProbability:0},
+    next12hScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},threeHourlyScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},
     next12hRules:{enabled:false,targets:[],reason:'automatic_telegram_picks_removed'},
     aiBot: {
       enabled: String(process.env.TELEGRAM_AI_ENABLED || 'true').toLowerCase() !== 'false',
@@ -3861,10 +3853,10 @@ app.post('/api/refresh', express.json(), (req, res) => {
 
 const httpServer=app.listen(PORT, () => {
   console.log(`Matchday site listening on :${PORT}`);
-  publicCacheScheduler.start();floorScheduler.start();threeHourlyScheduler.start();
+  publicCacheScheduler.start();floorScheduler.start();
   console.log(`[SportyBet access] Public data reads; booking mode=${sportyDirect.sessionStatus().bookingMode}`);
 });
-const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();threeHourlyScheduler.stop();};
+const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();};
 httpServer.once('close',stopSchedulers);
 process.once('SIGTERM',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});
 process.once('SIGINT',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});
