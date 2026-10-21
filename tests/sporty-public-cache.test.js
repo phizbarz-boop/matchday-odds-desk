@@ -150,3 +150,27 @@ test('an active cache lease renews, a stopped worker expires within 15 minutes, 
   const rejected=assert.rejects(oldRun,/lease was lost/);release();await rejected;
   assert.equal(JSON.parse(await redis.get(CACHE_KEY)).generatedAt,fresh.generatedAt);
 });
+test('missing detail routes validate exact selections from fresh paginated public pages',async()=>{
+ const original=(await publicCandidates(await collect(client()))).find(c=>c.betType==='home_win');
+ const fresh=event('football');fresh.markets[0].outcomes[0].odds='2.5';let lists=0;
+ const c=client({async fetchEventDetail(){throw Object.assign(Error('endpoint cooldown'),{code:'SPORTYBET_ENDPOINT_UNKNOWN'});},async fetchPrematchPage(id,page,size,opts){lists++;assert.equal(sportyRequest().anonymous,true);assert.ok(opts.marketIds.includes(String(original.marketId)));return page===1?{data:{totalNum:101,tournaments:[{events:[{...event('football'),eventId:'other'}]}]}}:envelope([fresh]);}});
+ const valid=await validatePublicSelections([original],{client:c,now:()=>clock});assert.equal(lists,2);assert.equal(valid.length,1);assert.equal(valid[0].odds,2.5);assert.ok(valid[0].probability<original.probability);
+ fresh.markets=[];assert.deepEqual(await validatePublicSelections([original],{client:c,now:()=>clock}),[]);
+});
+test('public-list fallback rejects suspended, live, started or missing exact selections',async()=>{
+ const original=(await publicCandidates(await collect(client()))).find(c=>c.betType==='home_win');
+ for(const change of [{banned:true},{status:1,matchStatus:'H1'},{estimateStartTime:+clock-60000},{markets:[]}]){
+  const c=client({async fetchEventDetail(){throw Object.assign(Error('404'),{status:404});},async fetchPrematchPage(){return envelope([{...event('football'),...change}]);}});
+  assert.deepEqual(await validatePublicSelections([original],{client:c,now:()=>clock}),[]);
+ }
+});
+test('fallback cannot use old ticket odds when fresh public reads fail or are rate limited',async()=>{
+ const original=(await publicCandidates(await collect(client()))).find(c=>c.betType==='home_win');
+ const c=client({async fetchEventDetail(){throw Object.assign(Error('unknown detail'),{code:'SPORTYBET_ENDPOINT_UNKNOWN'});},async fetchPrematchPage(){throw Object.assign(Error('too many requests'),{status:429});}});
+ await assert.rejects(validatePublicSelections([original],{client:c,now:()=>clock}),/too many requests/);
+});
+test('detail outage fallback works across all six sports without mixing event or market IDs',async()=>{
+ const originals=await publicCandidates(await collect(client()));let reads=0;
+ const c=client({async fetchEventDetail(){throw Object.assign(Error('detail unavailable'),{code:'SPORTYBET_ENDPOINT_UNKNOWN'});},async fetchPrematchPage(id){reads++;const sport=SPORTS.find(s=>sporty.SPORT_IDS[s]===id);return envelope([event(sport)]);}});
+ const valid=await validatePublicSelections(originals,{client:c,now:()=>clock});assert.equal(reads,6);assert.equal(valid.length,originals.length);const keys=new Set(originals.map(x=>[x.eventId,x.marketId,x.outcomeId,x.specifier||''].join('|')));assert.ok(valid.every(x=>keys.has([x.eventId,x.marketId,x.outcomeId,x.specifier||''].join('|'))));
+});
