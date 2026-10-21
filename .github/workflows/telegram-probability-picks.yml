@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: plot207-probability-picks
+  group: plot207-probability-picks-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'scheduled' }}
   cancel-in-progress: false
 jobs:
   picks:

@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),http=require('node:http'),path=require('node:path');
 const {spawn}=require('node:child_process');
-async function run(t,mode,{endpoint='daily-picks',event='workflow_dispatch'}={}) {
+async function run(t,mode,{endpoint='daily-picks',event='workflow_dispatch',attempt=null}={}) {
   const calls=[];let gets=0;
   const server=http.createServer((req,res)=>{
     req.resume();calls.push({method:req.method,url:req.url,prefer:req.headers.prefer,id:req.headers['x-matchday-run-id'],mode:req.headers['x-matchday-run-mode']});
@@ -27,7 +27,7 @@ async function run(t,mode,{endpoint='daily-picks',event='workflow_dispatch'}={})
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
   const result=await new Promise((resolve,reject)=>{
     const child=spawn('python3',[path.join(__dirname,'../jobs/telegram-picks-runner.py'),'--endpoint',endpoint],{env:{...process.env,
-      TELEGRAM_JOB_SECRET:'runner-private-secret',MATCHDAY_BASE_URL:`http://127.0.0.1:${server.address().port}`,MATCHDAY_RUN_ID:'gh987',GH_EVENT_NAME:event,
+      TELEGRAM_JOB_SECRET:'runner-private-secret',MATCHDAY_BASE_URL:`http://127.0.0.1:${server.address().port}`,MATCHDAY_RUN_ID:attempt?'':'gh987',GITHUB_RUN_ID:'gh987',GITHUB_RUN_ATTEMPT:attempt||'',GH_EVENT_NAME:event,
       TELEGRAM_REQUEST_TIMEOUT_SECONDS:'1',TELEGRAM_POLL_SECONDS:'0.01',TELEGRAM_POLL_MAX_SECONDS:'3'}});
     let stdout='',stderr='';child.stdout.on('data',data=>{stdout+=data;});child.stderr.on('data',data=>{stderr+=data;});
     child.once('error',reject);child.once('close',code=>resolve({code,stdout,stderr}));
@@ -65,3 +65,5 @@ test('unknown and missing jobs do not restart an unconfirmed send',async t=>{
 test('the workflow never forwards its job secret through a redirect',async t=>{
   const result=await run(t,'redirect');assert.equal(result.code,22);assert.equal(result.calls.length,1);
 });
+
+test('manual GitHub reruns use a new test batch ID for each attempt',async t=>{const a=await run(t,'pending',{endpoint:'probability-picks',attempt:'2'});assert.equal(a.code,0);assert.equal(a.calls[0].id,'gh987-attempt-2');assert.ok(a.calls.filter(c=>c.method==='GET').every(c=>c.url.endsWith('gh987-attempt-2')));});

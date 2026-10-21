@@ -457,7 +457,7 @@ function telegramDailyCodesText(snapshot, plan) {
 
 function sanitizeTelegramSlip(items) {
   if (!Array.isArray(items)) return [];
-  return items.slice(0, 40).map(x => ({
+  return items.slice(0, 50).map(x => ({
     sport: String(x?.sport || '').slice(0, 30),
     home: String(x?.home || '').slice(0, 120),
     away: String(x?.away || '').slice(0, 120),
@@ -1242,8 +1242,8 @@ app.post('/api/sportybet/live/book', express.json(), bookingRequests.wrap(async 
       return res.status(429).json({ error: 'Too many booking requests; try again in a minute' });
     }
     const selections = req.body && req.body.selections;
-    if (!Array.isArray(selections) || selections.length === 0 || selections.length > 100) {
-      return res.status(400).json({ error: 'selections must be an array containing 1-100 selections' });
+    if (!Array.isArray(selections) || selections.length === 0 || selections.length > 50) {
+      return res.status(400).json({ error: 'selections must be an array containing 1-50 selections' });
     }
 
     res.bookingStage?.('checking_selections');
@@ -2458,7 +2458,7 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
   await onProgress('scanning_sportybet');
   // Morning SAFE is independent of the twice-daily next-12-hours picks.
   const sportScope = 'all';
-  const maxSelections = Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10)));
+  const maxSelections = Math.min(50, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '50', 10)));
   const leagues = process.env.TELEGRAM_FOOTBALL_LEAGUES
     ? process.env.TELEGRAM_FOOTBALL_LEAGUES.split(',').map(x => x.trim()).filter(Boolean)
     : null;
@@ -2540,7 +2540,7 @@ async function runTelegramDailyPicks({ onPostingStart = () => {}, shouldAbort = 
     }
 
     // Final safety check: every target may use only supported markets.
-    // No more than one selection per fixture and no more than 40 legs per ticket.
+    // No more than one selection per fixture and no more than 50 legs per ticket.
     const uniqueEvents = new Set(result.selections.map(c => String(c.eventId)));
     if (result.selections.length > planMaxSelections || uniqueEvents.size !== result.selections.length ||
         result.selections.some(c => Number(c.probability) < plan.minProbability ||
@@ -3583,11 +3583,11 @@ const publicCacheJob=createWatSlotJob({namespace:'sportybet:public-refresh',getR
 }});
 const publicCacheScheduler=createWatScheduler({name:'SportyBet public refresh',times:['06:30','12:30','17:30'],runJob:publicCacheJob,
   enabled:!['false','0','off'].includes(String(process.env.SPORTYBET_PUBLIC_CACHE_ENABLED||'true').toLowerCase()),maxRunMilliseconds:3300000});
-const {PLANS:FLOOR_PLANS,runFloorPicks}=require('./lib/telegramFloorPicks');
+const {PLANS:FLOOR_PLANS,runFloorPicks,resolveFloorSlot}=require('./lib/telegramFloorPicks');
 const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>runFloorPicks({
  now:()=>new Date(),
  loadPool:({signal})=>withPublicSportyRequest(async()=>{
-  const options={sportScope:'all',minProbability:70,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'};
+  const options={sportScope:'all',marketHours:168,minProbability:70,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'};
   const rows=await loadAutoCandidates(options);
   if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');
   const gapRows=await loadAutoCandidates({...options,winnerGapOnly:true,includeAllMarkets:false,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});
@@ -3595,7 +3595,7 @@ const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>ru
  },{signal}),
  validate:async(selections,{signal,plan})=>{
   const fresh=await validatePublicSelections(selections,{signal});if(!plan.winnerGapOnly)return fresh;
-  return withPublicSportyRequest(async()=>{const rows=await loadAutoCandidates({sportScope:'all',minProbability:70,minEdge:-100,includeAllMarkets:false,liveMode:'prematch',winnerGapOnly:true,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});const keys=new Set(rows.map(sportySelectionKey));return fresh.map(c=>({...c,winnerGapQualified:keys.has(sportySelectionKey(c))}));},{signal});
+  return withPublicSportyRequest(async()=>{const rows=await loadAutoCandidates({sportScope:'all',marketHours:168,minProbability:70,minEdge:-100,includeAllMarkets:false,liveMode:'prematch',winnerGapOnly:true,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});const keys=new Set(rows.map(sportySelectionKey));return fresh.map(c=>({...c,winnerGapQualified:keys.has(sportySelectionKey(c))}));},{signal});
  },book:selections=>bookBet(selections),send:sendTelegramMessage,
  saveCode:(redis,dateKey,code)=>saveTelegramDailyCodes(redis,dateKey,{codes:[code]}),track:trackTelegramSlip,updateTrack:updateTrackedTicket
 },ctx)});
@@ -3603,9 +3603,10 @@ const floorScheduler=createWatScheduler({name:'Telegram probability floors',time
  enabled:String(process.env.TELEGRAM_FLOOR_PICKS_ENABLED||'true')!=='false',configured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),catchupMinutes:120});
 const floorRequests=createTelegramRunRequests({name:'probability-picks',authorize:authorizeTelegramJob,getRedis});
 app.post('/api/telegram/probability-picks',express.json(),floorRequests.wrap(async(req,res)=>{
- const parts=watParts(),slotTime=parts.minute>=18*60?'18:00':parts.minute>=7*60?'07:00':null;
- if(!slotTime)return res.status(409).json({error:'The first batch opens at 07:00 WAT'});
- const result=await floorJob({slotKey:parts.date+'T'+slotTime,dateKey:parts.date,slotTime,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);
+ let slot;try{slot=resolveFloorSlot(req.headers);}catch(e){return res.status(400).json({error:e.message});}
+ if(!slot)return res.status(409).json({error:'The first scheduled batch opens at 07:00 WAT; manual tests can run any time'});
+ await res.jobStage?.(slot.manualTest?'building_manual_test_tickets':'building_scheduled_tickets');
+ const result=await floorJob({...slot,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);
 }));
 app.get('/api/telegram/probability-picks/run-status/:runId',floorRequests.status);
 registerTelegramPerformanceRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runReport:runTelegramPerformanceReport});
@@ -3633,11 +3634,11 @@ app.get('/api/telegram/status', (req, res) => {
     targets: FLOOR_PLANS,
     sportScope: 'all',
     rules: {
-      automaticPicks:{enabled:true,plans:FLOOR_PLANS,maxSelections:40,fixedOddsTarget:false,betTypeSeparation:'none; one selection per match within a ticket',times:['07:00','18:00']},
+      automaticPicks:{enabled:true,plans:FLOOR_PLANS,maxSelections:50,fixedOddsTarget:false,betTypeSeparation:'none; one selection per match within a ticket',times:['07:00','18:00']},
       performance: {intervalHours:12,stakePerTicket:100,currency:'NGN',cron:'10 11,23 * * *',
         endpoint:'/api/telegram/performance-report',roiBasis:'settled and priced tickets; unresolved stake shown separately'},
     },
-    maxSelections: Math.min(40, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '40', 10))),
+    maxSelections: Math.min(50, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '50', 10))),
     scheduler:floorScheduler.status(),
     hourlyScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},
     next12hScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},threeHourlyScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},
@@ -3697,8 +3698,8 @@ app.post('/api/sportybet/book', express.json(), bookingRequests.wrap(async (req,
       return res.status(429).json({ error: 'Too many booking requests; try again in a minute' });
     }
     const selections = req.body && req.body.selections;
-    if (!Array.isArray(selections) || selections.length === 0 || selections.length > 100) {
-      return res.status(400).json({ error: 'selections must be an array containing 1-100 selections' });
+    if (!Array.isArray(selections) || selections.length === 0 || selections.length > 50) {
+      return res.status(400).json({ error: 'selections must be an array containing 1-50 selections' });
     }
     const context = Array.isArray(req.body && req.body.telegramContext)
       ? req.body.telegramContext

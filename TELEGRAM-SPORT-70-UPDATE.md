@@ -1,13 +1,18 @@
-Telegram morning/evening picks
+Telegram ticket update
 
-Schedule stays 07:00 and 18:00 Africa/Lagos (WAT).
-The previous six morning/evening plans are replaced by 13 plans:
-- Football, tennis, basketball, ice hockey, handball, volleyball: one 10-match ticket and one 40-match long-shot ticket each.
-- One 30-match all-sports winner-only ticket, requiring home/away winner odds difference strictly above 5.00.
-All selections require model full-win probability >=70%. Public SportyBet feeds supply offered markets and fresh selections; booking uses the existing booking integration.
-Sport-specific tickets have no odds-gap filter. Short tickets rank by model probability; long shots rank by odds among qualifying selections, then model probability. Every ticket contains one selection per match. Market types may repeat on different matches or tickets. The evening batch continues excluding the morning's exact event/market-family pairs. Games must meet the existing same-day start/finish checks.
-SportyBet supports at most 40 selections, so the requested 50-game tickets are capped at 40. Incomplete tickets are skipped with the available count; floors and counts are never silently reduced. Available supported/modelled markets are considered, including expanded markets. This does not add unmodelled markets or guarantee wins.
-Booking validation rechecks probabilities and winner-gap eligibility; existing uncertain-booking and delivery checkpoints remain in place. Codes are saved in Today's Codes.
-The separate three-hourly ice-hockey automation is removed: no app timer or GitHub workflow; its authenticated endpoint returns 410 without scanning, booking, or sending.
+Schedule: 07:00 and 18:00 Africa/Lagos (WAT). Three-hourly hockey picks stay removed.
 
-Validation: 438 non-browser tests passed across the full run plus the corrected status expectation rerun. Browser login was unchanged and excluded. No real tickets were booked or Telegram messages sent during testing. Deployment still required.
+13 ticket plans, all using the existing probability model and minimum full-win probability 70%:
+- Football, tennis, basketball, ice hockey, handball and volleyball each receive one ticket of up to 10 games and one long-shot ticket of up to 50 games.
+- One all-sports winner-only ticket of up to 30 games. Only this plan requires the home/away winner odds difference to be strictly above 5.00; it is rechecked before booking.
+- Sport-specific tickets consider all available supported modelled bet types without the odds-gap filter.
+
+Short and all-sports tickets prefer qualifying same-day games, then tomorrow's qualifying games. Existing estimated/explicit same-day finish checks apply within each date. Long shots accept upcoming fixtures within seven days, ranked by odds among selections passing 70%, then probability. One selection per match within each ticket; bet types may repeat across matches/tickets. If a selection fails fresh validation, eligible backups are tried. If fewer games remain than the target count, the smaller ticket is booked and sent. No notice replaces a ticket merely because it is incomplete. Zero qualifying selections still produce a notice; no picks are invented and the floor is never lowered.
+
+50-selection ceiling is applied consistently to website display, supported Telegram generators, analyzer-generated tickets and booking request validation. Bot subscription-specific selection limits remain in effect (Elite supports 50).
+
+Manual GitHub workflow runs are tests, available at any time. Each workflow run/attempt uses a separate batch ID, can repeat previously used games, and does not alter scheduled daily reservations. Repeated HTTP submissions or polls for the same test ID reuse that test's saved result. Manual messages are marked MANUAL TEST. Tests do not wait for the scheduled GitHub concurrency group. Existing network/provider latency still applies; no instant-delivery guarantee.
+
+Scheduled runs remain idempotent per WAT slot; evening avoids morning event/market-family pairs. Codes and settlement tracking are preserved, including Today’s Codes. Ambiguous booking/delivery outcomes are held rather than automatically duplicated.
+
+Deployment required. No real booking or Telegram send was performed during verification.

@@ -26,7 +26,7 @@ function harness(rows) {
 test('hourly templates are four isolated QC pools at 0% and all-six-sport Live at 85%',()=>{
   const plans=hourlyPlans({});assert.deepEqual(plans.map(p=>p.label),['QC ICE HOCKEY','QC BASKETBALL','QC HANDBALL + VOLLEYBALL','QC FOOTBALL','LIVE ALL SPORTS 85%']);
   assert.deepEqual(plans.map(p=>p.minProbability),[0,0,0,0,85]);assert.equal(plans.at(-1).sports.length,6);
-  assert.ok(hourlyPlans({TELEGRAM_QC_MAX_SELECTIONS:'999',TELEGRAM_LIVE_MAX_SELECTIONS:'999'}).every(p=>p.maxSelections<=40));
+  assert.ok(hourlyPlans({TELEGRAM_QC_MAX_SELECTIONS:'999',TELEGRAM_LIVE_MAX_SELECTIONS:'999'}).every(p=>p.maxSelections<=50));
 });
 test('one fresh board produces five correctly scoped tickets and preserves independent tracking',async()=>{
   const h=harness(Object.keys(sportState).map(s=>candidate(s)));

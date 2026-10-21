@@ -21,9 +21,9 @@ function harness({rows=Array.from({length:34},(_,i)=>row(i)),...overrides}={}){
 
 test('the requested hourly batch contains exactly Live 3, QC 3 and Live 1000 across all six sports',()=>{
   const plans=hourlyModelPlans({});assert.deepEqual(plans.map(p=>p.targetOdds),[3,3,1000]);assert.deepEqual(plans.map(p=>p.liveMode),['live','quick_cash','live']);
-  assert.deepEqual(plans.map(p=>p.minProbability),[80,80,80]);assert.ok(plans.every(p=>p.maxSelections===40&&p.sports.length===6));
+  assert.deepEqual(plans.map(p=>p.minProbability),[80,80,80]);assert.ok(plans.every(p=>p.maxSelections===50&&p.sports.length===6));
   assert.deepEqual(hourlyModelPlans({TELEGRAM_QC_TARGET_ODDS:2,TELEGRAM_LIVE_TARGET_ODDS:2}).map(p=>p.targetOdds),[3,3,1000]);
-  assert.ok(hourlyModelPlans({TELEGRAM_HOURLY_MAX_SELECTIONS:999}).every(p=>p.maxSelections===40));
+  assert.ok(hourlyModelPlans({TELEGRAM_HOURLY_MAX_SELECTIONS:999}).every(p=>p.maxSelections===50));
   for(const value of [0,20,79.9,''])assert.equal(hourlyModelPlans({TELEGRAM_HOURLY_QC_MIN_PROBABILITY:value})[1].minProbability,80);
   assert.ok(hourlyModelPlans({TELEGRAM_HOURLY_QC_MIN_PROBABILITY:99,TELEGRAM_HOURLY_LIVE_MIN_PROBABILITY:99}).every(p=>p.minProbability===80));
 });

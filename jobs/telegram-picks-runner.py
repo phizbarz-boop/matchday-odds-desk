@@ -20,6 +20,8 @@ def main():
     run_id = os.environ.get("MATCHDAY_RUN_ID") or os.environ.get("GITHUB_RUN_ID", "")
     event = os.environ.get("GH_EVENT_NAME") or os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch")
     mode = "scheduled" if event == "schedule" else "manual"
+    if mode == "manual" and not os.environ.get("MATCHDAY_RUN_ID") and os.environ.get("GITHUB_RUN_ATTEMPT"):
+        run_id += "-attempt-" + os.environ["GITHUB_RUN_ATTEMPT"]
     if not secret:
         print("Missing GitHub secret TELEGRAM_JOB_SECRET", file=sys.stderr)
         return 1
