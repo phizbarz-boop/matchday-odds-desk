@@ -3292,6 +3292,17 @@ async function handleTelegramAiUpdate(update) {
       return sendTelegramAiMessageTo(chatId,`${on?'🔴 Live opt-in ON: selections at least halfway through and currently winning are also scored.':'🟢 Live opt-in OFF: only upcoming fixtures are used for analysis.'}\n\n${telegramAiAnalyzerSummary(user)}`,{reply_markup:telegramAiAnalyzerKeyboard(user)});
     }
     else if (d === 'analyzer:horizon') return sendTelegramAiMessageTo(chatId, '📅 How far ahead should Matchday search for fixtures in the imported code?', { reply_markup: telegramAiAnalyzerHorizonKeyboard() });
+    else if(d==='analyzer:split'){
+      return sendTelegramAiMessageTo(chatId,'Choose the number of separate tickets (1–10). Example: 50 matches ÷ 5 tickets = 10 matches per ticket. Ranked by model probability, highest first; unscored matches stay at the end. All original selections are retained. Each generated code uses one ticket credit. SportyBet prices may change before booking.',{reply_markup:{inline_keyboard:[...[1,2,3,4,5].map((n,i)=>[{text:String(n),callback_data:'analyzer:split:'+n},{text:String(n+5),callback_data:'analyzer:split:'+(n+5)}]),[{text:'Back',callback_data:'action:analyze'}]]}});
+    }
+    else if(d.startsWith('analyzer:split:')){
+      try{
+       await sendTelegramAiMessageTo(chatId,'Splitting the original ticket and generating separate codes…');
+       const result=await require('./lib/telegramSplitTicket').splitAnalyzedTicket(user,redis,Number(d.split(':')[2]),{getPlan:getTelegramAiPlan,hasCredit:telegramAiHasTicketCredit,analyze:analyzeTelegramAiCode,book:bookBet,consume:consumeTelegramAiUsage});user=result.user;
+       const text=result.groups.map(g=>`Part ${g.index} · ${g.selections.length} matches · original odds ${g.combinedOdds.toFixed(2)}\n${g.booking?.shareCode||'Code not confirmed'}${g.booking?.shareURL?'\n'+g.booking.shareURL:''}${g.unscored?'\n'+g.unscored+' unscored matches retained':''}`).join('\n\n');
+       return sendTelegramAiLongMessage(chatId,text+(result.error?'\n\n'+result.error:'')+'\n\nOriginal matches, markets and selections retained. Booking prices may change.',{reply_markup:telegramAiAnalyzerAnalysisKeyboard(false)});
+      }catch(error){return sendTelegramAiMessageTo(chatId,'Could not split the ticket: '+error.message);}
+    }
     else if(d==='analyzer:generate:last'){
       try{
         const generated=await require('./lib/telegramAnalyzedTicket').generateAnalyzedTicket(user,redis,{getPlan:getTelegramAiPlan,hasCredit:telegramAiHasTicketCredit,analyze:analyzeTelegramAiCode,book:bookBet,consume:consumeTelegramAiUsage,save:saveTelegramAiUser});user=generated.user;

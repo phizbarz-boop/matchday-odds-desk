@@ -28,6 +28,7 @@
     }
     async function run(payload,onProgress) {
       const fingerprint=JSON.stringify(payload),old=read();
+      if(old&&old.fingerprint!==fingerprint)throw Error('A different booking is still unconfirmed. Resume that request before creating another ticket.');
       const saved=old?.fingerprint===fingerprint?old:{requestId:requestId(),fingerprint};
       const resume=old?.fingerprint===fingerprint;save(saved);
       const start=now();let submitted=false,lastError=null,missing=0;
