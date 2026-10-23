@@ -153,7 +153,7 @@ test('an active cache lease renews, a stopped worker expires within 15 minutes, 
 test('missing detail routes validate exact selections from fresh paginated public pages',async()=>{
  const original=(await publicCandidates(await collect(client()))).find(c=>c.betType==='home_win');
  const fresh=event('football');fresh.markets[0].outcomes[0].odds='2.5';let lists=0;
- const c=client({async fetchEventDetail(){throw Object.assign(Error('endpoint cooldown'),{code:'SPORTYBET_ENDPOINT_UNKNOWN'});},async fetchPrematchPage(id,page,size,opts){lists++;assert.equal(sportyRequest().anonymous,true);assert.ok(opts.marketIds.includes(String(original.marketId)));return page===1?{data:{totalNum:101,tournaments:[{events:[{...event('football'),eventId:'other'}]}]}}:envelope([fresh]);}});
+ const c=client({async fetchEventDetail(){throw Object.assign(Error('endpoint cooldown'),{code:'SPORTYBET_ENDPOINT_UNKNOWN'});},async fetchPrematchPage(id,page,size,opts){lists++;assert.equal(sportyRequest().anonymous,true);assert.ok(opts.marketIds.includes(String(original.marketId)));assert.ok(opts.marketIds.includes('18'),'multi-digit market IDs must not be split into characters');return page===1?{data:{totalNum:101,tournaments:[{events:[{...event('football'),eventId:'other'}]}]}}:envelope([fresh]);}});
  const valid=await validatePublicSelections([original],{client:c,now:()=>clock});assert.equal(lists,2);assert.equal(valid.length,1);assert.equal(valid[0].odds,2.5);assert.ok(valid[0].probability<original.probability);
  fresh.markets=[];assert.deepEqual(await validatePublicSelections([original],{client:c,now:()=>clock}),[]);
 });

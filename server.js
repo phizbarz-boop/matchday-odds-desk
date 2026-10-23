@@ -1397,7 +1397,7 @@ async function addLiveFootballModels(predictions, liveFootballPayloads, {buildCo
 }
 
 const AUTO_BET_TYPES_BY_SPORT = {
-  football: ['streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under','over25','under25','correct_score'],
+  football: ['goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under','over25','under25','correct_score'],
   basketball: ['basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
   hockey: ['hockey_winner','hockey_over','hockey_under','hockey_handicap_home','hockey_handicap_away'],
   handball: ['handball_winner','handball_over','handball_under','handball_handicap_home','handball_handicap_away'],
@@ -1440,7 +1440,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     const effectiveBetTypes = normalizeAutoBetTypesForSports(selectedSports, betTypes);
     const requestedBetTypes = effectiveBetTypes.length ? new Set(effectiveBetTypes) : null;
     const wantsAny = ids => !requestedBetTypes || ids.some(id => requestedBetTypes.has(id));
-    const needF1x2 = wantsFootball && (winnerGapOnly || wantsAny(require('./lib/streakGoalModel').IDS) || wantsAny(['home_win','draw','away_win','dc_1x','dc_x2']));
+    const needF1x2 = wantsFootball && (winnerGapOnly || wantsAny([...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS]) || wantsAny(['home_win','draw','away_win','dc_1x','dc_x2']));
     const needFGg = wantsFootball && wantsAny(['gg_yes','ng_no']);
     const needFDc = wantsFootball && wantsAny(['dc_1x','dc_x2']);
     const needFDnb = wantsFootball && wantsAny(['dnb']);
@@ -1693,7 +1693,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
       if (sportName.includes('tennis')) return selectedSet.has('tennis');
       return false;
     });
-    if((includeAllMarkets===true||includeAllMarkets==null&&betTypes==null||require('./lib/streakGoalModel').IDS.some(id=>betTypes?.includes(id)))&&!['false','0','off'].includes(String(process.env.SPORTYBET_EXPANDED_MARKETS_ENABLED||'true').toLowerCase())&&liveModeNorm!=='live'&&liveModeNorm!=='quick_cash'){
+    if((includeAllMarkets===true||includeAllMarkets==null&&betTypes==null||[...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS].some(id=>betTypes?.includes(id)))&&!['false','0','off'].includes(String(process.env.SPORTYBET_EXPANDED_MARKETS_ENABLED||'true').toLowerCase())&&liveModeNorm!=='live'&&liveModeNorm!=='quick_cash'){
       try{
         const fixtures=[f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners,basketballWinner,basketballTotals,basketballHandicap,hockeyWinner,hockeyTotals,hockeyHandicap,handballWinner,handballTotals,handballHandicap,volleyballWinner,volleyballTotals,volleyballSets,volleyballHandicap,tennisWinner,tennisTotals,tennisHandicap].flatMap(p=>p?.rows||[]);
         const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets([...fixtures,...(requestedFixtures||[])],{sports:selectedSports,leagues,hours:Number(marketHours)||24,allowUnknownKickoff:Array.isArray(requestedFixtures)});
@@ -2855,7 +2855,7 @@ function telegramAiTicketText(result, booking, request, plan, droppedLive = []) 
 function telegramAiBetTypesForSport(planId, sport) {
   const allowed = new Set(telegramAiAllowedBetIdsForPlan(planId));
   const bySport = {
-    football: ['streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','corners_over','corners_under','dc_1x','dc_x2','dnb','over05','over15','under45','over25','under25','correct_score','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
+    football: ['goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','corners_over','corners_under','dc_1x','dc_x2','dnb','over05','over15','under45','over25','under25','correct_score','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
     basketball: ['basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
     hockey: ['hockey_winner','hockey_over','hockey_under','hockey_handicap_home','hockey_handicap_away'],
     handball: ['handball_winner','handball_over','handball_under','handball_handicap_home','handball_handicap_away'],
