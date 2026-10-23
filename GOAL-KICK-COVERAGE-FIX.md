@@ -1,0 +1,11 @@
+Live read-only check, 23 October 2026, starting 08:54 WAT
+
+SportyBet public football feed: 20 pages, 1,970 distinct listed events. Only upcoming matches within seven days were eligible. The requested goal-kick markets had four distinct fixtures, all dated 23 October in this snapshot. Full-match Under 15.5: three matching offers; Under 16.5: three. First-half Under 7.5: four; Under 8.5: one. These eleven selection rows overlap across four fixtures. With one selection per match, a builder ticket can therefore contain at most four distinct matches from this observed pool. A zero probability floor cannot create additional offered markets. A separate 200-event detail sample found the same four-fixture pool; it was a partial sample, not a full-board count.
+
+Provider IDs observed in actual public event responses: 900622 (Goal Kicks Over/Under), 900661 (1st Half Goal Kicks Over/Under). Those IDs were then requested explicitly on all twenty public list pages. Full count evidence is in GOAL-KICK-PUBLIC-CHECK.json. Availability can change after the snapshot; this does not prove that every regional SportyBet site or future listing has the same offers.
+
+The old expanded scan checked at most 64 fixtures with a 10-second budget and silently used a 24-hour horizon while the fixture reader normally used five days. These limits could truncate coverage even though this particular four-match result was confirmed by the wider public-feed check.
+
+Changes: explicit goal-kick-only prematch requests now paginate the dedicated goal-kick feed, avoiding one event-detail call per match. The default horizon for this focused query is seven days; Today Only and other user filters still apply afterward. Normal expanded scans now use the same horizon as their main fixture reader. Mixed/gap-filter goal-kick scans have larger bounded coverage. The website displays eligible fixture count and scan coverage so candidate availability is not confused with ticket size. Both real goal-kick IDs are included in ordinary football list hints. Additional-markets requests still retain their wider requested market scope.
+
+Checks: 467 tests passed; browser-login tests were unchanged and excluded. No real booking or Telegram message was submitted. Deployment required. More results are not promised while only four distinct matching fixtures are offered.

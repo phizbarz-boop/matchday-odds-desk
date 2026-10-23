@@ -1397,9 +1397,9 @@ async function addLiveFootballModels(predictions, liveFootballPayloads, {buildCo
 }
 
 const AUTO_BET_TYPES_BY_SPORT = {
-  football: ['goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under','over25','under25','correct_score'],
-  basketball: ['basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
-  hockey: ['hockey_winner','hockey_over','hockey_under','hockey_handicap_home','hockey_handicap_away'],
+  football: ['throwins_highest_under','goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under','over25','under25','correct_score'],
+  basketball: ['basketball_rebounds_highest_under','basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
+  hockey: ['hockey_shots_highest_under','hockey_winner','hockey_over','hockey_under','hockey_handicap_home','hockey_handicap_away'],
   handball: ['handball_winner','handball_over','handball_under','handball_handicap_home','handball_handicap_away'],
   volleyball: ['volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under','volleyball_handicap_home','volleyball_handicap_away'],
   tennis: ['tennis_winner','tennis_over','tennis_under','tennis_handicap_home','tennis_handicap_away'],
@@ -1438,9 +1438,23 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     // Fetch only the market families actually requested. Previously, even a one-market
     // Analyzer request could fan out to every football/basketball/hockey market.
     const effectiveBetTypes = normalizeAutoBetTypesForSports(selectedSports, betTypes);
+    const expandedPolicy=require('./lib/expandedScanPolicy').expandedScanPolicy(betTypes,marketHours);
     const requestedBetTypes = effectiveBetTypes.length ? new Set(effectiveBetTypes) : null;
+    if(expandedPolicy.goalKickOnly&&includeAllMarkets!==true&&liveModeNorm==='prematch'&&!winnerGapOnly){
+      const scan=await require('./lib/goalKickFeed').collectGoalKickMarkets({hours:expandedPolicy.hours,leagues,signal:sportyRequest()?.signal});
+      const modeled=require('./lib/offeredMarketModel').modelOfferedMarkets(scan.rows,{minProbability,minEdge});
+      const candidates=modeled.candidates.filter(c=>requestedBetTypes.has(c.betType));
+      candidates.marketCoverage={...modeled.coverage,collectionErrors:scan.errors,scan:scan.coverage};candidates.sourceErrors=scan.errors;
+      candidates.dataSource=scan.coverage.source;candidates.dataFetchedAt=scan.generatedAt;candidates.winnerGapOnly=false;return candidates;
+    }
+    if(effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/highestUnderMarkets').IDS.includes(id))&&includeAllMarkets!==true&&liveModeNorm==='prematch'&&!winnerGapOnly){
+      const scan=await require('./lib/highestUnderFeed').collectHighestUnderMarkets({sports:selectedSports,hours:marketHours||168,leagues,signal:sportyRequest()?.signal});
+      const model=require('./lib/offeredMarketModel').modelOfferedMarkets(scan.rows,{minProbability,minEdge});
+      const candidates=model.candidates.filter(c=>requestedBetTypes.has(c.betType)&&c.highestAvailableUnder===true);
+      candidates.marketCoverage={...model.coverage,collectionErrors:scan.errors,scan:scan.coverage};candidates.sourceErrors=scan.errors;candidates.dataSource=scan.coverage.source;candidates.dataFetchedAt=scan.generatedAt;return candidates;
+    }
     const wantsAny = ids => !requestedBetTypes || ids.some(id => requestedBetTypes.has(id));
-    const needF1x2 = wantsFootball && (winnerGapOnly || wantsAny([...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS]) || wantsAny(['home_win','draw','away_win','dc_1x','dc_x2']));
+    const needF1x2 = wantsFootball && (winnerGapOnly || wantsAny([...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS,'throwins_highest_under']) || wantsAny(['home_win','draw','away_win','dc_1x','dc_x2']));
     const needFGg = wantsFootball && wantsAny(['gg_yes','ng_no']);
     const needFDc = wantsFootball && wantsAny(['dc_1x','dc_x2']);
     const needFDnb = wantsFootball && wantsAny(['dnb']);
@@ -1457,10 +1471,10 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     const needFCs = wantsFootball && wantsAny(['correct_score']);
     const needF1hCorners = false;
     const needFOneup = false;
-    const needBasketballWinner = wantsBasketball && (winnerGapOnly || wantsAny(['basketball_winner']));
+    const needBasketballWinner = wantsBasketball && (winnerGapOnly || wantsAny(['basketball_winner','basketball_rebounds_highest_under']));
     const needBasketballTotals = wantsBasketball && wantsAny(['basketball_over','basketball_under']);
     const needBasketballHandicap = wantsBasketball && wantsAny(['basketball_handicap_home','basketball_handicap_away']);
-    const needHockeyWinner = wantsHockey && (winnerGapOnly || wantsAny(['hockey_winner']));
+    const needHockeyWinner = wantsHockey && (winnerGapOnly || wantsAny(['hockey_winner','hockey_shots_highest_under']));
     const needHockeyTotals = wantsHockey && wantsAny(['hockey_over','hockey_under']);
     const needHockeyHandicap = wantsHockey && wantsAny(['hockey_handicap_home','hockey_handicap_away']);
     const needHandballWinner = wantsHandball && (winnerGapOnly || wantsAny(['handball_winner']));
@@ -1477,7 +1491,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     // Every build reads the current bookmaker board. Daily fixture/market
     // snapshots never decide which matches or prices a user can select.
     const autoMarketOptions = {
-      hours: marketHours || undefined,
+      hours: expandedPolicy.hours,
       maxPages: marketMaxPages || undefined,
       fixtures:Array.isArray(requestedFixtures)?requestedFixtures:null,
       kickoffBufferSeconds: Math.max(0, parseInt(process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS || '60', 10)),
@@ -1693,10 +1707,10 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
       if (sportName.includes('tennis')) return selectedSet.has('tennis');
       return false;
     });
-    if((includeAllMarkets===true||includeAllMarkets==null&&betTypes==null||[...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS].some(id=>betTypes?.includes(id)))&&!['false','0','off'].includes(String(process.env.SPORTYBET_EXPANDED_MARKETS_ENABLED||'true').toLowerCase())&&liveModeNorm!=='live'&&liveModeNorm!=='quick_cash'){
+    if((includeAllMarkets===true||includeAllMarkets==null&&betTypes==null||[...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS,...require('./lib/highestUnderMarkets').IDS].some(id=>betTypes?.includes(id)))&&!['false','0','off'].includes(String(process.env.SPORTYBET_EXPANDED_MARKETS_ENABLED||'true').toLowerCase())&&liveModeNorm!=='live'&&liveModeNorm!=='quick_cash'){
       try{
         const fixtures=[f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners,basketballWinner,basketballTotals,basketballHandicap,hockeyWinner,hockeyTotals,hockeyHandicap,handballWinner,handballTotals,handballHandicap,volleyballWinner,volleyballTotals,volleyballSets,volleyballHandicap,tennisWinner,tennisTotals,tennisHandicap].flatMap(p=>p?.rows||[]);
-        const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets([...fixtures,...(requestedFixtures||[])],{sports:selectedSports,leagues,hours:Number(marketHours)||24,allowUnknownKickoff:Array.isArray(requestedFixtures)});
+        const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets([...fixtures,...(requestedFixtures||[])],{sports:selectedSports,leagues,...expandedPolicy,allowUnknownKickoff:Array.isArray(requestedFixtures)});
         const freshGap=winnerGapOnly?require('./lib/winnerOddsGap').winnerOddsGap(scan.rows):null;
         const expandedRows=winnerGapOnly?scan.rows.filter(r=>freshGap.has(require('./lib/winnerOddsGap').key(r))):scan.rows;
         const expanded=require('./lib/offeredMarketModel').modelOfferedMarkets(expandedRows,{known:candidates,predictions,minProbability,minEdge});
@@ -2247,6 +2261,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
         requestedBetTypes: betTypes,
         autoBetTypeFallbackApplied: Array.isArray(body.betTypes) && body.betTypes.length > 0 && !body.betTypes.some(id => betTypes.includes(String(id))),
         candidateCount: oddsFilteredCandidates.length,
+      candidateFixtureCount:new Set(oddsFilteredCandidates.map(c=>String(c.eventId))).size,
         candidatesBeforeMaxOddsFilter: redFlagSafeCandidatesCount,
         candidatesBeforeRedFlagFilter: rawCandidatesCount,
         redFlagRejected,
@@ -2855,9 +2870,9 @@ function telegramAiTicketText(result, booking, request, plan, droppedLive = []) 
 function telegramAiBetTypesForSport(planId, sport) {
   const allowed = new Set(telegramAiAllowedBetIdsForPlan(planId));
   const bySport = {
-    football: ['goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','corners_over','corners_under','dc_1x','dc_x2','dnb','over05','over15','under45','over25','under25','correct_score','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
-    basketball: ['basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
-    hockey: ['hockey_winner','hockey_over','hockey_under','hockey_handicap_home','hockey_handicap_away'],
+    football: ['throwins_highest_under','goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','corners_over','corners_under','dc_1x','dc_x2','dnb','over05','over15','under45','over25','under25','correct_score','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
+    basketball: ['basketball_rebounds_highest_under','basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
+    hockey: ['hockey_shots_highest_under','hockey_winner','hockey_over','hockey_under','hockey_handicap_home','hockey_handicap_away'],
     handball: ['handball_winner','handball_over','handball_under','handball_handicap_home','handball_handicap_away'],
     volleyball: ['volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under','volleyball_handicap_home','volleyball_handicap_away'],
     tennis: ['tennis_winner','tennis_over','tennis_under','tennis_handicap_home','tennis_handicap_away'],

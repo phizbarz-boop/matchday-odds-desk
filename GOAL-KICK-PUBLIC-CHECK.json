@@ -1,0 +1,100 @@
+{
+  "at": "2026-10-23T07:54:07.103Z",
+  "pages": 20,
+  "events": 1970,
+  "total": 1970,
+  "goalKickFixtures": 4,
+  "byType": {
+    "goalkicks_under155": {
+      "rows": 3,
+      "fixtures": 3
+    },
+    "goalkicks_under165": {
+      "rows": 3,
+      "fixtures": 3
+    },
+    "first_half_goalkicks_under75": {
+      "rows": 4,
+      "fixtures": 4
+    },
+    "first_half_goalkicks_under85": {
+      "rows": 1,
+      "fixtures": 1
+    }
+  },
+  "todayFixtures": 4,
+  "sample": [
+    {
+      "eventId": "sr:match:72221344",
+      "home": "Ipswich Town",
+      "away": "Nottingham Forest",
+      "betType": "goalkicks_under155",
+      "probability": 43.6,
+      "odds": 2.11,
+      "kickoffUtc": "2026-10-23T19:00:00.000Z"
+    },
+    {
+      "eventId": "sr:match:72221344",
+      "home": "Ipswich Town",
+      "away": "Nottingham Forest",
+      "betType": "goalkicks_under165",
+      "probability": 51.4,
+      "odds": 1.79,
+      "kickoffUtc": "2026-10-23T19:00:00.000Z"
+    },
+    {
+      "eventId": "sr:match:72221344",
+      "home": "Ipswich Town",
+      "away": "Nottingham Forest",
+      "betType": "first_half_goalkicks_under75",
+      "probability": 47.7,
+      "odds": 1.92,
+      "kickoffUtc": "2026-10-23T19:00:00.000Z"
+    },
+    {
+      "eventId": "sr:match:72513260",
+      "home": "Stuttgart",
+      "away": "Borussia M\u00b4gladbach",
+      "betType": "goalkicks_under155",
+      "probability": 48.6,
+      "odds": 1.89,
+      "kickoffUtc": "2026-10-23T18:30:00.000Z"
+    },
+    {
+      "eventId": "sr:match:72513260",
+      "home": "Stuttgart",
+      "away": "Borussia M\u00b4gladbach",
+      "betType": "goalkicks_under165",
+      "probability": 57.4,
+      "odds": 1.6,
+      "kickoffUtc": "2026-10-23T18:30:00.000Z"
+    },
+    {
+      "eventId": "sr:match:72513260",
+      "home": "Stuttgart",
+      "away": "Borussia M\u00b4gladbach",
+      "betType": "first_half_goalkicks_under75",
+      "probability": 51.9,
+      "odds": 1.77,
+      "kickoffUtc": "2026-10-23T18:30:00.000Z"
+    },
+    {
+      "eventId": "sr:match:72513260",
+      "home": "Stuttgart",
+      "away": "Borussia M\u00b4gladbach",
+      "betType": "first_half_goalkicks_under85",
+      "probability": 62.8,
+      "odds": 1.46,
+      "kickoffUtc": "2026-10-23T18:30:00.000Z"
+    },
+    {
+      "eventId": "sr:match:71945342",
+      "home": "Torino",
+      "away": "Monza",
+      "betType": "goalkicks_under155",
+      "probability": 50,
+      "odds": 1.83,
+      "kickoffUtc": "2026-10-23T18:45:00.000Z"
+    }
+  ]
+}
