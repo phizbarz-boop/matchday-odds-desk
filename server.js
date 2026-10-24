@@ -1420,11 +1420,11 @@ function normalizeAutoBetTypesForSports(sports, betTypes) {
   return [...compatible];
 }
 
-async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch', includeAllMarkets = null, winnerGapOnly = false, winnerGapMaxOne = false, winnerGapMaxTwo = false } = {}) {
+async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch', includeAllMarkets = null, winnerGapOnly = false, winnerGapMaxOne = false, winnerGapAboveEight = false } = {}) {
   return withFreshSportyRequest(async()=>{
     // Discover and model public SportyBet data independently of booking login.
-    if([winnerGapOnly,winnerGapMaxOne,winnerGapMaxTwo].filter(Boolean).length>1)throw Error('Choose only one winner odds gap filter');
-    const gapFilterOn=winnerGapOnly||winnerGapMaxOne||winnerGapMaxTwo;
+    if([winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight].filter(Boolean).length>1)throw Error('Choose only one winner odds gap filter');
+    const gapFilterOn=winnerGapOnly||winnerGapMaxOne||winnerGapAboveEight;
     const liveModeNorm = normalizeLiveMode(liveMode);
     const wantsPrematch = !['live','quick_cash'].includes(liveModeNorm);
     const wantsLive = liveModeNorm !== 'prematch';
@@ -1561,7 +1561,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
 
     if(gapFilterOn)[f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners,f1hteamcorners,foneup,basketballWinner,basketballTotals,basketballHandicap,hockeyWinner,hockeyTotals,hockeyHandicap,handballWinner,handballTotals,handballHandicap,volleyballWinner,volleyballTotals,volleyballSets,volleyballHandicap,tennisWinner,tennisTotals,tennisHandicap]=[f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners,f1hteamcorners,foneup,basketballWinner,basketballTotals,basketballHandicap,hockeyWinner,hockeyTotals,hockeyHandicap,handballWinner,handballTotals,handballHandicap,volleyballWinner,volleyballTotals,volleyballSets,volleyballHandicap,tennisWinner,tennisTotals,tennisHandicap].map(p=>p?{...p}:p);
     let gapEligible=null;
-    const applyWinnerGap=()=>{if(!gapFilterOn)return;const gap=require('./lib/winnerOddsGap');gapEligible=gap.configuredWinnerOddsGap([f1x2,basketballWinner,hockeyWinner,handballWinner,volleyballWinner,tennisWinner].flatMap(p=>p?.rows||[]),{winnerGapOnly,winnerGapMaxOne,winnerGapMaxTwo});for(const p of [f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners,f1hteamcorners,foneup,basketballWinner,basketballTotals,basketballHandicap,hockeyWinner,hockeyTotals,hockeyHandicap,handballWinner,handballTotals,handballHandicap,volleyballWinner,volleyballTotals,volleyballSets,volleyballHandicap,tennisWinner,tennisTotals,tennisHandicap]){if(!p)continue;for(const field of ['rows','probabilityRows'])if(Array.isArray(p[field]))p[field]=p[field].filter(r=>gapEligible.has(gap.key(r)));}};
+    const applyWinnerGap=()=>{if(!gapFilterOn)return;const gap=require('./lib/winnerOddsGap');gapEligible=gap.configuredWinnerOddsGap([f1x2,basketballWinner,hockeyWinner,handballWinner,volleyballWinner,tennisWinner].flatMap(p=>p?.rows||[]),{winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight});for(const p of [f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners,f1hteamcorners,foneup,basketballWinner,basketballTotals,basketballHandicap,hockeyWinner,hockeyTotals,hockeyHandicap,handballWinner,handballTotals,handballHandicap,volleyballWinner,volleyballTotals,volleyballSets,volleyballHandicap,tennisWinner,tennisTotals,tennisHandicap]){if(!p)continue;for(const field of ['rows','probabilityRows'])if(Array.isArray(p[field]))p[field]=p[field].filter(r=>gapEligible.has(gap.key(r)));}};
     applyWinnerGap();
     if(wantsFootball&&wantsPrematch) {
       predictions=await safeMarket('current football modelling',true,()=>currentFootballPredictions(
@@ -1718,7 +1718,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
       try{
         const fixtures=[f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners,basketballWinner,basketballTotals,basketballHandicap,hockeyWinner,hockeyTotals,hockeyHandicap,handballWinner,handballTotals,handballHandicap,volleyballWinner,volleyballTotals,volleyballSets,volleyballHandicap,tennisWinner,tennisTotals,tennisHandicap].flatMap(p=>p?.rows||[]);
         const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets([...fixtures,...(requestedFixtures||[])],{sports:selectedSports,leagues,...expandedPolicy,allowUnknownKickoff:Array.isArray(requestedFixtures)});
-        const freshGap=gapFilterOn?require('./lib/winnerOddsGap').configuredWinnerOddsGap(scan.rows,{winnerGapOnly,winnerGapMaxOne,winnerGapMaxTwo}):null;
+        const freshGap=gapFilterOn?require('./lib/winnerOddsGap').configuredWinnerOddsGap(scan.rows,{winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight}):null;
         const expandedRows=gapFilterOn?scan.rows.filter(r=>freshGap.has(require('./lib/winnerOddsGap').key(r))):scan.rows;
         const expanded=require('./lib/offeredMarketModel').modelOfferedMarkets(expandedRows,{known:candidates,predictions,minProbability,minEdge});
         candidates.push(...expanded.candidates.filter(c=>require('./lib/streakGoalModel').expandedSelectionAllowed(c,betTypes,includeAllMarkets===true||includeAllMarkets==null&&betTypes==null)));candidates.marketCoverage={...expanded.coverage,collectionErrors:scan.errors,scan:scan.coverage};
@@ -1744,7 +1744,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     candidates.liveDiagnostics = liveDiagnostics;
     candidates.dataSource='SportyBet direct';
     candidates.dataFetchedAt=new Date().toISOString();
-    candidates.sourceErrors=sourceErrors;candidates.winnerGapOnly=winnerGapOnly;candidates.winnerGapMaxOne=winnerGapMaxOne;candidates.winnerGapMaxTwo=winnerGapMaxTwo;candidates.winnerGapEligibleFixtures=gapEligible?.size??null;
+    candidates.sourceErrors=sourceErrors;candidates.winnerGapOnly=winnerGapOnly;candidates.winnerGapMaxOne=winnerGapMaxOne;candidates.winnerGapAboveEight=winnerGapAboveEight;candidates.winnerGapEligibleFixtures=gapEligible?.size??null;
     return candidates;
   });
 }
@@ -1783,7 +1783,7 @@ async function prepareAutoCandidatePool({
   includeAllMarkets=null,
   winnerGapOnly=false,
   winnerGapMaxOne=false,
-  winnerGapMaxTwo=false,
+  winnerGapAboveEight=false,
 } = {}) {
   // Single source of truth for Website + Telegram AI candidate eligibility.
   // Keeping the complete filtering path here prevents one surface from finding
@@ -1805,7 +1805,7 @@ async function prepareAutoCandidatePool({
     marketMaxPages,
     liveMode: liveModeNorm,
     includeAllMarkets,
-    winnerGapOnly,winnerGapMaxOne,winnerGapMaxTwo,
+    winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight,
   });
 
   const todayFiltered = todayOnly
@@ -1826,7 +1826,7 @@ async function prepareAutoCandidatePool({
       sports: selectedSports,
       liveMode: liveModeNorm,
       liveCandidates: oddsSafe.filter(c => c.live === true).length,
-      rawCandidates: rawCandidates.length,winnerGapOnly,winnerGapMaxOne,winnerGapMaxTwo,winnerGapEligibleFixtures:rawCandidates.winnerGapEligibleFixtures??null,
+      rawCandidates: rawCandidates.length,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight,winnerGapEligibleFixtures:rawCandidates.winnerGapEligibleFixtures??null,
       afterTodayFilter: todayFiltered.length,
       todayOnly: !!todayOnly,
       redFlagRejected: todayFiltered.length - redFlagSafe.length,
@@ -2231,7 +2231,8 @@ async function autoCornerDiagnostics(betTypes,liveMode='prematch') {
 app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs.wrap(async (req, res) => {
   try {
     const body = req.body || {};
-    if([body.winnerGapOnly,body.winnerGapMaxOne,body.winnerGapMaxTwo].filter(v=>v===true).length>1)return res.status(400).json({error:'Choose only one winner odds gap filter'});
+    if(body.winnerGapMaxTwo===true)return res.status(400).json({error:'The odds gap ≤2 option was removed. Select odds gap above 8.00 instead.'});
+    if([body.winnerGapOnly,body.winnerGapMaxOne,body.winnerGapAboveEight].filter(v=>v===true).length>1)return res.status(400).json({error:'Choose only one winner odds gap filter'});
     const targetOdds = Math.min(100000, Math.max(1.05, Number(body.targetOdds) || 5));
     // Website Auto Builder probability is user-adjustable.
     const requestedProbability = body.minProbability == null ? 55 : Number(body.minProbability);
@@ -2251,7 +2252,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     const todayOnly = body.todayOnly === true || String(body.todayOnly || '').toLowerCase() === 'true';
     const liveMode = normalizeLiveMode(body.liveMode);
 
-    const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly, liveMode,includeAllMarkets:body.includeAllMarkets===true,winnerGapOnly:body.winnerGapOnly===true,winnerGapMaxOne:body.winnerGapMaxOne===true,winnerGapMaxTwo:body.winnerGapMaxTwo===true });
+    const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly, liveMode,includeAllMarkets:body.includeAllMarkets===true,winnerGapOnly:body.winnerGapOnly===true,winnerGapMaxOne:body.winnerGapMaxOne===true,winnerGapAboveEight:body.winnerGapAboveEight===true });
     const oddsFilteredCandidates = prepared.candidates;
     const redFlagSafeCandidatesCount = prepared.diagnostics.afterRedFlag;
     const rawCandidatesCount = prepared.diagnostics.rawCandidates;
@@ -2308,7 +2309,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
       minEdge,
       maxSelections,
       maxMatchOdds,
-      winnerGapOnly:body.winnerGapOnly===true,winnerGapMaxOne:body.winnerGapMaxOne===true,winnerGapMaxTwo:body.winnerGapMaxTwo===true,
+      winnerGapOnly:body.winnerGapOnly===true,winnerGapMaxOne:body.winnerGapMaxOne===true,winnerGapAboveEight:body.winnerGapAboveEight===true,
       todayOnly,
       todayCandidateCount: prepared.diagnostics.afterTodayFilter,
       candidatesBeforeMaxOddsFilter: redFlagSafeCandidatesCount,
@@ -2969,7 +2970,7 @@ async function buildTelegramAiTicket(user, request) {
     todayOnly: !!merged.todayOnly,
     liveMode,
     includeAllMarkets:!merged.safe&&plan.id==='elite'&&merged.includeAllMarkets!==false,
-    winnerGapOnly:merged.winnerGapOnly===true,winnerGapMaxOne:merged.winnerGapMaxOne===true,winnerGapMaxTwo:merged.winnerGapMaxTwo===true,
+    winnerGapOnly:merged.winnerGapOnly===true,winnerGapMaxOne:merged.winnerGapMaxOne===true,winnerGapAboveEight:merged.winnerGapAboveEight===true,
   });
   const pool = prepared.candidates;
   if (!pool.length) {
@@ -2990,7 +2991,7 @@ async function buildTelegramAiTicket(user, request) {
       const failedLive = Object.keys(ld.errors || {});
       if (failedLive.length) livePart += ` Live fetch failed for: ${failedLive.join(', ')}.`;
     }
-    return { error: `No current SportyBet selections passed your ${merged.winnerGapMaxOne?'win odds gap ≤ 1.00 filter, ':merged.winnerGapMaxTwo?'win odds gap ≤ 2.00 filter, ':merged.winnerGapOnly?'win odds gap > 5.00 filter, ':''}${minProbability}% probability rule, ${minEdge} edge setting and red-flag protection. (Candidates: ${d.rawCandidates} raw${todayPart}, ${d.afterRedFlag} after red flags, ${d.afterMaxOdds} after max-odd filter.)${livePart}` };
+    return { error: `No current SportyBet selections passed your ${merged.winnerGapMaxOne?'win odds gap ≤ 1.00 filter, ':merged.winnerGapAboveEight?'win odds gap > 8.00 filter, ':merged.winnerGapOnly?'win odds gap > 5.00 filter, ':''}${minProbability}% probability rule, ${minEdge} edge setting and red-flag protection. (Candidates: ${d.rawCandidates} raw${todayPart}, ${d.afterRedFlag} after red flags, ${d.afterMaxOdds} after max-odd filter.)${livePart}` };
   }
   const result = selectAutoBet(pool, {
     targetOdds: merged.safe ? 5.00 : targetOdds,
@@ -3272,9 +3273,9 @@ async function handleTelegramAiUpdate(update) {
     else if (d === 'builder:maxodd') return sendTelegramAiMessageTo(chatId, '💰 Select the maximum SportyBet odd allowed for any individual match:', { reply_markup: telegramAiMaxOddKeyboard() });
     else if (d === 'builder:edge') return sendTelegramAiMessageTo(chatId, '📊 Select the minimum football probability edge. Negative values allow more candidates; positive values demand model value over price:', { reply_markup: telegramAiEdgeKeyboard() });
     else if (d === 'builder:maxgames') return sendTelegramAiMessageTo(chatId, '🔢 Select the maximum number of games the builder can use:', { reply_markup: telegramAiMaxGamesKeyboard(user) });
-    else if(d==='builder:gapmaxtwo'){user.preferences.builder.winnerGapMaxTwo=!user.preferences.builder.winnerGapMaxTwo;if(user.preferences.builder.winnerGapMaxTwo){user.preferences.builder.winnerGapOnly=false;user.preferences.builder.winnerGapMaxOne=false;}await saveTelegramAiUser(redis,user);return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)});}
-    else if(d==='builder:gapmaxone'){user.preferences.builder.winnerGapMaxOne=!user.preferences.builder.winnerGapMaxOne;if(user.preferences.builder.winnerGapMaxOne){user.preferences.builder.winnerGapOnly=false;user.preferences.builder.winnerGapMaxTwo=false;}await saveTelegramAiUser(redis,user);return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)});}
-    else if(d==='builder:gap'){user.preferences.builder.winnerGapOnly=!user.preferences.builder.winnerGapOnly;if(user.preferences.builder.winnerGapOnly){user.preferences.builder.winnerGapMaxOne=false;user.preferences.builder.winnerGapMaxTwo=false;}await saveTelegramAiUser(redis,user);return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)});}
+    else if(d==='builder:gapaboveeight'){user.preferences.builder.winnerGapAboveEight=!user.preferences.builder.winnerGapAboveEight;if(user.preferences.builder.winnerGapAboveEight){user.preferences.builder.winnerGapOnly=false;user.preferences.builder.winnerGapMaxOne=false;}await saveTelegramAiUser(redis,user);return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)});}
+    else if(d==='builder:gapmaxone'){user.preferences.builder.winnerGapMaxOne=!user.preferences.builder.winnerGapMaxOne;if(user.preferences.builder.winnerGapMaxOne){user.preferences.builder.winnerGapOnly=false;user.preferences.builder.winnerGapAboveEight=false;}await saveTelegramAiUser(redis,user);return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)});}
+    else if(d==='builder:gap'){user.preferences.builder.winnerGapOnly=!user.preferences.builder.winnerGapOnly;if(user.preferences.builder.winnerGapOnly){user.preferences.builder.winnerGapMaxOne=false;user.preferences.builder.winnerGapAboveEight=false;}await saveTelegramAiUser(redis,user);return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)});}
     else if (d === 'builder:today') { user.preferences.builder.todayOnly=!user.preferences.builder.todayOnly; await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)}); }
     else if (d === 'builder:live') {
       const order=['prematch','live','both','quick_cash'];
@@ -3633,7 +3634,8 @@ const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>ru
   const keys=new Set(rows.map(sportySelectionKey));for(const result of specialty)if(result.status==='fulfilled')for(const c of result.value)if(!keys.has(sportySelectionKey(c))){rows.push(c);keys.add(sportySelectionKey(c));}
   if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');
   const gapRows=await loadAutoCandidates({...options,winnerGapOnly:true,includeAllMarkets:false,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});
-  const qualified=new Set(gapRows.map(sportySelectionKey));return rows.map(c=>({...c,winnerGapQualified:qualified.has(sportySelectionKey(c))}));
+  const winnerFeed=await require('./lib/goalKickFeed').collectFootballStatMarkets({marketIds:['1'],hours:168,signal,source:'SportyBet public winner prices'});
+  const qualified=new Set(gapRows.map(sportySelectionKey));return require('./lib/telegramSmallGap').annotateSmallGap(rows.map(c=>({...c,winnerGapQualified:qualified.has(sportySelectionKey(c))})),winnerFeed.rows);
  },{signal}),
  validate:async(selections,{signal,plan})=>{
   const fresh=await validatePublicSelections(selections,{signal});if(!plan.winnerGapOnly)return fresh;
