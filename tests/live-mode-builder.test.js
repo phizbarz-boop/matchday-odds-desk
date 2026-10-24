@@ -153,7 +153,7 @@ test('standalone live page is removed and Auto Builder carries the match-status 
   assert.match(indexSrc, /id="auto-live-mode"/);
   assert.match(indexSrc, /Live only \(halfway \+ winning\)/);
   assert.match(indexSrc, /state\.autoLiveMode=liveMode/);
-  assert.match(indexSrc, /maxSelections,todayOnly,liveMode,betTypes,(?:winnerGapOnly,)?includeAllMarkets/, 'auto-pick POST body must include liveMode');
+  assert.match(indexSrc, /maxSelections,todayOnly,liveMode,betTypes,(?:winnerGapOnly,)?(?:winnerGapMaxOne,)?(?:winnerGapMaxTwo,)?includeAllMarkets/, 'auto-pick POST body must include liveMode');
   assert.match(indexSrc, /x\.live===true\?\{live:true,quickCash:/, 'booking selections must carry live flag');
   assert.match(indexSrc, /🔴 LIVE /, 'slip rows must show the live badge');
   assert.match(indexSrc, /p\.droppedLive/, 'booking result must surface dropped live legs');

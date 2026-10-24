@@ -25,6 +25,7 @@ function slate(sport){const [marketId,desc]=sporting[sport],three=['football','h
     const eventId=`sr:match:public-api-${sport}-${batch}-${i}`;
     const e={eventId,homeTeamName:'Public Home '+sport+i,awayTeamName:'Public Away '+sport+i,status:0,matchStatus:'Not start',estimateStartTime:time+3*3600000,
       markets:[market(marketId,desc,three?[outcome('1','Home',mode==='safe'?1.08:1.3),outcome('2','Draw',22),outcome('3','Away',22)]:[outcome('4','Home',mode==='safe'?1.08:1.3),outcome('5','Away',15)])]};
+    if(mode==='gap-fixtures'&&sport==='football'){e.markets[0].outcomes[0].odds=1.7;e.markets[0].outcomes[2].odds=[2.2,3.2,4.2][i%3];}
     events.set(eventId,e);return e;
   });
 }

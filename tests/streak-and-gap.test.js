@@ -8,3 +8,32 @@ test('Yes and No keep exact SportyBet IDs and are complements, not home/away tot
 test('website and bot expose new markets and gap option while scans filter before modeling',()=>{const fs=require('fs'),source=fs.readFileSync(require.resolve('../server'),'utf8'),html=fs.readFileSync(require('path').join(__dirname,'../public/index.html'),'utf8'),bot=require('../lib/telegramAiBot');for(const id of S.IDS){assert.ok(bot.ALL_BET_IDS.includes(id));assert.ok(html.includes(id));}assert.ok(html.includes('auto-winner-gap'));assert.ok(source.includes("d==='builder:gap'"));const a=source.indexOf('    applyWinnerGap();'),b=source.indexOf("predictions=await safeMarket('current football modelling'");assert.ok(a>0&&a<b);});
 
 test('choosing only streak Yes with extra markets off cannot return unrelated markets or No',()=>{assert.equal(S.expandedSelectionAllowed({betType:'streak_2_yes'},['streak_2_yes'],false),true);for(const betType of ['streak_2_no','offered:900','football_total_over'])assert.equal(S.expandedSelectionAllowed({betType},['streak_2_yes'],false),false);});
+
+test('new gap filters include their exact boundary, ignore draw, and reject larger differences',()=>{
+ for(const [name,limit] of [['winnerGapMaxOne',1],['winnerGapMaxTwo',2]]){
+  const opts={[name]:true};
+  for(const difference of [0,.3,limit]){const result=G.configuredWinnerOddsGap([row('1','Home',1.7),row('3','Away',1.7+difference),row('2','Draw',99)],opts);assert.equal(result.size,1);assert.ok(Math.abs(result.get('E|false').gap-difference)<1e-9);}
+  assert.equal(G.configuredWinnerOddsGap([row('1','Home',1.7),row('3','Away',1.7+limit+.01)],opts).size,0);
+  assert.equal(G.configuredWinnerOddsGap([row('1','Home',1.7+limit),row('3','Away',1.7)],opts).size,1);
+ }
+ assert.equal(G.configuredWinnerOddsGap([row('1','Home',1.7),row('3','Away',3.2)],{winnerGapMaxOne:true}).size,0);
+ assert.equal(G.configuredWinnerOddsGap([row('1','Home',1.7),row('3','Away',3.2)],{winnerGapMaxTwo:true}).size,1);
+ for(const names of [['winnerGapOnly','winnerGapMaxOne'],['winnerGapOnly','winnerGapMaxTwo'],['winnerGapMaxOne','winnerGapMaxTwo']])assert.throws(()=>G.configuredWinnerOddsGap([],Object.fromEntries(names.map(k=>[k,true]))),/Choose only one/);
+});
+test('small-gap filters never invent winner prices or mix periods, live states, fixtures or markets',()=>{
+ const opts={winnerGapMaxTwo:true},h=row('1','H',2,{sport:'Tennis',marketId:'186',marketDesc:'Winner'}),a={...h,outcomeId:'2',outcomeDesc:'A',odds:2.5};
+ assert.equal(G.configuredWinnerOddsGap([h,a],opts).size,1);
+ for(const change of [{eventId:'other'},{live:true},{marketId:'other'},{active:false},{suspended:true},{odds:0}])assert.equal(G.configuredWinnerOddsGap([h,{...a,...change}],opts).size,0);
+ for(const name of ['1st Set Winner','1st Half Winner','Total Games','Handicap','Home Corners Winner','Next Goal'])assert.equal(G.configuredWinnerOddsGap([h,a].map(c=>({...c,marketDesc:name})),opts).size,0);
+});
+test('website and bot expose both persisted small-gap options and keep them mutually exclusive',async()=>{
+ const bot=require('../lib/telegramAiBot'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
+ const user=await bot.getUser(null,'gap-buttons',{});user.preferences.builder.winnerGapMaxTwo=true;
+ const buttons=bot.builderKeyboard(user).inline_keyboard.flat();for(const id of ['builder:gap','builder:gapmaxone','builder:gapmaxtwo'])assert.ok(buttons.some(b=>b.callback_data===id));assert.match(bot.builderSummary(user),/≤ 2.00: ON/);
+ const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8');for(const id of ['auto-winner-gap-max-one','auto-winner-gap-max-two'])assert.ok(html.includes(id));
+ for(const m of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g))new vm.Script(m[1]);
+ const ids=['auto-winner-gap','auto-winner-gap-max-one','auto-winner-gap-max-two'];
+ const nodes=Object.fromEntries([...ids,'min-prob','limit-select','auto-pick','auto-pick-code','auto-target','auto-max-match-odds','auto-min-prob','auto-min-edge','auto-max','auto-live-mode'].map(id=>[id,{checked:false}]));
+ let saved=0;vm.runInNewContext(html.split('\n').find(l=>l.startsWith("document.getElementById('min-prob').oninput=")),{document:{getElementById:id=>nodes[id]},readAutoInputs:()=>saved++,autoPick:()=>{}});
+ for(const id of ids){nodes[id].checked=true;nodes[id].onchange();assert.equal(ids.filter(k=>nodes[k].checked).length,1);assert.equal(nodes[id].checked,true);}assert.equal(saved,3);
+});
