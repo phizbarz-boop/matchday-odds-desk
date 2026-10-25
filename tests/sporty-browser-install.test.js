@@ -5,9 +5,9 @@ const {spawnSync}=require('node:child_process');
 const {installBrowser}=require('../jobs/install-sporty-browser');
 const {configureBrowserPath}=require('../lib/sportyBrowserRuntime');
 
-test('public booking builds do not install Chromium even when dummy credentials are configured',()=>{
+test('public booking builds skip Chromium only when H2H is explicitly disabled',()=>{
   const messages=[];
-  const code=installBrowser({env:{SPORTYBET_PHONE:'fixture-phone',SPORTYBET_PASSWORD:'fixture-password'},
+  const code=installBrowser({env:{SPORTYBET_H2H_ENABLED:'false',SPORTYBET_PHONE:'fixture-phone',SPORTYBET_PASSWORD:'fixture-password'},
     resolvePackage:()=>assert.fail('Public booking does not need a browser package'),
     spawn:()=>assert.fail('Public booking must not download Chromium'),log:text=>messages.push(text)});
   assert.equal(code,0);assert.ok(messages.some(text=>text.includes('Anonymous booking')));
@@ -51,3 +51,5 @@ test('browser installation failure fails the build instead of reporting a workin
     assert.ok(output.every(text=>!text.includes('Chromium is ready')));
   }
 });
+
+test('default public booking builds install Chromium for the enabled H2H reader',()=>{let calls=0;const code=installBrowser({env:{},resolvePackage:()=>'/fixture/playwright/package.json',spawn:(command,args)=>{calls++;assert.deepEqual(args,['/fixture/playwright/cli.js','install','chromium']);return{status:0};},log:()=>{},error:()=>{}});assert.equal(code,0);assert.equal(calls,1);});
