@@ -31,6 +31,7 @@ const {selectionKey:sportySelectionKey}=require('./lib/sportyPublicCache');
 const {refreshTicketResults,buildPerformanceReport,performanceText,registerTelegramPerformanceRoute}=require('./lib/telegramPerformance');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
 const bookingRequests=createBookingRequests({getRedis,runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
+console.info('[Runtime memory] startup '+JSON.stringify(require('./lib/runtimeMemory').snapshot()));
 let redisClient = null;
 async function getRedis() {
   if (!process.env.REDIS_URL) return null;
