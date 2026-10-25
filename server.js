@@ -2162,7 +2162,7 @@ app.post('/api/sportybet/analyze-code', express.json(), analysisJobs.wrap(async 
         marketDesc: leg.marketDesc || best.marketDesc, outcomeDesc: leg.outcomeDesc || best.outcomeDesc, odds: leg.odds || Number(best.odds), currentOdds:Number(best.odds),
         supported: true, qualified,
         probability,
-        probabilitySource: best.probabilitySource || '',modelBasis:best.modelBasis||null,accuracyStatus:best.accuracyStatus||null,pushProbability:best.pushProbability??null,fairEquivalentProbability:best.fairEquivalentProbability??null,h2hCheck:best.h2hCheck||null,
+        probabilitySource: best.probabilitySource || '',modelBasis:best.modelBasis||null,accuracyStatus:best.accuracyStatus||null,pushProbability:best.pushProbability??null,fairEquivalentProbability:best.fairEquivalentProbability??null,
         impliedProbability: Number(best.impliedProbability) || null,
         edge: Number(best.edge) || 0,
         expectedValuePct: Number(best.expectedValuePct) || 0,
@@ -2192,7 +2192,6 @@ app.post('/api/sportybet/analyze-code', express.json(), analysisJobs.wrap(async 
       qualifiedSelections,
       dataSource:candidates.dataSource,
       dataFetchedAt:candidates.dataFetchedAt,
-      h2hCoverage:candidates.h2hCoverage||null,
       generatedAt: new Date().toISOString(),
       note: `Analyzer searched up to ${horizonDays} days ahead. Only markets supported by the current Matchday probability engine are scored. Unsupported selections are never assigned a guessed probability.`,
     });
@@ -2275,7 +2274,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     if (!result.selections.length) {
       const cornerDiagnostics=await autoCornerDiagnostics(betTypes,liveMode);
       return res.status(404).json({
-        error: prepared.diagnostics.h2hCoverage?.blocked?'No eligible selections passed the probability floor and mandatory SportyBet H2H verification. Missing, stale, unchecked or conflicting H2H data excludes matches before ticket generation.':'No eligible SportyBet selections matched the requested sport and minimum probability',
+        error: prepared.diagnostics.h2hCoverage?.blocked?'No eligible selections passed the probability floor and available SportyBet historical checks. Verified historical statistics conflicted with some selected markets. Missing H2H data alone does not exclude matches.':'No eligible SportyBet selections matched the requested sport and minimum probability',
         targetOdds,
         minProbability,
         minEdge,
@@ -3102,12 +3101,12 @@ async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDa
 
     // Read the supported market universe for the booking's sport. Live games
     // remain an explicit opt-in and use the same fresh request and model.
-    const candidates=includeLive?require('./lib/analyzerCandidates').excludeH2hFailures(await require('./lib/sportyH2h').checkCandidates(await loadAutoCandidates({
+    const candidates=includeLive?await loadAutoCandidates({
       sportScope, minProbability:0, minEdge:-25, leagues:null, betTypes:null,
       marketHours:analyzerHours, marketMaxPages:2,
       requestedFixtures:sourceRows,includeAllMarkets:true,
       liveMode: includeLive ? 'both' : 'prematch'
-    }),{signal:sportyRequest()?.signal})):await require('./lib/analyzerCandidates').loadAnalyzerCandidates(sourceRows,{hours:analyzerHours,signal:sportyRequest()?.signal});;
+    }):await require('./lib/analyzerCandidates').loadAnalyzerCandidates(sourceRows,{hours:analyzerHours,signal:sportyRequest()?.signal});;
 
     const analyzed = sourceRows.map((leg, index) => {
       const best=analyzerExactCandidate(leg,candidates);
@@ -3121,14 +3120,14 @@ async function analyzeTelegramAiCode(bookingCode, minProbability = 70, horizonDa
               eventId:String(replacement.eventId||leg.eventId||''), marketId:String(replacement.marketId||''), outcomeId:String(replacement.outcomeId||''), specifier:replacement.specifier||null,
               sport:replacement.sport||leg.sport, home:replacement.home||leg.home, away:replacement.away||leg.away,
               outcomeDesc:replacement.outcomeDesc, marketDesc:replacement.marketDesc, odds:Number(replacement.odds||0),
-              probability:Number(replacement.probability||0), edge:Number(replacement.edge||0), qualityScore:Number(replacement.qualityScore||0),h2hCheck:replacement.h2hCheck||null,
+              probability:Number(replacement.probability||0), edge:Number(replacement.edge||0), qualityScore:Number(replacement.qualityScore||0),
               replacementReason:'Unsupported imported market replaced with a current SportyBet market on the same fixture'
             };
           }
         }
         return { index, ...leg, supported:false, qualified:false, replaced:false,reason:require('./lib/analyzerCandidates').unscoredReason(leg,candidates,analyzerHours) };
       }
-      return { index, ...leg,eventId:String(best.eventId),marketId:String(best.marketId),outcomeId:String(best.outcomeId),specifier:best.specifier||null,betType:best.betType,live:best.live===true,quickCash:best.quickCash===true, supported:true, qualified:Number(best.probability||0)>=minProbability, replaced:false, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:leg.outcomeDesc||best.outcomeDesc, marketDesc:leg.marketDesc||best.marketDesc, odds:Number(leg.odds||best.odds||0),currentOdds:Number(best.odds),modelBasis:best.modelBasis||null,accuracyStatus:best.accuracyStatus||null,probabilitySource:best.probabilitySource||'',pushProbability:best.pushProbability??null,fullWinProbability:best.fullWinProbability??null,fairEquivalentProbability:best.fairEquivalentProbability??null,h2hCheck:best.h2hCheck||null };
+      return { index, ...leg,eventId:String(best.eventId),marketId:String(best.marketId),outcomeId:String(best.outcomeId),specifier:best.specifier||null,betType:best.betType,live:best.live===true,quickCash:best.quickCash===true, supported:true, qualified:Number(best.probability||0)>=minProbability, replaced:false, probability:Number(best.probability||0), edge:Number(best.edge||0), qualityScore:Number(best.qualityScore||0), sport:best.sport, home:best.home, away:best.away, outcomeDesc:leg.outcomeDesc||best.outcomeDesc, marketDesc:leg.marketDesc||best.marketDesc, odds:Number(leg.odds||best.odds||0),currentOdds:Number(best.odds),modelBasis:best.modelBasis||null,accuracyStatus:best.accuracyStatus||null,probabilitySource:best.probabilitySource||'',pushProbability:best.pushProbability??null,fullWinProbability:best.fullWinProbability??null,fairEquivalentProbability:best.fairEquivalentProbability??null };
     });
     return { bookingCode, analyzed, supported: analyzed.filter(x=>x.supported).length, qualified: analyzed.filter(x=>x.qualified).length, replaced: analyzed.filter(x=>x.replaced).length, unsupported: analyzed.filter(x=>!x.supported).length, total: analyzed.length, minProbability, replaceUnsupported:!!replaceUnsupported, cacheOnlyMarkets:false, includeLive:!!includeLive,dataSource:candidates.dataSource,dataFetchedAt:candidates.dataFetchedAt };
   });
