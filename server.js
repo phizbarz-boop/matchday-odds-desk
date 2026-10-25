@@ -1800,10 +1800,10 @@ async function prepareAutoCandidatePool({
   const probabilityFloor = Math.min(95, Math.max(0, Number(minProbability) || 0));
   const edgeFloor = Math.min(50, Math.max(-25, Number(minEdge) || 0));
 
-  const rawCandidates = await loadAutoCandidates({
+  const sourceCandidates = await loadAutoCandidates({
     sportScope: selectedSports,
     sports: selectedSports,
-    minProbability: probabilityFloor,
+    minProbability: 0,
     minEdge: edgeFloor,
     leagues,
     betTypes,
@@ -1814,6 +1814,9 @@ async function prepareAutoCandidatePool({
     winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight,
   });
 
+  const historyChecked=await require('./lib/sportyH2h').checkCandidates(sourceCandidates,{signal:sportyRequest()?.signal});
+  const rawCandidates=historyChecked.filter(c=>c.h2hCheck?.allowed!==false&&Number(c.probability)>=probabilityFloor);
+  for(const key of Object.keys(historyChecked))if(!/^\d+$/.test(key))rawCandidates[key]=historyChecked[key];
   const todayFiltered = todayOnly
     ? rawCandidates.filter(c => isCandidateToday(c, { timeZone: 'Africa/Lagos' }))
     : rawCandidates;
@@ -1832,13 +1835,13 @@ async function prepareAutoCandidatePool({
       sports: selectedSports,
       liveMode: liveModeNorm,
       liveCandidates: oddsSafe.filter(c => c.live === true).length,
-      rawCandidates: rawCandidates.length,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight,winnerGapEligibleFixtures:rawCandidates.winnerGapEligibleFixtures??null,
+      h2hCoverage:historyChecked.h2hCoverage||null,rawCandidates: rawCandidates.length,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight,winnerGapEligibleFixtures:rawCandidates.winnerGapEligibleFixtures??null,
       afterTodayFilter: todayFiltered.length,
       todayOnly: !!todayOnly,
       redFlagRejected: todayFiltered.length - redFlagSafe.length,
       afterRedFlag: redFlagSafe.length,
       afterMaxOdds: oddsSafe.length,
-      minProbability: probabilityFloor,
+      minProbability: 0,
       minEdge: edgeFloor,
       maxMatchOdds: Number.isFinite(maxOdd) && maxOdd > 1 ? maxOdd : null,
       betTypes: Array.isArray(betTypes) ? betTypes.map(String) : null,
@@ -2269,7 +2272,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     if (!result.selections.length) {
       const cornerDiagnostics=await autoCornerDiagnostics(betTypes,liveMode);
       return res.status(404).json({
-        error: 'No eligible SportyBet selections matched the requested sport and minimum probability',
+        error: prepared.diagnostics.h2hCoverage?.blocked?'No eligible selections passed the probability floor and required SportyBet H2H checks. Some H2H pages were missing, stale, unverified, or conflicted with the selected market.':'No eligible SportyBet selections matched the requested sport and minimum probability',
         targetOdds,
         minProbability,
         minEdge,
@@ -2277,6 +2280,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
         sports: selectedSports,
         requestedBetTypes: betTypes,
         autoBetTypeFallbackApplied: Array.isArray(body.betTypes) && body.betTypes.length > 0 && !body.betTypes.some(id => betTypes.includes(String(id))),
+        h2hCoverage:prepared.diagnostics.h2hCoverage,
         candidateCount: oddsFilteredCandidates.length,
       candidateFixtureCount:new Set(oddsFilteredCandidates.map(c=>String(c.eventId))).size,
         candidatesBeforeMaxOddsFilter: redFlagSafeCandidatesCount,
@@ -2290,6 +2294,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
         dataSource:prepared.diagnostics.dataSource,
         dataFetchedAt:prepared.diagnostics.dataFetchedAt,
         sourceErrors:prepared.diagnostics.sourceErrors,
+      h2hCoverage:prepared.diagnostics.h2hCoverage,
       marketCoverage:prepared.diagnostics.marketCoverage,
         teamGoalAvailability: prepared.diagnostics.teamGoalAvailability,
         cornerDiagnostics,
@@ -2327,6 +2332,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
       dataSource:prepared.diagnostics.dataSource,
       dataFetchedAt:prepared.diagnostics.dataFetchedAt,
       sourceErrors:prepared.diagnostics.sourceErrors,
+      h2hCoverage:prepared.diagnostics.h2hCoverage,
       marketCoverage:prepared.diagnostics.marketCoverage,
       generatedAt: new Date().toISOString(),
       note: 'Value engine: football uses 1X2, Corners O/U, GG/NG, Double Chance, Draw No Bet, Over 0.5/1.5/2.5, Under 2.5/4.5, Correct Score and Asian Handicap +0/+0.25/-0.25. DNB/AH use settlement-aware fair odds and EV; basketball/hockey/handball/volleyball totals and handicaps remain no-vig market estimates.',
@@ -3632,7 +3638,7 @@ const {PLANS:FLOOR_PLANS,runFloorPicks,resolveFloorSlot}=require('./lib/telegram
 const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>runFloorPicks({
  now:()=>new Date(),
  loadPool:({signal})=>withPublicSportyRequest(async()=>{
-  const options={sportScope:'all',marketHours:168,minProbability:70,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'};
+  const options={sportScope:'all',marketHours:168,minProbability:0,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'};
   const rows=await loadAutoCandidates(options);
   // Bulk goal-kick reads cover the board even when event-detail enrichment is unavailable.
   const specialty=await Promise.allSettled([loadAutoCandidates({...options,includeAllMarkets:false,betTypes:['goalkicks_under155','goalkicks_under165']}),loadAutoCandidates({...options,includeAllMarkets:false,betTypes:require('./lib/cornerMarkets').IDS}),require('./lib/streakGoalFeed').collectStreakGoalCandidates({hours:168,minProbability:70,minEdge:-100,signal}),loadAutoCandidates({...options,includeAllMarkets:false,betTypes:require('./lib/shotsOnTargetMarkets').IDS})]);
@@ -3641,10 +3647,10 @@ const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>ru
   if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');
   const gapRows=await loadAutoCandidates({...options,winnerGapOnly:true,includeAllMarkets:false,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});
   const winnerFeed=await require('./lib/goalKickFeed').collectFootballStatMarkets({marketIds:['1'],hours:168,signal,source:'SportyBet public winner prices'});
-  const qualified=new Set(gapRows.map(sportySelectionKey));return require('./lib/telegramSmallGap').annotateSmallGap(rows.map(c=>({...c,winnerGapQualified:qualified.has(sportySelectionKey(c))})),winnerFeed.rows);
+  const qualified=new Set(gapRows.map(sportySelectionKey));return require('./lib/sportyH2h').checkCandidates(require('./lib/telegramSmallGap').annotateSmallGap(rows.map(c=>({...c,winnerGapQualified:qualified.has(sportySelectionKey(c))})),winnerFeed.rows),{signal});
  },{signal}),
  validate:async(selections,{signal,plan})=>{
-  const fresh=await validatePublicSelections(selections,{signal});if(!plan.winnerGapOnly)return fresh;
+  const fresh=await require('./lib/sportyH2h').checkCandidates(await validatePublicSelections(selections,{signal}),{signal});if(!plan.winnerGapOnly)return fresh;
   return withPublicSportyRequest(async()=>{const rows=await loadAutoCandidates({sportScope:'all',marketHours:168,minProbability:70,minEdge:-100,includeAllMarkets:false,liveMode:'prematch',winnerGapOnly:true,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});const keys=new Set(rows.map(sportySelectionKey));return fresh.map(c=>({...c,winnerGapQualified:keys.has(sportySelectionKey(c))}));},{signal});
  },book:selections=>bookBet(selections),send:sendTelegramMessage,
  saveCode:(redis,dateKey,code)=>saveTelegramDailyCodes(redis,dateKey,{codes:[code]}),track:trackTelegramSlip,updateTrack:updateTrackedTicket
