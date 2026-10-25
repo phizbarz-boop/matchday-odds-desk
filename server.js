@@ -286,7 +286,7 @@ async function loadTennisMarket(kind='winner') {
 }
 
 
-const sportyMemoryCache = new Map();
+const sportyMemoryCache = new (require('./lib/boundedMemoryCache').BoundedMemoryCache)();
 const sportyMarketInFlight = new Map();
 const bookingMemoryRate = new Map();
 const telegramSendMemory = new Map();
@@ -681,9 +681,9 @@ async function loadSportyBetMarket(kind, sport = 'football', options = {}) {
   if (!forceRefresh) {
     const catalog=await publicCache.read(),data=catalog?.sports?.[sport];
     if(data&&nowMs-Date.parse(data.fetchedAt)<=18*3600000) {
-      const inputs=marketInputs({...catalog,generatedAt:data.fetchedAt});
+      const inputs=marketInputs(catalog);
       const field=sport==='football'?inputs.footballMarkets[kind]:inputs[sport+({winner:'Winner',totals:'Totals',handicap:'Handicap',sets:'Sets'}[kind]||'')];
-      if(field)return filterUpcomingSportyPayload({...field,readMode:'public-cache',source:catalog.source},{nowMs,kickoffBufferSeconds,maxHours:hours});
+      if(field)return filterUpcomingSportyPayload({...field,fetchedAt:data.fetchedAt,readMode:'public-cache',source:catalog.source},{nowMs,kickoffBufferSeconds,maxHours:hours});
     }
     const snapshot = await readSportySnapshot(client, sport, kind, hours, nowMs, kickoffBufferSeconds);
     if (snapshot) {
