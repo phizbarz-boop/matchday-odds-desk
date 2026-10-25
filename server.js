@@ -1398,7 +1398,7 @@ async function addLiveFootballModels(predictions, liveFootballPayloads, {buildCo
 
 const AUTO_BET_TYPES_BY_SPORT = {
   football: [...require('./lib/shotsOnTargetMarkets').IDS,'throwins_highest_under','goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under','corners_under115','corners_under125','over25','under25','correct_score'],
-  basketball: ['basketball_rebounds_highest_under','basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
+  basketball: [...require('./lib/basketballPeriodMarkets').IDS,'basketball_rebounds_highest_under','basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
   hockey: ['hockey_shots_highest_under','hockey_winner','hockey_over','hockey_under','hockey_handicap_home','hockey_handicap_away'],
   handball: ['handball_winner','handball_over','handball_under','handball_handicap_home','handball_handicap_away'],
   volleyball: ['volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under','volleyball_handicap_home','volleyball_handicap_away'],
@@ -1442,6 +1442,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     const effectiveBetTypes = normalizeAutoBetTypesForSports(selectedSports, betTypes);
     const expandedPolicy=require('./lib/expandedScanPolicy').expandedScanPolicy(betTypes,marketHours);
     const requestedBetTypes = effectiveBetTypes.length ? new Set(effectiveBetTypes) : null;
+    if(effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/basketballPeriodMarkets').IDS.includes(id))&&includeAllMarkets!==true&&liveModeNorm==='prematch'){return (await require('./lib/basketballPeriodMarkets').collect({hours:marketHours||168,leagues,minProbability,minEdge,betTypes:effectiveBetTypes,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight})).candidates;}
     if(effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/shotsOnTargetMarkets').IDS.includes(id))&&includeAllMarkets!==true&&liveModeNorm==='prematch'){
       return require('./lib/shotsOnTargetMarkets').collectShotsOnTargetCandidates({hours:marketHours||168,leagues,signal:sportyRequest()?.signal,minProbability,minEdge,betTypes:effectiveBetTypes,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight});
     }
@@ -1717,6 +1718,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
       if (sportName.includes('tennis')) return selectedSet.has('tennis');
       return false;
     });
+    if(wantsPrematch&&wantsBasketball&&wantsAny(require('./lib/basketballPeriodMarkets').IDS)){try{const {candidates:extra}=await require('./lib/basketballPeriodMarkets').collect({hours:marketHours||168,leagues,minProbability,minEdge,betTypes:effectiveBetTypes,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight});const keys=new Set(candidates.map(sportySelectionKey));for(const c of extra)if(!keys.has(sportySelectionKey(c))){candidates.push(c);keys.add(sportySelectionKey(c));}}catch(e){sourceErrors['basketball period totals']=e.message;}}
     if(wantsPrematch&&wantsFootball&&wantsAny(require('./lib/shotsOnTargetMarkets').IDS)){
       try{const shots=await require('./lib/shotsOnTargetMarkets').collectShotsOnTargetCandidates({hours:marketHours||168,leagues,signal:sportyRequest()?.signal,minProbability,minEdge,betTypes:effectiveBetTypes,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight});const known=new Set(candidates.map(sportySelectionKey));for(const c of shots)if(!known.has(sportySelectionKey(c))){candidates.push(c);known.add(sportySelectionKey(c));}}catch(e){sourceErrors['shots on target']=String(e.message).slice(0,160);}
     }
@@ -2272,7 +2274,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     if (!result.selections.length) {
       const cornerDiagnostics=await autoCornerDiagnostics(betTypes,liveMode);
       return res.status(404).json({
-        error: prepared.diagnostics.h2hCoverage?.blocked?'No eligible selections passed the probability floor and required SportyBet H2H checks. Some H2H pages were missing, stale, unverified, or conflicted with the selected market.':'No eligible SportyBet selections matched the requested sport and minimum probability',
+        error: prepared.diagnostics.h2hCoverage?.blocked?'No eligible selections passed the probability floor and available SportyBet historical checks. Verified historical statistics conflicted with some selected markets. Missing H2H data alone does not exclude matches.':'No eligible SportyBet selections matched the requested sport and minimum probability',
         targetOdds,
         minProbability,
         minEdge,
@@ -2894,7 +2896,7 @@ function telegramAiBetTypesForSport(planId, sport) {
   const allowed = new Set(telegramAiAllowedBetIdsForPlan(planId));
   const bySport = {
     football: [...require('./lib/shotsOnTargetMarkets').IDS,'throwins_highest_under','goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','corners_over','corners_under','corners_under115','corners_under125','dc_1x','dc_x2','dnb','over05','over15','under45','over25','under25','correct_score','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
-    basketball: ['basketball_rebounds_highest_under','basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
+    basketball: [...require('./lib/basketballPeriodMarkets').IDS,'basketball_rebounds_highest_under','basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
     hockey: ['hockey_shots_highest_under','hockey_winner','hockey_over','hockey_under','hockey_handicap_home','hockey_handicap_away'],
     handball: ['handball_winner','handball_over','handball_under','handball_handicap_home','handball_handicap_away'],
     volleyball: ['volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under','volleyball_handicap_home','volleyball_handicap_away'],
@@ -2962,7 +2964,7 @@ async function buildTelegramAiTicket(user, request) {
   // Basketball/Hockey only have three supported families. Old saved preferences could
   // contain a partial/corrupted list even though the Builder displayed “(3)”.
   // When all selected IDs are sport-compatible, normalize them to the canonical IDs.
-  if (sports.length===1 && sport === 'basketball' && betTypes.length && betTypes.every(id => id.startsWith('basketball_'))) {
+  if (sports.length===1 && sport === 'basketball' && betTypes.length && betTypes.every(id => id.startsWith('basketball_'))&&!betTypes.some(id=>require('./lib/basketballPeriodMarkets').IDS.includes(id))) {
     betTypes = telegramAiBetTypesForSport(plan.id, 'basketball');
   }
   if (sports.length===1 && sport === 'hockey' && betTypes.length && betTypes.every(id => id.startsWith('hockey_'))) {
@@ -3191,6 +3193,7 @@ Valid action values: chat, ticket, builder, plans, account, analyze.
 For ticket actions, only set fields the user clearly requested; the app merges them with current settings.
 Sport values: football, basketball, hockey, all. Do not bypass subscription restrictions.
 liveMode: set 'quick_cash' for Quick Cash/late-stage leader requests; set 'live' only when the user clearly asks for live/in-play/ongoing matches, 'both' when they ask for live plus prematch together; otherwise null (keep the user's current setting).
+Basketball first-half total points IDs: basketball_first_half_over, basketball_first_half_under. Basketball first-quarter total points IDs: basketball_first_quarter_over, basketball_first_quarter_under. Use these exact period IDs when requested.
 Bet IDs: home_win, draw, away_win, oneup, corners_over, corners_under, first_half_home_team_corners, first_half_away_team_corners, dc_1x, dc_x2, dnb, over05, home_over05, away_over05, home_under45, away_under45, over15, under45, over25, under25, correct_score, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, basketball_handicap_home, basketball_handicap_away, hockey_winner, hockey_over, hockey_under, hockey_handicap_home, hockey_handicap_away.
 If the user asks to build/rebuild/replace/remove selections but the requested transformation cannot be safely represented by these parameters, explain what can be changed and ask one concise question instead of pretending it was done.
 If discussing betting, do not promise wins or guaranteed profit.`;
