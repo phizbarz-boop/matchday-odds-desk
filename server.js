@@ -31,7 +31,6 @@ const {selectionKey:sportySelectionKey}=require('./lib/sportyPublicCache');
 const {refreshTicketResults,buildPerformanceReport,performanceText,registerTelegramPerformanceRoute}=require('./lib/telegramPerformance');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
 const bookingRequests=createBookingRequests({getRedis,runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
-console.info('[Runtime memory] startup '+JSON.stringify(require('./lib/runtimeMemory').snapshot()));
 let redisClient = null;
 async function getRedis() {
   if (!process.env.REDIS_URL) return null;
@@ -2105,7 +2104,7 @@ app.post('/api/sportybet/replace-unsupported', express.json(), async (req, res) 
   }
 });
 
-const analysisJobs=require('./lib/analysisJobs').createAnalysisJobs({getRedis,runInScope:(fn,options)=>withPublicSportyRequest(fn,options)});
+const analysisJobs=require('./lib/analysisJobs').createAnalysisJobs({runInScope:(fn,options)=>withPublicSportyRequest(fn,options)});
 app.get('/api/sportybet/analysis-jobs/:id',analysisJobs.status);
 app.post('/api/sportybet/analyze-code', express.json(), analysisJobs.wrap(async (req, res) => {
   try {
