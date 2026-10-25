@@ -2104,7 +2104,7 @@ app.post('/api/sportybet/replace-unsupported', express.json(), async (req, res) 
   }
 });
 
-const analysisJobs=require('./lib/analysisJobs').createAnalysisJobs({runInScope:(fn,options)=>withPublicSportyRequest(fn,options)});
+const analysisJobs=require('./lib/analysisJobs').createAnalysisJobs({getRedis,runInScope:(fn,options)=>withPublicSportyRequest(fn,options)});
 app.get('/api/sportybet/analysis-jobs/:id',analysisJobs.status);
 app.post('/api/sportybet/analyze-code', express.json(), analysisJobs.wrap(async (req, res) => {
   try {
