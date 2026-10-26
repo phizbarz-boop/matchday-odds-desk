@@ -1,6 +1,12 @@
 name: Plot207 H2H History Worker
 on:
   workflow_dispatch:
+    inputs:
+      event_id:
+        description: 'Optional single queued fixture, e.g. sr:match:72123488'
+        required: false
+        default: ''
+        type: string
   schedule:
     - cron: '*/15 * * * *'
 permissions:
@@ -15,6 +21,8 @@ jobs:
     env:
       REDIS_URL: ${{ secrets.REDIS_URL }}
       SPORTYBET_H2H_WORKER: 'true'
+      H2H_DEBUG_DIR: ${{ github.event_name == 'workflow_dispatch' && 'h2h-debug' || '' }}
+      H2H_DEBUG_EVENT_ID: ${{ inputs.event_id || '' }}
       H2H_WORKER_FORCE_RETRY: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
       PLAYWRIGHT_BROWSERS_PATH: '0'
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
@@ -32,3 +40,11 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Collect queued and upcoming public H2H history
         run: node jobs/h2h-worker.js
+      - name: Save public H2H diagnostic captures
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: h2h-panel-debug-${{ github.run_id }}
+          path: h2h-debug/
+          if-no-files-found: ignore
+          retention-days: 3
