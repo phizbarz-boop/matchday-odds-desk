@@ -10,13 +10,14 @@ async function runWorker({redis,collect=require('../lib/sportyH2h').collect,clos
  const queue=[];while([...groups.values()].some(g=>g.length))for(const g of groups.values())if(g.length)queue.push(g.shift());
  if(targetEventId&&!queue.length)summary.error='diagnostic_fixture_not_queued';
  summary.queuedBySport=Object.fromEntries([...new Set(queue.map(c=>c.sport))].map(s=>[s,queue.filter(c=>c.sport===s).length]));
+ let consecutiveWidgetBlocks=0;
  try{for(const c of queue){const id=c.eventId;
   if(now()>=deadline||summary.checked>=maxFixtures)break;
   const cached=await store.readMany([c]);if(cached.evidence.has(String(id))){summary.skippedFresh++;await store.remove(id);continue;}
   const prior=cached.failures.get(String(id));if(!forceRetry&&prior&&now()-Date.parse(prior.failedAt)<900000)continue;
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),Math.max(1,Math.min(fixtureTimeoutMs,deadline-now())));timer.unref?.();
-  try{summary.checked++;const e=await collect(c,{signal:controller.signal});if(controller.signal.aborted)throw Object.assign(Error('H2H timed out'),{h2hReason:'page_timeout'});if(!require('../lib/h2hCache').usable(e,c,now()))throw Object.assign(Error('No verified worker history'),{h2hReason:'team_identity_unverified'});await store.put(e);summary.saved++;}
-  catch(error){const f=failure(error);summary.failed++;logger.warn?.('[H2H fixture failed] '+JSON.stringify({eventId:id,sport:c.sport,reason:f.reason,stage:f.stage}));summary.reasons[f.reason]=(summary.reasons[f.reason]||0)+1;await store.failed(id,f);if(['browser_missing','browser_dependencies','browser_launch_failed','host_memory_pressure'].includes(f.reason))break;}
+  try{summary.checked++;const e=await collect(c,{signal:controller.signal});if(controller.signal.aborted)throw Object.assign(Error('H2H timed out'),{h2hReason:'page_timeout'});if(!require('../lib/h2hCache').usable(e,c,now()))throw Object.assign(Error('No verified worker history'),{h2hReason:'team_identity_unverified'});await store.put(e);summary.saved++;consecutiveWidgetBlocks=0;}
+  catch(error){const f=failure(error);summary.failed++;logger.warn?.('[H2H fixture failed] '+JSON.stringify({eventId:id,sport:c.sport,reason:f.reason,stage:f.stage}));summary.reasons[f.reason]=(summary.reasons[f.reason]||0)+1;await store.failed(id,f);consecutiveWidgetBlocks=f.reason==='h2h_widget_loader_blocked'?consecutiveWidgetBlocks+1:0;if(consecutiveWidgetBlocks>=3){summary.outcome='widget_loader_blocked_repeatedly';break;}if(['browser_missing','browser_dependencies','browser_launch_failed','host_memory_pressure'].includes(f.reason))break;}
   finally{clearTimeout(timer);}
  }}finally{await close();}
  summary.finishedAt=new Date(now()).toISOString();summary.pending=(await store.pending()).length;summary.status=summary.error?'failed':summary.failed&&!summary.saved?'failed':summary.pending?'partial':'completed';await store.saveStatus(summary);logger.info?.('[H2H external worker] '+JSON.stringify(summary));return summary;
