@@ -1,0 +1,8 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {planQueue}=require('../lib/h2hQueue');
+const now=Date.parse('2026-10-26T10:00:00Z'),fixture=(id,sport='Football',hours=1)=>({eventId:String(id),sport,kickoffUtc:new Date(now+hours*3600000).toISOString()});
+test('never-attempted fixtures precede ready failures globally, rather than repeating one sport retry each round',()=>{const rows=[fixture('retry','Volleyball'),fixture('football'),fixture('basket','Basketball')],result=planQueue(rows,{now,attempts:new Map([['retry',{outcome:'failed'}]])});assert.deepEqual(result.ordered.map(c=>c.eventId),['football','basket','retry']);assert.equal(result.coverage.awaitingFirstCheck,2);});
+test('cached API upgrades cannot displace a first check and first-check sports remain round-robin',()=>{const rows=[fixture('upgrade'),fixture('f2','Football',3),fixture('f1','Football',1),fixture('b1','Basketball',2)],result=planQueue(rows,{now,evidence:new Map([['upgrade',{}]]),refreshEvidence:()=>true});assert.deepEqual(result.ordered.map(c=>c.eventId),['f1','b1','f2','upgrade']);assert.equal(result.coverage.apiUpgradesReady,1);});
+test('cooldowns are explicit and force retry does not discard the fixture',()=>{const c=fixture('failed'),attempts=new Map([['failed',{outcome:'failed',retryAfter:new Date(now+1800000).toISOString()}]]);assert.equal(planQueue([c],{now,attempts}).deferred.length,1);assert.equal(planQueue([c],{now,attempts,forceRetry:true}).ordered.length,1);});
+test('fresh history is reused and removed from the check queue',()=>{const c=fixture('fresh'),result=planQueue([c],{now,evidence:new Map([['fresh',{}]])});assert.deepEqual(result.fresh,['fresh']);assert.equal(result.ordered.length,0);});
