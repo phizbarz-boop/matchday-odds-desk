@@ -58,3 +58,40 @@ test('a provider minute-limit rejection stops further HTTP calls in that minute'
 test('automatic fallback logs safe provider error details without raw body values',async()=>{const logs=[],{providerError}=require('../lib/apiSportsErrors'),collect=createCollector({api:{enabled:true,collect:async()=>{throw providerError(422,{country:'private '+env.APISPORTS_KEY},{sport:'football',path:'/teams'});}},fallback:async()=>({}),logger:{warn:s=>logs.push(s)},now});await collect({...c,sport:'Football'},{});assert.match(logs[0],/API_PARAMETERS_REJECTED/);assert.match(logs[0],/httpStatus/);assert.ok(!logs[0].includes('private'));assert.ok(!logs[0].includes(env.APISPORTS_KEY));});
 test('the supplied Aarhus-Copenhagen fixture maps uniquely without accepting AB Copenhagen or the women team',()=>{const football={eventId:'sr:match:74994258',sport:'Football',home:'Aarhus Fremad',away:'Copenhagen',kickoffUtc:'2026-10-29T12:30:00.000Z'},fx={fixture:{id:1640475,date:'2026-10-29T12:30:00+00:00'},teams:{home:{id:6004,name:'Aarhus Fremad'},away:{id:400,name:'FC Copenhagen'}}},ab={...fx,fixture:{...fx.fixture,id:2},teams:{...fx.teams,away:{id:2060,name:'AB Copenhagen'}}},women={...fx,fixture:{...fx.fixture,id:3},teams:{...fx.teams,away:{id:27632,name:'FC Copenhagen W'}}};assert.equal(matchFixture([ab,women,fx],football),fx);assert.equal(matchFixture([ab,women],football),null);});
 test('verified Copenhagen team lookup retains reserve/women distinctions and rejects duplicate club identities',()=>{const {matchTeam}=require('../lib/apiSportsH2hData'),rows=[{team:{id:400,name:'FC Copenhagen',country:'Denmark'}},{team:{id:2060,name:'AB Copenhagen',country:'Denmark'}},{team:{id:27632,name:'FC Copenhagen W',country:'Denmark'}}];assert.equal(matchTeam(rows,'Copenhagen').id,400);assert.equal(matchTeam(rows,'Copenhagen U21'),null);assert.equal(matchTeam([...rows,{team:{id:999,name:'Copenhagen'}}],'Copenhagen'),null);});
+
+test('FC Andorra versus Burgos CF maps the supplied scheduled fixture while preserving youth and reserve identity',()=>{
+ const row={eventId:'sr:match:72477520',sport:'Football',home:'FC Andorra',away:'Burgos CF',kickoffUtc:'2026-10-26T19:30:00.000Z'},fx={fixture:{id:1569983,date:'2026-10-26T19:30:00+00:00'},teams:{home:{id:8157,name:'FC Andorra'},away:{id:999,name:'Burgos'}}};
+ assert.equal(matchFixture([fx],row),fx);
+ for(const away of ['Burgos CF U21','Burgos CF W','Burgos CF II','Burgos Promesas'])assert.equal(matchFixture([fx],{...row,away}),null);
+ assert.equal(matchFixture([fx,{...fx,fixture:{...fx.fixture,id:3}}],row),null);
+ const {matchTeam}=require('../lib/apiSportsH2hData');assert.equal(matchTeam([{team:fx.teams.away}],'Burgos CF').id,999);assert.equal(matchTeam([{team:fx.teams.away},{team:{id:1000,name:'Burgos CF'}}],'Burgos CF'),null);
+});
+test('Burgos naming mismatch reaches API history directly without a team search or SportyBet fallback',async()=>{
+ const row={eventId:'sr:match:72477520',sport:'Football',home:'FC Andorra',away:'Burgos CF',kickoffUtc:'2026-10-26T19:30:00.000Z'},pair={home:{id:8157,name:'FC Andorra'},away:{id:999,name:'Burgos'}},calls=[];
+ const api=createApiH2h({env,now,fetchImpl:async raw=>{const url=new URL(raw);calls.push(url.pathname);if(url.pathname==='/fixtures')return response({errors:[],response:[{fixture:{id:1569983,date:row.kickoffUtc},teams:pair}]});if(url.pathname==='/fixtures/headtohead')return response({errors:[],response:[{fixture:{id:1,date:'2026-01-01T12:00:00Z',status:{short:'FT'}},teams:pair,score:{fulltime:{home:2,away:1},halftime:{home:1,away:0}}}]});throw Error('Unexpected API request');}});
+ const e=await api.collect(row);assert.equal(e.provider,'api_sports');assert.equal(e.providerFixtureId,'1569983');assert.equal(e.metrics.goals,3);assert.deepEqual(calls,['/fixtures','/fixtures/headtohead']);
+});
+test('setup report checks only the two enabled H2H sports',async()=>{const seen=[];await require('../jobs/api-h2h-test').run({env,logger:{info:()=>{}},client:{status:async sport=>{seen.push(sport);return{sport,active:true};}}});assert.deepEqual(seen,['football','basketball']);});
+
+test('generic club designators match scheduled teams across supported API sports without individual aliases',()=>{
+ for(const [sport,home,away,ph,pa] of [
+ ['Football','Example Town FC','River CF','Example Town','River'],
+ ['Basketball','BC Example City','River Basketball','Example City','River'],
+ ['Ice Hockey','HC Example City','River HK','Example City','River'],
+ ['Handball','HC Example City','River HB','Example City','River'],
+ ['Volleyball','VC Example City','River VK','Example City','River']]){
+  const row={...c,sport,home,away},fx={...matched,teams:{home:{id:1,name:ph},away:{id:2,name:pa}}};assert.equal(matchFixture([fx],row),fx,sport);
+  for(const suffix of [' U21',' II',' W',' Reserves'])assert.equal(matchFixture([fx],{...row,home:home+suffix}),null,sport+suffix);
+  assert.equal(matchFixture([fx,{...fx,id:88}],row),null,'ambiguous '+sport);
+  assert.equal(matchFixture([fx],{...row,kickoffUtc:'2026-10-30T10:00:00Z'}),null,'date '+sport);
+ }
+});
+test('club matching never drops meaningful place names, expands arbitrary abbreviations or selects ambiguous identities',()=>{
+ const {sameTeam,matchTeam,teamSearches}=require('../lib/apiSportsH2hData');assert.equal(sameTeam('Example City FC','Example United','football'),false);assert.equal(sameTeam('ABC Town','Town','football'),false);assert.equal(sameTeam('A','FC A','football'),false);assert.equal(sameTeam('BC Example City U21','Example City','basketball'),false);assert.equal(matchTeam([{team:{id:1,name:'Example City'}},{team:{id:2,name:'BC Example City'}}],'Example City',null,'basketball'),null);assert.deepEqual(teamSearches('Example Town FC','football'),['example town fc','example town']);assert.deepEqual(teamSearches('Example Town FC U21','football'),['example town fc u21']);
+ const fx={...matched,teams:{home:{id:1,name:c.home},away:{id:1,name:c.away}}};assert.equal(matchFixture([fx],c),null);
+});
+test('empty literal football searches retry a bounded core-name query and verify the returned IDs',async()=>{
+ const row={...c,sport:'Football',home:'Example Town FC',away:'River CF'},calls=[],pair={home:{id:31,name:'Example Town'},away:{id:32,name:'River'}};
+ const api=createApiH2h({env,now,fetchImpl:async raw=>{const u=new URL(raw);calls.push(u.pathname+'?'+u.searchParams.toString());if(u.pathname==='/fixtures')return response({errors:[],response:[]});if(u.pathname==='/teams'){const search=u.searchParams.get('search');return response({errors:[],response:search==='example town'?[{team:pair.home}]:search==='river'?[{team:pair.away}]:[]});}if(u.pathname==='/fixtures/headtohead')return response({errors:[],response:[{fixture:{id:12,date:'2026-01-01T12:00:00Z',status:{short:'FT'}},teams:pair,score:{fulltime:{home:2,away:0},halftime:{home:1,away:0}}}]});throw Error('Unexpected request');}});
+ const e=await api.collect(row);assert.deepEqual(e.providerTeamIds,{home:31,away:32});assert.equal(calls.filter(x=>x.startsWith('/teams?')).length,4);assert.equal(e.mappingBasis,'verified_team_ids_without_scheduled_fixture');
+});
