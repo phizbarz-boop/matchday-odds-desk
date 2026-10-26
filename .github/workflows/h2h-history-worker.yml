@@ -1,0 +1,33 @@
+name: Plot207 H2H History Worker
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: plot207-h2h-history-worker
+  cancel-in-progress: false
+jobs:
+  collect-h2h:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      SPORTYBET_H2H_WORKER: 'true'
+      PLAYWRIGHT_BROWSERS_PATH: '0'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Check shared Redis configuration
+        run: test -n "$REDIS_URL" || (echo 'Add repository secret REDIS_URL using the same Redis connection as Render' && exit 1)
+      - name: Install dependencies without the web postinstall
+        run: npm ci --ignore-scripts
+      - name: Install worker browser and system dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Collect queued and upcoming public H2H history
+        run: node jobs/h2h-worker.js

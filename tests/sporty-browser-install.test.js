@@ -5,12 +5,12 @@ const {spawnSync}=require('node:child_process');
 const {installBrowser}=require('../jobs/install-sporty-browser');
 const {configureBrowserPath}=require('../lib/sportyBrowserRuntime');
 
-test('public booking builds do not install Chromium even when dummy credentials are configured',()=>{
+test('public web builds use the external H2H worker and skip Chromium',()=>{
   const messages=[];
-  const code=installBrowser({env:{SPORTYBET_PHONE:'fixture-phone',SPORTYBET_PASSWORD:'fixture-password'},
+  const code=installBrowser({env:{SPORTYBET_H2H_ENABLED:'false',SPORTYBET_PHONE:'fixture-phone',SPORTYBET_PASSWORD:'fixture-password'},
     resolvePackage:()=>assert.fail('Public booking does not need a browser package'),
     spawn:()=>assert.fail('Public booking must not download Chromium'),log:text=>messages.push(text)});
-  assert.equal(code,0);assert.ok(messages.some(text=>text.includes('Anonymous booking')));
+  assert.equal(code,0);assert.ok(messages.some(text=>text.includes('separate worker')));
 });
 
 test('npm install runs the browser setup and keeps browser files inside the deployed package',t=>{
@@ -51,3 +51,7 @@ test('browser installation failure fails the build instead of reporting a workin
     assert.ok(output.every(text=>!text.includes('Chromium is ready')));
   }
 });
+
+test('external H2H worker builds install Chromium explicitly',()=>{let calls=0;const code=installBrowser({env:{SPORTYBET_H2H_WORKER:'true'},resolvePackage:()=>'/fixture/playwright/package.json',spawn:(command,args)=>{calls++;assert.deepEqual(args,['/fixture/playwright/cli.js','install','chromium']);return{status:0};},log:()=>{},error:()=>{}});assert.equal(code,0);assert.equal(calls,1);});
+
+test('public web builds never install the H2H browser even with legacy H2H enabled',()=>{const code=installBrowser({env:{SPORTYBET_H2H_ENABLED:'true'},spawn:()=>assert.fail('web build must remain browser free'),log:()=>{}});assert.equal(code,0);});

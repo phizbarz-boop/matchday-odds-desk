@@ -31,7 +31,9 @@ const {selectionKey:sportySelectionKey}=require('./lib/sportyPublicCache');
 const {refreshTicketResults,buildPerformanceReport,performanceText,registerTelegramPerformanceRoute}=require('./lib/telegramPerformance');
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
 const bookingRequests=createBookingRequests({getRedis,runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
+console.info('[Runtime memory] startup '+JSON.stringify(require('./lib/runtimeMemory').snapshot()));
 let redisClient = null;
+require('./lib/sportyH2h').configureCache({getRedis});
 async function getRedis() {
   if (!process.env.REDIS_URL) return null;
   if (redisClient) return redisClient;
@@ -2104,7 +2106,7 @@ app.post('/api/sportybet/replace-unsupported', express.json(), async (req, res) 
   }
 });
 
-const analysisJobs=require('./lib/analysisJobs').createAnalysisJobs({runInScope:(fn,options)=>withPublicSportyRequest(fn,options)});
+const analysisJobs=require('./lib/analysisJobs').createAnalysisJobs({getRedis,runInScope:(fn,options)=>withPublicSportyRequest(fn,options)});
 app.get('/api/sportybet/analysis-jobs/:id',analysisJobs.status);
 app.post('/api/sportybet/analyze-code', express.json(), analysisJobs.wrap(async (req, res) => {
   try {
@@ -3895,6 +3897,7 @@ app.post('/api/refresh/sport/:sport', express.json(), async (req, res) => {
 app.get('/api/sportybet/market-coverage',async(req,res)=>{
  try{const catalog=await publicCache.read();if(!catalog)return res.status(503).json({error:'Public catalogue is not ready'});const predictions=await require('./lib/sportyPublicCache').publicPredictions(catalog);const known=buildCandidates({...marketInputs(catalog),predictions,minProbability:0,minEdge:-100,sportScope:'all'});const modeled=require('./lib/offeredMarketModel').modelOfferedMarkets(Object.values(catalog.sports||{}).flatMap(s=>s.rows||[]),{known,predictions});res.json({generatedAt:catalog.generatedAt,sports:Object.keys(catalog.sports||{}),...modeled.coverage,note:'Market estimates are margin-adjusted prices, not independent performance predictions. Unconfirmed settlements are excluded.'});}catch(error){res.status(503).json({error:'Market coverage is unavailable'});}
 });
+app.get('/api/sportybet/h2h/status',async(req,res)=>{res.set('Cache-Control','no-store');try{res.json({mode:'external_worker_cache',browserOnWebServer:false,worker:await require('./lib/h2hCache').createH2hCache({getRedis}).status()});}catch{res.status(503).json({error:'H2H Redis storage unavailable',mode:'external_worker_cache',browserOnWebServer:false});}});
 app.get('/api/sportybet/public-cache/status',async(req,res)=>{
   try{await publicCache.read();res.json({...publicCache.status(),scheduler:publicCacheScheduler.status()});}
   catch(error){res.status(503).json({error:'Public cache status unavailable'});}

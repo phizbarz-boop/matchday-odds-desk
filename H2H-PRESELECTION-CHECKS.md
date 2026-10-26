@@ -1,9 +1,13 @@
+# Current deployment: external H2H worker
+
+See H2H-EXTERNAL-WORKER-SETUP.md for the current setup. Website and Telegram request paths now read Redis history only, including when SPORTYBET_H2H_ENABLED=false. Chromium runs in the separate worker. The implementation notes below describe the historical modelling assumptions; older instructions to launch a browser on Render are superseded.
+
 # Public H2H checks before automated selection
 
 This release connects a fresh public mobile H2H reader to the website Auto Builder, Telegram AI builder, imported-code analysis and automatic daily packs. Both H2H and H2H(New) are opened before a fixture passes the history check. An updated probability floor is applied afterwards. Daily validation checks history again before booking, including unfinished cached tickets.
 
 What it does:
-- Reads both public H2H views without dummy credentials, verifies the displayed teams and keeps an event-specific snapshot for at most 15 minutes. Restarting a host can cause a fresh read; membership and Today's Codes storage are untouched.
+- Reads both public H2H views without dummy credentials, verifies the displayed teams and stores event-specific evidence with a separate configurable capture-freshness limit (six hours by default in external-cache mode). Restarting a host can cause a fresh read; membership and Today's Codes storage are untouched.
 - Supports attempts for football, basketball, tennis, handball, hockey and volleyball through their mobile event pages. An event-ID route was verified against the supplied football example. Other sports use the same observed route pattern and their displayed team identities must match.
 - Separates the new season summary from league and individual-team numbers. For example, the corner total is 15.11, not 8.00 or 7.11, and league averages are not substituted for match evidence.
 - Parses dated previous results, excluding future entries, with no fixed historical age cutoff, and removes duplicate date/participant records across views. Tennis set results do not become game totals.
@@ -13,13 +17,13 @@ What it does:
 
 Coverage and limits:
 - This is a preselection evidence check, not a fully calibrated all-sport statistical model. Winner/surface models, per-player models, fitted period distributions, empirical distribution fitting and stronger H2H/form weighting still require further implementation and validation. Existing manual fixture cards are not rebuilt with this new checker; the automated builders and imported-code analysis use it.
-- At most 40 different fixtures per request are checked by default, interleaved across sports, using two browser contexts at a time and a 90-second scheduling budget. A read already in progress may finish after the scheduling budget. Unchecked fixtures cannot pass as verified. Unchecked fixtures remain eligible using the original model estimate; available evidence is revalidated by the existing daily pipeline.
+- In external-cache mode, request paths read saved fixture evidence in bounded Redis batches. The external worker handles browser collection separately. A read already in progress may finish after the scheduling budget. Unchecked fixtures cannot pass as verified. Unchecked fixtures remain eligible using the original model estimate; available evidence is revalidated by the existing daily pipeline.
 - No profit or accuracy improvement has been backtested for this cap. Averages alone do not establish profitability. Model assumptions and data-availability statuses are retained on checked selections.
 - Live and Quick Cash candidates also attempt history access, but this release does not add a new live remaining-time H2H distribution.
 
 Deployment:
-- Requires the existing Playwright Chromium installation and operating-system browser dependencies on Render. The existing postinstall/browser setup remains in use. If Chromium or public statistics fail, the fixture stays eligible using the original estimate and an explicit unverified-history status.
-- SPORTYBET_H2H_MAX_FIXTURES can change the 40-fixture limit. SPORTYBET_H2H_FILE optionally selects the snapshot path. SPORTYBET_H2H_ENABLED=false explicitly bypasses these checks; mocked-provider tests use that flag so their unrelated API/booking fixtures do not launch a browser. Do not set it to false when deploying this feature.
+- Requires Playwright Chromium only in the external worker, with Redis evidence shared to Render. The existing postinstall/browser setup remains in use. If Chromium or public statistics fail, the fixture stays eligible using the original estimate and an explicit unverified-history status.
+- SPORTYBET_H2H_MAX_FIXTURES can change the 40-fixture limit. SPORTYBET_H2H_FILE optionally selects the snapshot path. SPORTYBET_H2H_ENABLED=false explicitly bypasses these checks; mocked-provider tests use that flag so their unrelated API/booking fixtures do not launch a browser. The external Redis reader is now independent of this legacy browser flag.
 - The website result/status API exposes H2H coverage. History states distinguish missing/stale views, insufficient samples, unavailable market-specific metrics, mean conflicts and probability caps.
 - Existing scheduled times, ticket types, probability floors, exclusions and booking limits are unchanged. Start a NEW manual workflow run after deploying; completed scheduled slots are not reopened.
 
