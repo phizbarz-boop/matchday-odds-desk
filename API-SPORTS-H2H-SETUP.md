@@ -48,9 +48,10 @@ After checking the test results, open Settings → Secrets and variables → Act
 | --- | --- |
 | APISPORTS_H2H_ENABLED | true |
 | APISPORTS_H2H_DAILY_LIMIT | 100 |
+| APISPORTS_H2H_DAILY_LIMIT_FOOTBALL | 7500 only for the verified Football Pro subscription; otherwise 100 |
 | APISPORTS_H2H_MINUTE_LIMIT | 10 |
 
-The conservative limits apply per sport/API. Raise them only after checking the actual subscription allowance for EVERY enabled API. The upstream API still enforces its own subscription limits; these settings do not upgrade a subscription. Default football statistical enrichment retrieves up to five historical fixture-statistics responses per matchup, in addition to fixture mapping and H2H requests. That can use roughly seven requests for an uncached football pair. Cache hits reuse those responses.
+The conservative limits apply per sport/API. The football override can use its verified paid allowance while other APIs retain the shared default. Raise any sport limit only after checking that sport’s actual subscription allowance. The upstream API still enforces its own subscription limits; these settings do not upgrade a subscription. Default football statistical enrichment retrieves up to five historical fixture-statistics responses per matchup, in addition to fixture mapping and H2H requests. That can use roughly seven requests for an uncached football pair. Cache hits reuse those responses.
 
 The next scheduled H2H worker run automatically tries API-Sports for the five supported sports. Already fresh SportyBet records become eligible for an API upgrade; a failed API attempt has a 30-minute upgrade cooldown. Fresh API history is reused for the normal H2H cache period. Tennis and API errors/unmapped/unsupported fixtures retain SportyBet fallback.
 

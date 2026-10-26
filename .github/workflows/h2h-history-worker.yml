@@ -8,6 +8,7 @@ on:
       - 'lib/h2h*.js'
       - 'lib/sportyH2h.js'
       - 'lib/apiSportsH2h*.js'
+      - 'lib/apiSportsErrors.js'
   workflow_dispatch:
     inputs:
       event_id:
@@ -32,6 +33,7 @@ jobs:
       APISPORTS_KEY: ${{ secrets.APISPORTS_KEY }}
       APISPORTS_H2H_ENABLED: ${{ vars.APISPORTS_H2H_ENABLED || 'false' }}
       APISPORTS_H2H_DAILY_LIMIT: ${{ vars.APISPORTS_H2H_DAILY_LIMIT || '100' }}
+      APISPORTS_H2H_DAILY_LIMIT_FOOTBALL: ${{ vars.APISPORTS_H2H_DAILY_LIMIT_FOOTBALL || '100' }}
       APISPORTS_H2H_MINUTE_LIMIT: ${{ vars.APISPORTS_H2H_MINUTE_LIMIT || '10' }}
       SPORTYBET_H2H_WORKER: 'true'
       H2H_BROWSER_HEADED: 'true'
