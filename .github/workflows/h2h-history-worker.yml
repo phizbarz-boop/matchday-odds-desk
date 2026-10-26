@@ -15,6 +15,7 @@ jobs:
     env:
       REDIS_URL: ${{ secrets.REDIS_URL }}
       SPORTYBET_H2H_WORKER: 'true'
+      H2H_WORKER_FORCE_RETRY: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
       PLAYWRIGHT_BROWSERS_PATH: '0'
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
     steps:
