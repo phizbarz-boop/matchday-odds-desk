@@ -24,7 +24,8 @@ concurrency:
 jobs:
   collect-h2h:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Includes dependency/browser installation plus the bounded worker run.
+    timeout-minutes: 30
     env:
       REDIS_URL: ${{ secrets.REDIS_URL }}
       SPORTYBET_H2H_WORKER: 'true'
@@ -47,6 +48,7 @@ jobs:
       - name: Install worker browser and system dependencies
         run: npx playwright install --with-deps chromium
       - name: Collect queued and upcoming public H2H history
+        timeout-minutes: 14
         run: xvfb-run --auto-servernum node jobs/h2h-worker.js
       - name: Save public H2H diagnostic captures
         if: ${{ always() && github.event_name == 'workflow_dispatch' }}
