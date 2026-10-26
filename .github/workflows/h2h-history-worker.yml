@@ -27,7 +27,7 @@ jobs:
   collect-h2h:
     runs-on: ubuntu-latest
     # Includes dependency/browser installation plus the bounded worker run.
-    timeout-minutes: 30
+    timeout-minutes: 120
     env:
       REDIS_URL: ${{ secrets.REDIS_URL }}
       APISPORTS_KEY: ${{ secrets.APISPORTS_KEY }}
@@ -36,10 +36,11 @@ jobs:
       APISPORTS_H2H_DAILY_LIMIT_FOOTBALL: ${{ vars.APISPORTS_H2H_DAILY_LIMIT_FOOTBALL || '100' }}
       APISPORTS_H2H_MINUTE_LIMIT: ${{ vars.APISPORTS_H2H_MINUTE_LIMIT || '10' }}
       SPORTYBET_H2H_WORKER: 'true'
+      H2H_WORKER_BUDGET_MS: '6000000'
       H2H_BROWSER_HEADED: 'true'
       H2H_DEBUG_DIR: ${{ github.event_name == 'workflow_dispatch' && 'h2h-debug' || '' }}
       H2H_DEBUG_EVENT_ID: ${{ inputs.event_id || '' }}
-      H2H_WORKER_FORCE_RETRY: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+      H2H_WORKER_FORCE_RETRY: ${{ github.event_name == 'workflow_dispatch' && inputs.event_id != '' && 'true' || 'false' }}
       PLAYWRIGHT_BROWSERS_PATH: '0'
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
     steps:
@@ -55,7 +56,7 @@ jobs:
       - name: Install worker browser and system dependencies
         run: npx playwright install --with-deps chromium
       - name: Collect queued and upcoming public H2H history
-        timeout-minutes: 14
+        timeout-minutes: 105
         run: xvfb-run --auto-servernum node jobs/h2h-worker.js
       - name: Save public H2H diagnostic captures
         if: ${{ always() && github.event_name == 'workflow_dispatch' }}
