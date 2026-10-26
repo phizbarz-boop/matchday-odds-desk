@@ -1,0 +1,28 @@
+name: Plot207 API-Sports H2H Test
+on:
+  workflow_dispatch:
+    inputs:
+      event_id:
+        description: 'Optional SportyBet fixture ID; leave blank to check all five API subscriptions'
+        type: string
+        required: false
+        default: ''
+permissions:
+  contents: read
+jobs:
+  test-api-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      APISPORTS_KEY: ${{ secrets.APISPORTS_KEY }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      API_H2H_TEST_EVENT_ID: ${{ inputs.event_id || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Check subscriptions and optional fixture history without bookings or Redis writes
+        run: node jobs/api-h2h-test.js

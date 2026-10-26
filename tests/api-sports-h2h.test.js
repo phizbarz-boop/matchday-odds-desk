@@ -1,0 +1,50 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {buildEvidence,matchFixture,sportKey}=require('../lib/apiSportsH2hData');
+const {createApiH2h,createCollector}=require('../lib/apiSportsH2h');
+const now=()=>Date.parse('2026-10-26T10:00:00Z'),c={eventId:'sr:match:1',home:'Home U20',away:'Away',sport:'Basketball',kickoffUtc:'2026-10-27T10:00:00Z'},teams={home:{id:1,name:c.home},away:{id:2,name:c.away}};
+const matched={id:7,teams,date:c.kickoffUtc},basket=(id=1,extra={})=>({id,teams,date:'2026-10-20T10:00:00Z',status:{short:'FT'},scores:{home:{quarter_1:20,quarter_2:22,quarter_3:24,quarter_4:25,total:91},away:{quarter_1:18,quarter_2:20,quarter_3:22,quarter_4:23,total:83}},...extra});
+const fakeRedis=()=>{const data=new Map();return{data,get:async k=>data.get(k)||null,set:async(k,v)=>{data.set(k,v);return'OK';},expire:async()=>1,incr:async k=>{const n=Number(data.get(k)||0)+1;data.set(k,n);return n;}};};
+const response=(payload,status=200)=>({ok:status<400,status,headers:{get:()=>null},text:async()=>JSON.stringify(payload)});
+const env={APISPORTS_KEY:'secret-test-key',APISPORTS_H2H_ENABLED:'true',APISPORTS_H2H_MINUTE_LIMIT:'100',APISPORTS_H2H_DAILY_LIMIT:'100',APISPORTS_H2H_STATS_LIMIT:'0'};
+test('mapping requires both exact normalized teams, time proximity and a unique scheduled fixture',()=>{
+ assert.equal(matchFixture([matched],c),matched);assert.equal(matchFixture([matched,matched],c),null);assert.equal(matchFixture([matched],{...c,home:'Home U21'}),null);assert.equal(matchFixture([{...matched,date:'2026-10-28T10:00:00Z'}],c),null);assert.equal(sportKey({...c,sport:'Tennis'}),null);
+});
+test('basketball computes first-half and quarter totals without treating nulls as zero or overtime as regulation',()=>{
+ const e=buildEvidence(c,matched,[basket(),basket(2,{status:{short:'AOT'},scores:{home:{total:110},away:{total:100}}})],{now:new Date(now())});
+ assert.equal(e.metrics.half_points,80);assert.equal(e.metrics.quarter_points,38);assert.equal(e.metricSamples.half_points,1);assert.equal(e.metrics.points,174);assert.equal(e.metricSamples.points,1);assert.equal(e.metrics.points_including_overtime,192);assert.equal(e.games.length,2);
+});
+test('future, unfinished, duplicate and wrong-pair results cannot contribute to history',()=>{
+ const rows=[basket(),basket(),basket(2,{date:'2026-10-27T11:00:00Z'}),basket(3,{status:{short:'Q2'}}),basket(4,{teams:{home:{id:3,name:'Wrong'},away:teams.away}})];assert.equal(buildEvidence(c,matched,rows,{now:new Date(now())}).games.length,1);
+});
+test('volleyball sets are not points; handball and hockey use their own score structures',()=>{
+ const base={id:1,teams,date:'2026-10-20T10:00:00Z',status:{short:'FT'}};
+ const v=buildEvidence({...c,sport:'Volleyball'},matched,[{...base,scores:{home:3,away:0},periods:{first:{home:25,away:20},second:{home:25,away:21},third:{home:25,away:22},fourth:{home:0,away:0}}}],{now:new Date(now())});assert.equal(v.metrics.sets,3);assert.equal(v.metrics.points,138);
+ const h=buildEvidence({...c,sport:'Handball'},matched,[{...base,scores:{home:35,away:25},periods:{first:{home:18,away:12}}}],{now:new Date(now())});assert.equal(h.metrics.goals,60);assert.equal(h.metrics.half_goals,30);
+ const ice=buildEvidence({...c,sport:'Ice Hockey'},matched,[{...base,scores:{home:4,away:3},status:{short:'AOT'},periods:{first:'1-1',second:'0-1',third:'2-1'}}],{now:new Date(now())});assert.equal(ice.metrics.goals,6);assert.equal(ice.metrics.period_goals,2);
+});
+test('football uses regulation scores and per-metric counts for separately fetched corners/shots',()=>{
+ const fixture={...c,sport:'Football'},g={fixture:{id:10,date:'2026-10-20T10:00:00Z',status:{short:'FT'}},teams,goals:{home:3,away:1},score:{fulltime:{home:3,away:1},halftime:{home:1,away:0}}},stats=new Map([['10',[{team:{id:1},statistics:[{type:'Corner Kicks',value:4},{type:'Shots on Goal',value:6}]},{team:{id:2},statistics:[{type:'Corner Kicks',value:3},{type:'Shots on Goal',value:null}]}]]]);
+ const e=buildEvidence(fixture,matched,[g],{now:new Date(now()),statistics:stats});assert.equal(e.metrics.goals,4);assert.equal(e.metrics.corners,7);assert.equal(e.metricSamples.corners,1);assert.equal(e.metrics.shots_target,undefined);
+});
+test('client is opt-in, uses official host/header, caches results and enforces shared request budgets',async()=>{
+ const redis=fakeRedis(),calls=[];const api=createApiH2h({redis,env:{...env,APISPORTS_H2H_DAILY_LIMIT:'1'},now,fetchImpl:async(url,options)=>{calls.push(url);assert.equal(options.headers['x-apisports-key'],env.APISPORTS_KEY);assert.equal(options.redirect,'error');return response({errors:[],response:[]});}});
+ assert.ok(api.enabled);await api.request('basketball','/games',{date:'2026-10-27'});await api.request('basketball','/games',{date:'2026-10-27'});assert.equal(calls.length,1);await assert.rejects(api.request('basketball','/games',{date:'2026-10-28'}),e=>e.code==='API_DAILY_BUDGET');assert.equal(calls.length,1);assert.ok(![...redis.data.keys()].join().includes(env.APISPORTS_KEY));assert.equal(createApiH2h({env:{}}).enabled,false);
+});
+test('API error bodies and keys never leak through errors; redirects and unsupported routes are refused',async()=>{
+ const api=createApiH2h({env,now,fetchImpl:async()=>response({errors:{token:env.APISPORTS_KEY},response:[]},403)});await assert.rejects(api.request('basketball','/games'),e=>e.code==='API_AUTH_FAILED'&&!e.message.includes(env.APISPORTS_KEY));await assert.rejects(api.request('tennis','/games'),e=>e.code==='API_ROUTE_UNSUPPORTED');
+});
+test('live-like API collection maps by fixture IDs and requests historical meetings without production writes',async()=>{
+ const calls=[],api=createApiH2h({env,now,fetchImpl:async url=>{calls.push(url);return response({errors:[],response:url.includes('/h2h')?[basket()]:[matched]});}});const e=await api.collect(c);assert.equal(e.provider,'api_sports');assert.equal(e.metrics.half_points,80);assert.equal(calls.length,2);assert.ok(calls[1].includes('h2h=1-2'));
+});
+test('provider failure falls back safely and tennis never calls an unsupported API',async()=>{
+ const logs=[],fallback=async()=>({metrics:{}}),api={enabled:true,collect:async()=>{throw Object.assign(Error(env.APISPORTS_KEY),{code:'API_FIXTURE_UNMAPPED'});}},collect=createCollector({api,fallback,now,logger:{warn:s=>logs.push(s)}});const e=await collect(c,{});assert.equal(e.apiOutcome,'API_FIXTURE_UNMAPPED');assert.ok(!logs.join().includes(env.APISPORTS_KEY));const tennis=await collect({...c,sport:'Tennis'},{});assert.equal(tennis.apiOutcome,undefined);
+});
+test('period assessment exposes historical hit counts but never replaces probability with frequency',()=>{
+ const e=buildEvidence(c,matched,[basket()],{now:new Date(now())}),r=require('../lib/h2hEvidence').assess({...c,marketDesc:'1st Half - Over/Under',outcomeDesc:'Over',specifier:'total=82.5',probability:75},e,new Date(now()));assert.equal(r.h2hCheck.allowed,false);assert.equal(r.h2hCheck.provider,'api_sports');assert.equal(r.h2hCheck.observedHits,0);assert.equal(r.h2hCheck.observedMatches,1);assert.equal(r.probability,75);
+});
+test('minute exhaustion does not consume the next daily reservation, and budgets survive a new client',async()=>{const redis=fakeRedis(),options={redis,env:{...env,APISPORTS_H2H_MINUTE_LIMIT:'1'},now,fetchImpl:async()=>response({errors:[],response:[]})};await createApiH2h(options).request('basketball','/games',{date:'2026-10-27'});await assert.rejects(createApiH2h(options).request('basketball','/games',{date:'2026-10-28'}),e=>e.code==='API_MINUTE_BUDGET');const day=[...redis.data.keys()].find(k=>k.includes(':daily:'));assert.equal(redis.data.get(day),1);});
+test('all five supported API hosts return a sanitized plan report without account identity or API key',async()=>{const api=createApiH2h({env,fetchImpl:async()=>response({errors:[],response:{account:{email:'private@example.com'},subscription:{plan:'Free',active:true},requests:{current:12,limit_day:100}}})});for(const sport of ['football','basketball','hockey','handball','volleyball']){const result=await api.status(sport);assert.equal(result.plan,'Free');assert.equal(result.dailyLimit,100);assert.ok(!JSON.stringify(result).includes('private'));}});
+test('non-Latin team names are preserved and cannot become empty-name matches',()=>{const g={...matched,teams:{home:{id:1,name:'Москва'},away:{id:2,name:'Казань'}}};assert.equal(matchFixture([g],{...c,home:'Самара',away:'Омск'}),null);assert.equal(matchFixture([g],{...c,home:'Москва',away:'Казань'}),g);});
+test('missing API market metrics retain independently verified SportyBet evidence without mixing sample counts',async()=>{const apiEvidence={...c,provider:'api_sports',capturedAt:new Date(now()).toISOString(),newAvailable:true,oldAvailable:false,metrics:{goals:3},metricSamples:{goals:10},sampleCount:10,games:[]},sportyEvidence={...c,capturedAt:new Date(now()).toISOString(),newAvailable:true,oldAvailable:true,metrics:{corners:15},sampleCount:2,games:[]};let fallbackCalls=0;const collect=createCollector({api:{enabled:true,collect:async()=>({...apiEvidence})},fallback:async()=>{fallbackCalls++;return sportyEvidence;},now,logger:{}});const combined=await collect({...c,sport:'Football'},{});assert.equal(fallbackCalls,1);const r=require('../lib/h2hEvidence').assess({...c,sport:'Football',marketDesc:'Corners Over/Under',outcomeDesc:'Under',specifier:'total=12.5',probability:90},combined,new Date(now()));assert.equal(r.h2hCheck.provider,'sportybet');assert.equal(r.h2hCheck.sampleCount,2);assert.equal(r.h2hCheck.allowed,false);});
+test('read-only setup test fails clearly when no API subscription can be verified',async()=>{const reports=[];await assert.rejects(require('../jobs/api-h2h-test').run({env,logger:{info:s=>reports.push(s)},client:{status:async()=>{throw Object.assign(Error('secret'),{code:'API_AUTH_FAILED'});}}}),e=>e.code==='API_ACCOUNT_UNAVAILABLE');assert.equal(reports.length,1);assert.ok(reports[0].includes('API_AUTH_FAILED'));assert.ok(!reports[0].includes(env.APISPORTS_KEY));});
