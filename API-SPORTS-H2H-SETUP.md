@@ -58,7 +58,7 @@ The worker summary contains providers counts for history actually saved to Redis
 
 ## Data handling and accuracy
 
-- Mapping requires exact normalized team names, unique fixture identity and kickoff within 90 minutes. No fuzzy team guessing is used; youth/women/reserve identifiers are retained. Different provider names may therefore require a future explicit verified mapping and currently fall back safely.
+- Scheduled fixture mapping requires normalized team names, a unique fixture and kickoff within 90 minutes. Football also has a fallback that resolves each club to a unique API team ID independently of the scheduled fixture. Explicit Bournemouth/AFC Bournemouth and Leeds/Leeds United name equivalents are supported. No fuzzy team guessing is used; youth/women/reserve identifiers are retained. Ambiguous teams are rejected. The report distinguishes scheduled-fixture matching from verified-team-ID matching.
 - Only finished, past meetings between the same two provider team IDs are used. Future, incomplete, duplicate and wrong-pair games are excluded. At most ten meetings contribute per fixture.
 - Basketball first-half totals use Q1+Q2 for BOTH teams; first-quarter totals use Q1 for both. Missing quarter values never become zero. Regulation totals and overtime-inclusive totals remain separate.
 - Hockey regulation totals use the three periods where supplied. Handball first-half totals use the first-period score. Volleyball match scores are SETS, not points; total points require complete set scores.
