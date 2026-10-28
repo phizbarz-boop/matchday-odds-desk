@@ -6,7 +6,7 @@ const now=new Date('2026-10-24T06:00:00Z'),dateKey='2026-10-24';
 function winners(gap=.5){return [{eventId:'E',marketId:'1',outcomeId:'1',outcomeDesc:'Home',marketDesc:'1X2',sport:'Football',odds:1.7},{eventId:'E',marketId:'1',outcomeId:'2',outcomeDesc:'Draw',marketDesc:'1X2',sport:'Football',odds:50},{eventId:'E',marketId:'1',outcomeId:'3',outcomeDesc:'Away',marketDesc:'1X2',sport:'Football',odds:1.7+gap}];}
 function leg(betType='under45'){return{eventId:'E',sport:'Football',marketId:'18',outcomeId:'13',specifier:'total=4.5',betType,odds:1.25,probability:80,kickoffUtc:'2026-10-24T12:00:00Z'};}
 test('small-gap dedicated ticket plans enforce the same gap limit without imposing it on the original combined corners plans',()=>{
- const plans=PLANS.filter(p=>p.winnerGapMaxOne);assert.equal(plans.length,6);
+ const plans=PLANS.filter(p=>p.winnerGapMaxOne);assert.equal(plans.length,5);
  assert.deepEqual(plans.filter(p=>p.longShot).map(p=>p.maxGames),[20,20,20]);assert.ok(plans.every(p=>p.floor===70));
  const good=annotateSmallGap([leg()],winners())[0];for(const p of plans){const c={...good,betType:p.betTypes[0]};assert.equal(eligible(c,p,now,dateKey,new Set()),true);assert.equal(eligible({...c,winnerGapMaxOneQualified:false},p,now,dateKey,new Set()),false);assert.equal(eligible({...c,probability:69.9},p,now,dateKey,new Set()),false);}
  assert.ok(PLANS.filter(p=>p.id==='corners70short'||p.id==='corners70long').every(p=>!p.winnerGapMaxOne));

@@ -32,7 +32,7 @@ test('every retired automated route rejects requests without scanning, booking o
   const retired=await api.request('/api/telegram/'+name,{}, {'x-matchday-run-mode':'manual','x-matchday-run-id':'removed-'+name});assert.equal(retired.status,410);assert.equal(retired.body.ticketsSent,0);
  }
  assert.equal((await api.request('/api/telegram/three-hourly-picks',{}, {'x-telegram-job-secret':'wrong'})).status,401);
- const status=(await api.request('/api/telegram/status')).body;assert.equal(status.targets.length,20);assert.equal(status.next12hScheduler.enabled,false);assert.equal(status.hourlyScheduler.enabled,false);assert.equal(status.threeHourlyScheduler.enabled,false);
+ const status=(await api.request('/api/telegram/status')).body;assert.equal(status.targets.length,16);assert.equal(status.next12hScheduler.enabled,false);assert.equal(status.hourlyScheduler.enabled,false);assert.equal(status.threeHourlyScheduler.enabled,false);
  const state=await api.rpc('state');assert.equal(state.bookings.length,0);assert.equal(state.messages.length,0);assert.equal(state.reads.length,0);
  for(const name of ['telegram-picks.yml','telegram-next-12h.yml','telegram-hourly-model-picks.yml'])assert.equal(fs.existsSync(path.join(__dirname,'../.github/workflows',name)),false);
 });
