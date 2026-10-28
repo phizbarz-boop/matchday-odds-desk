@@ -32,17 +32,9 @@ const {refreshTicketResults,buildPerformanceReport,performanceText,registerTeleg
 const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
 const bookingRequests=createBookingRequests({getRedis,runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
 console.info('[Runtime memory] startup '+JSON.stringify(require('./lib/runtimeMemory').snapshot()));
-let redisClient = null;
+const redisConnection=require('./lib/redisConnection').createRedisConnection({createClient:options=>require('redis').createClient(options)});
 require('./lib/sportyH2h').configureCache({getRedis});
-async function getRedis() {
-  if (!process.env.REDIS_URL) return null;
-  if (redisClient) return redisClient;
-  const { createClient } = require('redis');
-  redisClient = createClient({ url: process.env.REDIS_URL });
-  redisClient.on('error', (e) => console.error('Redis error', e.message));
-  try { await redisClient.connect(); } catch(error) { redisClient=null; throw error; }
-  return redisClient;
-}
+async function getRedis(){return redisConnection.get();}
 
 function copyHubEnabled() {
   return String(process.env.COPY_HUB_ENABLED || '').toLowerCase() === 'true';

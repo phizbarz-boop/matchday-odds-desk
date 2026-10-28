@@ -8,13 +8,15 @@
  async function request(url,body,{fetchImpl=root.fetch.bind(root),wait=ms=>new Promise(r=>setTimeout(r,ms)),now=Date.now,maxWaitMs=300000}={}){
   const started=now();let restarts=0;
   const submit=()=>fetchImpl(url,{method:'POST',headers:{'Content-Type':'application/json','x-plot207-background':'1'},body:JSON.stringify(body)});
-  let response=await submit(),data=await readJson(response);
+  const safeAnalysis=['/api/sportybet/auto-pick','/api/sportybet/analyze-code'].includes(url);
+  const submitAnalysis=async()=>{let response=await submit(),data=await readJson(response);if(safeAnalysis&&response.status===503&&data.code==='ANALYSIS_STORAGE_UNAVAILABLE'){await wait(1500);response=await submit();data=await readJson(response);}return {response,data};};
+  let {response,data}=await submitAnalysis();
   while(true){
   if(response.status!==202)return {response,data};
   const path=String(data.statusUrl||'');if(!/^\/api\/sportybet\/analysis-jobs\/[a-f0-9-]{36}$/.test(path))throw Error('The analyser returned an invalid job reference. Please retry.');
   let failures=0,restart=false;
   while(now()-started<maxWaitMs){await wait(1000);try{response=await fetchImpl(path,{cache:'no-store'});data=await readJson(response);if(response.status===202){failures=0;continue;}if(['/api/sportybet/auto-pick','/api/sportybet/analyze-code'].includes(url)&&restarts<1&&['ANALYSIS_JOB_NOT_FOUND','ANALYSIS_INTERRUPTED'].includes(data.code)&&[404,410].includes(response.status)){restart=true;break;}if(response.status>=500&&data.code!=='ANALYSIS_TIMEOUT'&&data.code!=='ANALYSIS_FAILED'&&data.code!=='ANALYSIS_NO_RESULT'){if(++failures<8)continue;}return {response,data};}catch(e){if(++failures>=8)throw e;}}
-  if(restart){restarts++;response=await submit();data=await readJson(response);continue;}
+  if(restart){restarts++;({response,data}=await submitAnalysis());continue;}
   throw Error('The analyser is still taking too long. No booking was submitted. Please try again with fewer sports or markets.');
   }
  }
