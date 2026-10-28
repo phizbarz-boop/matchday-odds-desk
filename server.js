@@ -3635,28 +3635,34 @@ const publicCacheJob=createWatSlotJob({namespace:'sportybet:public-refresh',getR
 const publicCacheScheduler=createWatScheduler({name:'SportyBet public refresh',times:['06:30','12:30','17:30'],runJob:publicCacheJob,
   enabled:!['false','0','off'].includes(String(process.env.SPORTYBET_PUBLIC_CACHE_ENABLED||'true').toLowerCase()),maxRunMilliseconds:3300000});
 const {PLANS:FLOOR_PLANS,runFloorPicks,resolveFloorSlot}=require('./lib/telegramFloorPicks');
-const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>runFloorPicks({
+const floorDeps={
  now:()=>new Date(),
- loadPool:({signal})=>withPublicSportyRequest(async()=>{
-  const options={sportScope:'all',marketHours:168,minProbability:0,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'};
+ loadPool:({signal,hours=168})=>withPublicSportyRequest(async()=>{
+  const options={sportScope:'all',marketHours:hours,minProbability:0,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'};
   const rows=await loadAutoCandidates(options);
-  // Bulk goal-kick reads cover the board even when event-detail enrichment is unavailable.
-  const specialty=await Promise.allSettled([loadAutoCandidates({...options,includeAllMarkets:false,betTypes:['goalkicks_under155','goalkicks_under165']}),loadAutoCandidates({...options,includeAllMarkets:false,betTypes:require('./lib/cornerMarkets').IDS}),require('./lib/streakGoalFeed').collectStreakGoalCandidates({hours:168,minProbability:70,minEdge:-100,signal}),loadAutoCandidates({...options,includeAllMarkets:false,betTypes:require('./lib/shotsOnTargetMarkets').IDS})]);
-  for(let i=0;i<specialty.length;i++)if(specialty[i].status==='rejected'&&!rows.some(c=>(i===0?['goalkicks_under155','goalkicks_under165']:i===1?require('./lib/cornerMarkets').IDS:i===2?['streak_3_no']:require('./lib/shotsOnTargetMarkets').IDS).includes(c.betType)))throw specialty[i].reason;
+  const specialty=await Promise.allSettled([loadAutoCandidates({...options,includeAllMarkets:false,betTypes:require('./lib/cornerMarkets').IDS}),require('./lib/streakGoalFeed').collectStreakGoalCandidates({hours,minProbability:70,minEdge:-100,signal}),loadAutoCandidates({...options,includeAllMarkets:false,betTypes:require('./lib/shotsOnTargetMarkets').IDS})]);
   const keys=new Set(rows.map(sportySelectionKey));for(const result of specialty)if(result.status==='fulfilled')for(const c of result.value)if(!keys.has(sportySelectionKey(c))){rows.push(c);keys.add(sportySelectionKey(c));}
   if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');
   const gapRows=await loadAutoCandidates({...options,winnerGapOnly:true,includeAllMarkets:false,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});
-  const winnerFeed=await require('./lib/goalKickFeed').collectFootballStatMarkets({marketIds:['1'],hours:168,signal,source:'SportyBet public winner prices'});
+  const winnerFeed=await require('./lib/goalKickFeed').collectFootballStatMarkets({marketIds:['1'],hours,signal,source:'SportyBet public winner prices'});
   const qualified=new Set(gapRows.map(sportySelectionKey));return require('./lib/sportyH2h').checkCandidates(require('./lib/telegramSmallGap').annotateSmallGap(rows.map(c=>({...c,winnerGapQualified:qualified.has(sportySelectionKey(c))})),winnerFeed.rows),{signal});
  },{signal}),
  validate:async(selections,{signal,plan})=>{
-  const fresh=await require('./lib/sportyH2h').checkCandidates(await validatePublicSelections(selections,{signal}),{signal});if(!plan.winnerGapOnly)return fresh;
+  const fresh=await require('./lib/sportyH2h').checkCandidates(await validatePublicSelections(selections,{signal}),{signal});if(plan.winnerGapMaxOne||plan.winnerGapBelowOne||plan.winnerGapAboveEight){const feed=await require('./lib/goalKickFeed').collectFootballStatMarkets({marketIds:['1'],hours:plan.finishWithinHours||168,signal,source:'SportyBet fresh winner gap verification'});return require('./lib/telegramSmallGap').annotateSmallGap(fresh,feed.rows);}if(!plan.winnerGapOnly)return fresh;
   return withPublicSportyRequest(async()=>{const rows=await loadAutoCandidates({sportScope:'all',marketHours:168,minProbability:70,minEdge:-100,includeAllMarkets:false,liveMode:'prematch',winnerGapOnly:true,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});const keys=new Set(rows.map(sportySelectionKey));return fresh.map(c=>({...c,winnerGapQualified:keys.has(sportySelectionKey(c))}));},{signal});
  },book:selections=>bookBet(selections),send:sendTelegramMessage,
  saveCode:(redis,dateKey,code)=>saveTelegramDailyCodes(redis,dateKey,{codes:[code]}),track:trackTelegramSlip,updateTrack:updateTrackedTicket
-},ctx)});
+};
+const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>runFloorPicks(floorDeps,ctx)});
+
 const floorScheduler=createWatScheduler({name:'Telegram probability floors',times:['07:00','18:00'],runJob:floorJob,
  enabled:String(process.env.TELEGRAM_FLOOR_PICKS_ENABLED||'true')!=='false',configured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),catchupMinutes:120});
+const threeHourSafe=require('./lib/telegramThreeHourSafe');
+const threeSafeJob=createWatSlotJob({namespace:'telegram:three-safe:v1',getRedis,run:ctx=>runFloorPicks({...floorDeps,plans:threeHourSafe.PLANS,namespace:'telegram:three-safe:v1',buildPack:threeHourSafe.buildPack,loadPool:options=>floorDeps.loadPool({...options,hours:3})},ctx)});
+const threeSafeScheduler=createWatScheduler({name:'Telegram 3-hour safe variations',times:threeHourSafe.TIMES,runJob:threeSafeJob,enabled:String(process.env.TELEGRAM_THREE_HOUR_SAFE_ENABLED||'true')!=='false',configured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),catchupMinutes:30});
+const threeSafeRequests=createTelegramRunRequests({name:'three-hourly-picks',authorize:authorizeTelegramJob,getRedis});
+app.post('/api/telegram/three-hourly-picks',express.json(),threeSafeRequests.wrap(async(req,res)=>{let slot;try{slot=threeHourSafe.resolveSlot(req.headers);}catch(e){return res.status(400).json({error:e.message});}await res.jobStage?.('building_three_hour_variations');const result=await threeSafeJob({...slot,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);}));
+app.get('/api/telegram/three-hourly-picks/run-status/:runId',threeSafeRequests.status);
 const floorRequests=createTelegramRunRequests({name:'probability-picks',authorize:authorizeTelegramJob,getRedis});
 app.post('/api/telegram/probability-picks',express.json(),floorRequests.wrap(async(req,res)=>{
  let slot;try{slot=resolveFloorSlot(req.headers);}catch(e){return res.status(400).json({error:e.message});}
@@ -3668,7 +3674,7 @@ app.get('/api/telegram/probability-picks/run-status/:runId',floorRequests.status
 registerTelegramPerformanceRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runReport:runTelegramPerformanceReport});
 
 // All hourly and three-hourly automated ticket endpoints are retired.
-for(const name of ['daily-picks','next-12h-picks','hourly-picks','three-hourly-picks']){
+for(const name of ['daily-picks','next-12h-picks','hourly-picks']){
  app.post('/api/telegram/'+name,express.json(),(req,res)=>{if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});return res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});});
  app.get('/api/telegram/'+name+'/run-status', (req,res)=>{if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});return res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});});
  app.get('/api/telegram/'+name+'/run-status/:runId',(req,res)=>{if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});return res.status(410).json({sent:false,ticketsSent:0,reason:'automatic_telegram_picks_removed'});});
@@ -3687,7 +3693,7 @@ app.get('/api/telegram/quick-cash/run-status',(req,res)=>{
 app.get('/api/telegram/status', (req, res) => {
   res.json({
     configured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID && process.env.TELEGRAM_JOB_SECRET),
-    targets: FLOOR_PLANS,
+    targets: FLOOR_PLANS,threeHourlyTargets:threeHourSafe.PLANS,
     sportScope: 'all',
     rules: {
       automaticPicks:{enabled:true,plans:FLOOR_PLANS,maxSelections:50,fixedOddsTarget:false,betTypeSeparation:'none; one selection per match within a ticket',times:['07:00','18:00']},
@@ -3697,7 +3703,7 @@ app.get('/api/telegram/status', (req, res) => {
     maxSelections: Math.min(50, Math.max(1, parseInt(process.env.TELEGRAM_MAX_SELECTIONS || '50', 10))),
     scheduler:floorScheduler.status(),
     hourlyScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},
-    next12hScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},threeHourlyScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},
+    next12hScheduler:{enabled:false,running:false,reason:'automatic_telegram_picks_removed'},threeHourlyScheduler:threeSafeScheduler.status(),
     next12hRules:{enabled:false,targets:[],reason:'automatic_telegram_picks_removed'},
     aiBot: {
       enabled: String(process.env.TELEGRAM_AI_ENABLED || 'true').toLowerCase() !== 'false',
@@ -3911,10 +3917,10 @@ app.post('/api/refresh', express.json(), (req, res) => {
 
 const httpServer=app.listen(PORT, () => {
   console.log(`Matchday site listening on :${PORT}`);
-  publicCacheScheduler.start();floorScheduler.start();
+  publicCacheScheduler.start();floorScheduler.start();threeSafeScheduler.start();
   console.log(`[SportyBet access] Public data reads; booking mode=${sportyDirect.sessionStatus().bookingMode}`);
 });
-const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();};
+const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();threeSafeScheduler.stop();};
 httpServer.once('close',stopSchedulers);
 process.once('SIGTERM',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});
 process.once('SIGINT',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});

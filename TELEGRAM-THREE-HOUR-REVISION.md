@@ -1,0 +1,13 @@
+# Telegram ticket revision
+
+Daily picks still run at 07:00 and 18:00 WAT. All remaining long-shot tickets now cap at 20 selections. Removed the generic football, basketball, hockey, handball and volleyball 10-game tickets; tennis's 10-game ticket remains. Removed the dedicated Goal Kicks Under 15.5/16.5 tickets and excluded those two types from automated Telegram selection. Removed the separate Corners Under 12.5 short and long pair; the combined Corners Under 11.5/12.5 plans remain. These changes do not remove website or interactive bot markets.
+
+Added daily Over 0.5 and Over 1.5 football plans, each up to 20 games, a 70% per-selection floor and a strict home/away win-odds gap below 1. The gap is recomputed from current winner prices during validation. Existing unrelated gap rules and winner-only plans remain.
+
+New three-hour batch: four distinct variations targeting combined odds of at least 3, with 6 to 10 selections and a 70% floor. Ranking uses the existing bounded model-probability search, not a promise of optimal or calibrated accuracy. Both selected markets and probabilities are validated before booking. Variations are not identical but may share some matches. No handicap or the removed goal-kick types are selected.
+
+WAT schedule: 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00 and 21:00. The server scheduler and GitHub workflow share Redis slot locks and per-ticket checkpoints. The new workflow is Plot207 Four Safe 3 Odds Variations; manual runs use separate testing IDs. Codes are saved to Today's Codes and normal tracking. Ambiguous bookings or sends are not automatically duplicated.
+
+The three-hour window is fixed when the pack is built. Matches must be prematch and scheduled or estimated to finish before that deadline. Explicit finish timestamps take priority. Without them, conservative duration allowances are used: football 135 minutes, basketball 150, handball 120, hockey/volleyball 180. Tennis without an explicit finish time is excluded because its duration is unbounded. These are estimates and cannot guarantee actual completion times. A variation that cannot satisfy the target, minimum count, floor or finish window is skipped with an explanation; games are never added from later windows to fill it.
+
+Both workflows require the existing TELEGRAM_JOB_SECRET, TELEGRAM_BOT_TOKEN/CHAT_ID and functioning shared Redis. TELEGRAM_THREE_HOUR_SAFE_ENABLED=false disables only the server's new clock. The app does not bypass the Upstash bandwidth limit; restore database availability first. This update does not reduce your existing daily probability floor.

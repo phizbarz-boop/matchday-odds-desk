@@ -23,6 +23,6 @@ test('absent history and nonnumeric metrics never fabricate directional support'
 });
 test('Telegram automatic plans exclude a conflicting high-probability period selection',()=>{
  const rows=Array.from({length:11},(_,i)=>{const c={...row,eventId:'sr:match:'+(i+1),probability:80,kickoffUtc:'2026-10-26T18:00:00Z'};return assess(c,{...evidence(i===0?77.5:90,2),eventId:c.eventId},now);});
- const plan=require('../lib/telegramFloorPicks').buildPack(rows,{now}).plans.find(p=>p.id==='basketball70short');assert.equal(plan.selections.length,10);assert.ok(plan.selections.every(c=>c.eventId!=='sr:match:1'));
+ const plan=require('../lib/telegramFloorPicks').buildPack(rows,{now}).plans.find(p=>p.id==='basketball70long');assert.equal(plan.selections.length,10);assert.ok(plan.selections.every(c=>c.eventId!=='sr:match:1'));
 });
 test('a named team total cannot be rejected using a combined match average',()=>{const c={...row,sport:'Football',home:'Sporting',marketDesc:'Sporting Over/Under',outcomeDesc:'Under',specifier:'total=1.5'},e={...evidence(100,10),home:'Sporting',sport:'Football',metrics:{goals:4}};const r=assess(c,e,now);assert.equal(r.h2hCheck.allowed,true);assert.equal(r.h2hCheck.status,'checked_no_comparable_metric');});
