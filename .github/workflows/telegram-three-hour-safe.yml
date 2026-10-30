@@ -1,4 +1,4 @@
-name: Plot207 Four Safe 3 Odds Variations
+name: Plot207 Two Unique 3 Odds Variations
 on:
   schedule:
     - cron: '0 2,5,8,11,14,17,20,23 * * *'
@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - name: Generate four three-hour variations
+      - name: Generate two three-hour variations
         env:
           TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
           MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
