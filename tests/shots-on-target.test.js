@@ -19,8 +19,7 @@ test('direct public collection uses verified full-match ID and filters the raw w
 test('Telegram shots tickets use 20-game long-shot caps with distinct Under and Over gap rules',()=>{
  const {PLANS,buildPack}=require('../lib/telegramFloorPicks'),now=new Date('2026-10-24T06:00:00Z');
  const rows=[];for(let i=0;i<40;i++)for(const type of S.IDS)rows.push({...pair(type===S.IDS[0]?13.5:type===S.IDS[1]?12.5:4.5,type===S.IDS[2])[type===S.IDS[2]?0:1],eventId:'E'+i,betType:type,probability:80,winnerGapMaxOneQualified:type!==S.IDS[2],winnerGapAboveEightQualified:type===S.IDS[2]});
- const plans=buildPack(rows,{now}).plans.filter(p=>p.id.startsWith('shots'));assert.equal(plans.length,2);assert.deepEqual(plans.map(p=>p.selections.length),[20,20]);for(const p of plans){assert.equal(p.floor,70);assert.equal(new Set(p.selections.map(c=>c.eventId)).size,p.maxGames);assert.ok(p.selections.every(c=>p.betTypes.includes(c.betType)));if(p.id.startsWith('shotsUnder'))assert.equal(p.winnerGapMaxOne,true);else assert.equal(p.winnerGapAboveEight,true);}
- assert.ok(PLANS.filter(p=>p.longShot&&!p.id.startsWith('shots')).every(p=>p.maxGames===20));
+ const plans=buildPack(rows,{now}).plans.filter(p=>p.id.startsWith('shots'));assert.equal(plans.length,0);assert.ok(PLANS.filter(p=>p.longShot).every(p=>p.maxGames===20));
 });
 test('website removes the throw-in checkbox and offers three exact selectable shots markets',()=>{
  const fs=require('node:fs'),vm=require('node:vm'),html=fs.readFileSync(require('node:path').join(__dirname,'../public/index.html'),'utf8');
