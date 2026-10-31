@@ -3640,7 +3640,9 @@ const floorDeps={
  now:()=>new Date(),
  loadPool:({signal,hours=168})=>withPublicSportyRequest(async()=>{
   const options={sportScope:'all',marketHours:hours,minProbability:0,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'};
-  const rows=await loadAutoCandidates(options);
+  let rows=await loadAutoCandidates(options);
+  let hockeyRows=[];try{const hockeyTotals=await loadSportyBetMarket('totals','hockey',{hours,forceRefresh:true});hockeyRows=hockeyTotals.rows||[];}catch(error){console.warn('Telegram hockey highest Under unavailable:',String(error.code||'source_unavailable'));}
+  rows=require('./lib/telegramHockeyUnder').annotate(rows,hockeyRows);
   const specialty=await Promise.allSettled([loadAutoCandidates({...options,includeAllMarkets:false,betTypes:['oneup']}),require('./lib/streakGoalFeed').collectStreakGoalCandidates({hours,minProbability:70,minEdge:-100,signal}),require('./lib/doubleChanceUnderMarkets').collect({...options,hours,signal,minProbability:60}).then(p=>p.probabilityRows||p.rows||[])]);
   const keys=new Set(rows.map(sportySelectionKey));for(const result of specialty)if(result.status==='fulfilled')for(const c of result.value)if(!keys.has(sportySelectionKey(c))){rows.push(c);keys.add(sportySelectionKey(c));}
   if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');

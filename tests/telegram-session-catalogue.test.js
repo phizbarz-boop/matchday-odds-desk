@@ -6,7 +6,7 @@ const now=new Date('2026-10-31T08:00:00Z');
 const base={eventId:'e',sport:'football',kickoffUtc:'2026-11-01T12:00:00Z',odds:1.3,probability:80,outcomeId:'1'};
 test('long shots exclude totals, corners, shots and handicaps at fresh validation',()=>{
  for(const p of PLANS.filter(p=>p.longShot))for(const c of [{betType:'over25'},{betType:'basketball_under'},{betType:'offered:18',marketDesc:'1st Half - Over/Under'},{betType:'offered:19',specifier:'total=12.5'},{betType:'corners_under125'},{betType:'shots_target_under135'},{betType:'ah_0'}])assert.equal(eligible({...base,...c},p,now,'2026-10-31',new Set()),false);
- assert.ok(!PLANS.some(p=>['tennis','hockey'].includes(p.sport)));
+ assert.ok(!PLANS.some(p=>p.sport==='tennis'||p.sport==='hockey'&&!p.hockeyHighestUnder));
 });
 test('combo tickets preserve exact type, 60 floor, three odds and at most six games',()=>{
  for(const type of ['dc_under45','home_away_under45']){
