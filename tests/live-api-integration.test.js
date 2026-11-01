@@ -82,9 +82,9 @@ test('all league chips selected leaves the live analyser open to other SportyBet
   const html=readFileSync(path.join(__dirname,'../public/index.html'),'utf8');
   const source=html.match(/function autoLeagueFilter\(\)\{[^\n]+\}/)?.[0];
   assert.ok(source);
-  const context={LEAGUES:['League A','League B'],state:{leagues:new Set(['League A','League B'])}};
+  const nodes={'auto-league-mode':{value:'all'},'auto-league-list':{selectedOptions:[{value:'League A'}]}};const context={document:{getElementById:id=>nodes[id]}};
   vm.createContext(context);vm.runInContext(source,context);
   assert.equal(vm.runInContext('autoLeagueFilter()',context),null);
-  context.state.leagues.delete('League B');
+  nodes['auto-league-mode'].value='selected';
   assert.deepEqual(Array.from(vm.runInContext('autoLeagueFilter()',context)),['League A']);
 });

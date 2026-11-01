@@ -42,8 +42,8 @@ test('hourly removal preserves historical tickets, public results and interactiv
     assert.equal(report.body.report.period.stake,400);assert.equal(report.body.report.period.pendingStake,0);
     assert.equal(report.body.report.period.returns,400);assert.equal(report.body.report.period.profit,0);
     const state=await rpc('state');assert.equal(state.sessionChecks,0);assert.equal(state.bookings.length,0);
-    const text=state.messages.at(-1);assert.match(text,/12-HOUR RESULTS/);assert.match(text,/₦100 per sent ticket/);
-    assert.match(text,/QC FOOTBALL · QC-TEST-1/);assert.match(text,/Closest shot: QC FOOTBALL · QC-TEST-2/);
+    const text=state.messages.at(-1);assert.match(text,/12-HOUR RESULTS/);assert.match(text,/₦100 per ticket/);
+    assert.doesNotMatch(text,/QC-TEST-1|QC-TEST-2|Closest shot/);assert.match(text,/Won 2 · Lost 1/);
     const repeat=await post('/api/telegram/performance-report',{}, {'x-telegram-job-secret':'qc-secret'});
     assert.equal(repeat.body.reason,'already_reported_this_period');assert.equal((await rpc('state')).messages.length,state.messages.length);
   });

@@ -1,0 +1,24 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),M=require('../lib/footballExtraMarkets');
+const row=(name,side='Over',line=.5)=>({sport:'Football',eventId:'E',marketId:'900999',marketDesc:name,specifier:'total='+line,outcomeId:side==='Over'?'12':'13',outcomeDesc:side+' '+line,odds:side==='Over'?1.25:4.5});
+test('exact home/away offsides and first-five-minute goals; other lines and scopes rejected',()=>{
+ assert.equal(M.betTypeFor(row('Away Team Offsides')),M.IDS[0]);assert.equal(M.betTypeFor(row('Home Team - Offsides')),M.IDS[1]);assert.equal(M.betTypeFor(row('Total Goals Over/Under - 1-5 Minutes','Under')),M.IDS[2]);
+ for(const c of [row('Total Goals Over/Under','Under'),row('Total Goals Over/Under - 6-10 Minutes','Under'),row('1st Half Away Team Offsides'),row('Away Team Offsides','Over',1.5),row('Total Goals Over/Under - 1-5 Minutes','Over'),{...row('Away Team Offsides'),live:true}])assert.equal(M.betTypeFor(c),null);
+});
+test('complete prices model the exact selection; missing opposite price is not scored',()=>{
+ const {modelOfferedMarkets}=require('../lib/offeredMarketModel');for(const name of ['Away Team Offsides','Home Team Offsides','Total Goals Over/Under - 1-5 Minutes']){
+ const rows=[row(name),row(name,'Under')],out=modelOfferedMarkets(rows,{minProbability:0,minEdge:-100}).candidates;
+ const desired=out.find(c=>M.IDS.includes(c.betType));assert.ok(desired);assert.equal(desired.marketId,'900999');assert.equal(desired.specifier,'total=0.5');assert.ok(desired.probability>0&&desired.probability<100);assert.equal(desired.independentModel,false);
+ assert.equal(modelOfferedMarkets([rows[0]],{minProbability:0,minEdge:-100}).candidates.length,0);
+ }
+});
+test('website exposes all three types and independent multi-league controls',()=>{const fs=require('node:fs'),s=fs.readFileSync(require.resolve('../public/index.html'),'utf8');for(const id of M.IDS)assert.ok(s.includes(id));assert.ok(s.includes('id="auto-league-list" multiple'));assert.ok(s.includes('auto-league-mode'));assert.ok(s.includes("fetch('/api/sportybet/leagues')"));});
+test('specialty settlement never substitutes full-time goals for offsides or first-five-minute goals',()=>{const {settleSelection}=require('../lib/liveSettlement');for(const betType of M.IDS){const r=settleSelection({...row('Total Goals Over/Under - 1-5 Minutes','Under'),betType},{eventId:'E',matchStatus:'FT',homeScore:0,awayScore:0},null);assert.equal(r.status,'pending');}});
+test('unselected new markets cannot leak into extra-market selections',()=>{const {expandedSelectionAllowed}=require('../lib/streakGoalModel');for(const betType of M.IDS){assert.equal(expandedSelectionAllowed({betType},['home_win'],true),false);assert.equal(expandedSelectionAllowed({betType},[betType],true),true);}});
+test('compact report remains one message even for thousands of tickets',()=>{const {performanceText,buildPerformanceReport}=require('../lib/telegramPerformance');const tickets=Array.from({length:1000},(_,i)=>({shareCode:'C'+i,label:'L'.repeat(500),createdAt:'2026-11-01T07:00:00Z',status:'lost',lastStatusDetail:{returnMultiplier:0,complete:true,totalLegs:1,counts:{won:0,lost:1,push:0,half_won:0,half_lost:0},legDetails:[{home:'SECRET HOME',away:'SECRET AWAY',status:'lost',eventId:'E'+i,marketId:'1',outcomeId:'1',betType:'home_win',sport:'Football'}]}}));const text=performanceText(buildPerformanceReport(tickets,{start:'2026-11-01T00:00:00Z',end:'2026-11-01T12:00:00Z'}));assert.ok(text.length<=1800);assert.ok(!text.includes('SECRET'));assert.ok(text.includes('Tickets: 1000'));});
+test('final candidate pipeline enforces one/multiple/all/empty leagues across sports',async()=>{
+ const fs=require('node:fs'),vm=require('node:vm'),source=fs.readFileSync(require.resolve('../server'),'utf8'),start=source.indexOf('async function prepareAutoCandidatePool('),end=source.indexOf('\n}\n',start)+2;
+ const rows=[{eventId:'A',sport:'Football',tournament:'League A',probability:80,odds:1.2},{eventId:'B',sport:'Basketball',tournament:'League B',probability:80,odds:1.2},{eventId:'C',sport:'Football',tournament:'League C',probability:80,odds:1.2}];
+ const context={normalizeSportScopes:()=>['football','basketball'],normalizeLiveMode:x=>x,loadAutoCandidates:async()=>rows,require:()=>({checkCandidates:async x=>x}),sportyRequest:()=>null,passesRedFlagFilter:()=>true};vm.createContext(context);vm.runInContext(source.slice(start,end)+';this.prepare=prepareAutoCandidatePool;',context);
+ assert.equal((await context.prepare({leagues:null})).candidates.length,3);assert.deepEqual(Array.from((await context.prepare({leagues:['League B']})).candidates).map(c=>c.eventId),['B']);assert.equal((await context.prepare({leagues:['League A','League B']})).candidates.length,2);assert.equal((await context.prepare({leagues:[]})).candidates.length,0);
+});

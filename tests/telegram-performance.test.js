@@ -31,19 +31,19 @@ test('closest and worst compare completed losing tickets; winners and winning se
   const report=buildPerformanceReport(rows,reportWindow(new Date('2026-10-06T11:10:00Z')));
   assert.equal(report.period.tickets,4);assert.equal(report.cumulative.tickets,6);assert.equal(report.closest.shareCode,'CLOSE');assert.equal(report.worst.shareCode,'WORST');
   assert.equal(report.wonTickets[0].shareCode,'WIN');assert.equal(report.winningGames.length,1);assert.equal(report.unknownDeliveries,1);
-  const text=performanceText(report);assert.match(text,/Closest shot: QC FOOTBALL · CLOSE/);assert.match(text,/Worst: QC FOOTBALL · WORST/);
-  assert.match(text,/Alpha vs Beta/);assert.match(text,/ROI uses settled, priced tickets only/);
+  const text=performanceText(report);assert.ok(text.length<=1800);assert.doesNotMatch(text,/Closest shot|Worst:/);
+  assert.doesNotMatch(text,/Alpha vs Beta/);assert.match(text,/Settled stake/);
 });
 test('no confirmed results cannot imply a 100% loss',()=>{
   const report=buildPerformanceReport([slip('P','pending',null)],reportWindow(new Date('2026-10-06T11:10:00Z')));
   assert.equal(report.period.profit,0);assert.equal(report.period.pendingStake,100);
-  assert.match(performanceText(report),/ROI: pending/);assert.doesNotMatch(performanceText(report),/ROI: -100/);
+  assert.match(performanceText(report),/ROI pending/);assert.doesNotMatch(performanceText(report),/ROI -100/);
 });
 test('a ticket from an earlier window that settles now is still reported by code',()=>{
   const row=slip('EARLIER','won',2,{postedAt:'2026-10-05T04:00:00Z'});
   const report=buildPerformanceReport([row],reportWindow(new Date('2026-10-06T11:10:00Z')),['EARLIER']);
   assert.equal(report.period.tickets,0);assert.equal(report.cumulative.profit,100);
-  assert.match(performanceText(report),/EARLIER TICKETS NOW UPDATED[\s\S]*EARLIER — WON/);
+  assert.doesNotMatch(performanceText(report),/EARLIER — WON/);assert.match(performanceText(report),/Games:/);
 });
 test('atomic ticket storage keeps multiple posted copies of the same code and imports old records once',async()=>{
   const redis=fakeRedis();await redis.set('telegram:tracked-slips:v1',JSON.stringify([slip('OLD','pending',null)]));
