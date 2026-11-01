@@ -31,3 +31,11 @@ test('Telegram fresh gap validation prevents stale Multi booking and successful 
  await F.runFloorPicks(deps,{redis:fakeRedis(),dateKey:'2026-11-01',slotKey:'bad',slotTime:'07:00'});assert.equal(booked,0);
  deps.validate=async rows=>M.annotate(rows,winners(.5));const ctx={redis:fakeRedis(),dateKey:'2026-11-01',slotKey:'good',slotTime:'07:00'};await F.runFloorPicks(deps,ctx);await F.runFloorPicks(deps,ctx);assert.equal(booked,1);assert.equal(saved,1);
 });
+test('website Multi honors requested counts up to fifty while Telegram stays at twenty',()=>{
+ const rows=Array.from({length:60},(_,i)=>c('under45','E'+i,80-i/10));
+ for(const count of [4,10,20,30,40,50])assert.equal(M.ticket(rows,{now,maxSelections:count}).selections.length,count);
+ assert.equal(M.ticket(rows,{now,maxSelections:70}).selections.length,50);
+ const plan=F.PLANS.find(p=>p.multi);assert.equal(plan.maxGames,20);assert.equal(F.buildPack(rows,{now}).plans.find(p=>p.multi).selections.length,20);
+ const fs=require('node:fs'),html=fs.readFileSync(require.resolve('../public/index.html'),'utf8');const configure=html.split('\n').find(l=>l.startsWith('function configureMulti()'));assert.ok(!configure.includes("getElementById('auto-max').value="));
+ const server=fs.readFileSync(require.resolve('../server'),'utf8');assert.ok(server.includes('maxSelections:multiMaxSelections,excludedTickets:excluded'));
+});

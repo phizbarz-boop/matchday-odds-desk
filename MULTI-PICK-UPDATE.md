@@ -15,3 +15,5 @@ Goals Minutes 1–5 Under 0.5: 0–0.50 (interpretation of the final abbreviated
 Ranges include endpoints unless explicitly above. Highest probability per fixture wins ranking; no quota per rule. Actual offered market/outcome/specifier IDs and odds remain unchanged. Fresh Telegram booking validation recomputes every rule from newly read 1X2 prices; losing eligibility cannot be retained via saved flags. Unavailable recipe markets may yield fewer than 20 selections. Other Telegram plans retain their existing settings and exclusions.
 
 Tests use mocked data; no live booking or Telegram send was submitted.
+
+Correction: website Multi follows Auto Analyse’s Maximum selections setting, up to 50, including regeneration. Selecting Multi preserves the current game-count setting. Telegram Multi remains capped at 20.

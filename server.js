@@ -2252,9 +2252,10 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
       const multi=require('./lib/multiPick');let excluded;try{excluded=require('./lib/ticketVariation').exclusions(body.excludedTicketSignatures);}catch(error){return res.status(400).json({error:error.message});}
       const leagues=Array.isArray(body.leagues)?body.leagues.map(String):null;
       const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:['multi'],minProbability:0,minEdge:-25,leagues,todayOnly:body.todayOnly===true,liveMode:'prematch',includeAllMarkets:true});
-      const result=multi.ticket(prepared.candidates,{maxSelections:20,excludedTickets:excluded});
+      const multiMaxSelections=Math.max(1,Math.min(50,parseInt(body.maxSelections,10)||20));
+      const result=multi.ticket(prepared.candidates,{maxSelections:multiMaxSelections,excludedTickets:excluded});
       if(!result.selections.length)return res.status(404).json({error:excluded.size?'No other Multi ticket variation is available under these rules.':'No available games matched the Multi market and odds-gap rules.',code:excluded.size?'NO_OTHER_VARIATION':'NO_MULTI_GAMES'});
-      return res.json({...result,sportScope:'football',sports:['football'],betTypes:['multi'],minProbability:0,minEdge:0,maxSelections:20,liveMode:'prematch',dataFetchedAt:prepared.diagnostics.dataFetchedAt,marketCoverage:prepared.diagnostics.marketCoverage,h2hCoverage:prepared.diagnostics.h2hCoverage,multi:true});
+      return res.json({...result,sportScope:'football',sports:['football'],betTypes:['multi'],minProbability:0,minEdge:0,maxSelections:multiMaxSelections,liveMode:'prematch',dataFetchedAt:prepared.diagnostics.dataFetchedAt,marketCoverage:prepared.diagnostics.marketCoverage,h2hCoverage:prepared.diagnostics.h2hCoverage,multi:true});
     }
     const targetOdds = Math.min(100000, Math.max(1.05, Number(body.targetOdds) || 5));
     // Website Auto Builder probability is user-adjustable.
