@@ -981,12 +981,12 @@ app.get('/api/corners/diagnostics',async(req,res)=>{
 // Session credentials never reach the browser.
 // Supported football values: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, oneup. O/U 2.5 is intentionally not used by the Auto Builder.
 app.get('/api/sportybet/leagues',async(req,res)=>{
- try{const catalog=await publicCache.read();const rows=Object.entries(catalog?.sports||{}).flatMap(([sport,data])=>[...(data.fixtures||[]),...(data.rows||[])].map(c=>({sport,name:String(c.tournament||c.league||'')}))).filter(c=>c.name);res.json({leagues:[...new Map(rows.map(c=>[c.sport+'|'+c.name,c])).values()].sort((a,b)=>a.name.localeCompare(b.name))});}catch(error){res.status(503).json({error:'League list temporarily unavailable'});}
+ try{const catalog=await publicCache.read();const rows=Object.entries(catalog?.sports||{}).filter(([sport])=>['football','basketball'].includes(sport)).flatMap(([sport,data])=>[...(data.fixtures||[]),...(data.rows||[])].map(c=>({sport,name:String(c.tournament||c.league||'')}))).filter(c=>c.name);res.json({leagues:[...new Map(rows.map(c=>[c.sport+'|'+c.name,c])).values()].sort((a,b)=>a.name.localeCompare(b.name))});}catch(error){res.status(503).json({error:'League list temporarily unavailable'});}
 });
 app.get('/api/sportybet/odds', async (req, res) => {
   try {
     const kind = String(req.query.market || '1x2').toLowerCase();
-    if (!['football_extra','dc_under45', 'shots_on_target', '1x2', 'gg', 'dc', 'dnb', 'ou05', 'home_ou05', 'away_ou05', 'home_ou45', 'away_ou45', 'ou15', 'ou45', 'ah', 'oneup', 'corners', 'first_half_team_corners'].includes(kind)) {
+    if (!['football_multi','football_extra','dc_under45', 'shots_on_target', '1x2', 'gg', 'dc', 'dnb', 'ou05', 'home_ou05', 'away_ou05', 'home_ou45', 'away_ou45', 'ou15', 'ou45', 'ah', 'oneup', 'corners', 'first_half_team_corners'].includes(kind)) {
       return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou05, home_ou05, away_ou05, home_ou45, away_ou45, ou15, ou45, ah, oneup, corners, first_half_team_corners' });
     }
     const isTeamGoal = ['home_ou05','away_ou05','home_ou45','away_ou45'].includes(kind);
@@ -994,7 +994,7 @@ app.get('/api/sportybet/odds', async (req, res) => {
     // taking the bookmaker's arbitrary first 12 events instead can display
     // zero rows even while the model has usable fixtures elsewhere.
     const opts = isTeamGoal && !sportyRequest() ? { fixtures:(await loadPredictions()).matches || [] } : {};
-    const payload = kind==='football_extra'?{rows:await withPublicSportyRequest(()=>require('./lib/footballExtraMarkets').collect({})),sport:'football',market:kind}:await loadSportyBetMarket(kind, 'football', opts);
+    const payload = kind==='football_multi'?{rows:await withPublicSportyRequest(()=>require('./lib/multiPick').collect({loadCandidates:loadAutoCandidates})),sport:'football',market:kind}:kind==='football_extra'?{rows:await withPublicSportyRequest(()=>require('./lib/footballExtraMarkets').collect({})),sport:'football',market:kind}:await loadSportyBetMarket(kind, 'football', opts);
     res.set('Cache-Control', 'no-store');
     res.json(payload);
   } catch (err) {
@@ -1395,7 +1395,7 @@ async function addLiveFootballModels(predictions, liveFootballPayloads, {buildCo
 }
 
 const AUTO_BET_TYPES_BY_SPORT = {
-  football: [...require('./lib/footballExtraMarkets').IDS,'oneup',...require('./lib/doubleChanceUnderMarkets').IDS,...require('./lib/shotsOnTargetMarkets').IDS,'throwins_highest_under','goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under','corners_under115','corners_under125','over25','under25','correct_score'],
+  football: ['multi',...require('./lib/footballExtraMarkets').IDS,'oneup',...require('./lib/doubleChanceUnderMarkets').IDS,...require('./lib/shotsOnTargetMarkets').IDS,'throwins_highest_under','goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under','corners_under115','corners_under125','over25','under25','correct_score'],
   basketball: [...require('./lib/basketballPeriodMarkets').IDS,'basketball_rebounds_highest_under','basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
   hockey: ['hockey_shots_highest_under','hockey_winner','hockey_over','hockey_under','hockey_handicap_home','hockey_handicap_away'],
   handball: ['handball_winner','handball_over','handball_under','handball_handicap_home','handball_handicap_away'],
@@ -1415,10 +1415,10 @@ function normalizeAutoBetTypesForSports(sports, betTypes) {
   // returning an empty candidate pool.
   const filtered = incoming.filter(id => compatible.has(id));
   if (filtered.length) return filtered;
-  return [...compatible];
+  return [...compatible].filter(id=>id!=='multi');
 }
 
-async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch', includeAllMarkets = null, winnerGapOnly = false, winnerGapMaxOne = false, winnerGapAboveEight = false } = {}) {
+async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, ignoreEdge = false, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch', includeAllMarkets = null, winnerGapOnly = false, winnerGapMaxOne = false, winnerGapAboveEight = false } = {}) {
   return withFreshSportyRequest(async()=>{
     // Discover and model public SportyBet data independently of booking login.
     if([winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight].filter(Boolean).length>1)throw Error('Choose only one winner odds gap filter');
@@ -1463,6 +1463,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
       const candidates=model.candidates.filter(c=>requestedBetTypes.has(c.betType)&&c.highestAvailableUnder===true);
       candidates.marketCoverage={...model.coverage,collectionErrors:scan.errors,scan:scan.coverage};candidates.sourceErrors=scan.errors;candidates.dataSource=scan.coverage.source;candidates.dataFetchedAt=scan.generatedAt;return candidates;
     }
+    if(Array.isArray(betTypes)&&betTypes.includes('multi'))return require('./lib/multiPick').collect({loadCandidates:loadAutoCandidates,hours:marketHours||168,leagues,signal:sportyRequest()?.signal});
     if(effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/footballExtraMarkets').IDS.includes(id))&&liveModeNorm==='prematch')return require('./lib/footballExtraMarkets').collect({hours:marketHours||168,leagues,minProbability,minEdge,betTypes:effectiveBetTypes,signal:sportyRequest()?.signal});
     const wantsAny = ids => !requestedBetTypes || ids.some(id => requestedBetTypes.has(id));
     const needF1x2 = wantsFootball && (wantsAny([...require('./lib/footballExtraMarkets').IDS,...require('./lib/doubleChanceUnderMarkets').IDS]) || gapFilterOn || wantsAny([...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS,'throwins_highest_under']) || wantsAny(['home_win','draw','away_win','dc_1x','dc_x2']));
@@ -1704,7 +1705,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
       tennisTotals,
       tennisHandicap,
       minProbability,
-      minEdge,
+      minEdge,ignoreEdge,
       leagues,
       sportScope: 'all',
       betTypes: effectiveBetTypes,
@@ -1819,7 +1820,7 @@ async function prepareAutoCandidatePool({
   const historyChecked=await require('./lib/sportyH2h').checkCandidates(sourceCandidates,{signal:sportyRequest()?.signal});
   const rawCandidates=historyChecked.filter(c=>c.h2hCheck?.allowed!==false&&Number(c.probability)>=probabilityFloor);
   for(const key of Object.keys(historyChecked))if(!/^\d+$/.test(key))rawCandidates[key]=historyChecked[key];
-  const leagueFiltered=leagues===null?rawCandidates:rawCandidates.filter(c=>leagues.includes(String(c.tournament||c.league||'')));
+  const leagueFiltered=leagues===null?rawCandidates:rawCandidates.filter(c=>!/^(football|soccer|basketball)$/i.test(String(c.sport||''))||leagues.includes(String(c.tournament||c.league||'')));
   const todayFiltered = todayOnly
     ? leagueFiltered.filter(c => isCandidateToday(c, { timeZone: 'Africa/Lagos' }))
     : leagueFiltered;
@@ -2247,6 +2248,14 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     const body = req.body || {};
     if(body.winnerGapMaxTwo===true)return res.status(400).json({error:'The odds gap ≤2 option was removed. Select odds gap above 8.00 instead.'});
     if([body.winnerGapOnly,body.winnerGapMaxOne,body.winnerGapAboveEight].filter(v=>v===true).length>1)return res.status(400).json({error:'Choose only one winner odds gap filter'});
+    if(Array.isArray(body.betTypes)&&body.betTypes.includes('multi')){
+      const multi=require('./lib/multiPick');let excluded;try{excluded=require('./lib/ticketVariation').exclusions(body.excludedTicketSignatures);}catch(error){return res.status(400).json({error:error.message});}
+      const leagues=Array.isArray(body.leagues)?body.leagues.map(String):null;
+      const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:['multi'],minProbability:0,minEdge:-25,leagues,todayOnly:body.todayOnly===true,liveMode:'prematch',includeAllMarkets:true});
+      const result=multi.ticket(prepared.candidates,{maxSelections:20,excludedTickets:excluded});
+      if(!result.selections.length)return res.status(404).json({error:excluded.size?'No other Multi ticket variation is available under these rules.':'No available games matched the Multi market and odds-gap rules.',code:excluded.size?'NO_OTHER_VARIATION':'NO_MULTI_GAMES'});
+      return res.json({...result,sportScope:'football',sports:['football'],betTypes:['multi'],minProbability:0,minEdge:0,maxSelections:20,liveMode:'prematch',dataFetchedAt:prepared.diagnostics.dataFetchedAt,marketCoverage:prepared.diagnostics.marketCoverage,h2hCoverage:prepared.diagnostics.h2hCoverage,multi:true});
+    }
     const targetOdds = Math.min(100000, Math.max(1.05, Number(body.targetOdds) || 5));
     // Website Auto Builder probability is user-adjustable.
     const requestedProbability = body.minProbability == null ? 55 : Number(body.minProbability);
@@ -2898,7 +2907,7 @@ function telegramAiTicketText(result, booking, request, plan, droppedLive = []) 
 function telegramAiBetTypesForSport(planId, sport) {
   const allowed = new Set(telegramAiAllowedBetIdsForPlan(planId));
   const bySport = {
-    football: [...require('./lib/footballExtraMarkets').IDS,'oneup',...require('./lib/doubleChanceUnderMarkets').IDS,...require('./lib/shotsOnTargetMarkets').IDS,'throwins_highest_under','goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','corners_over','corners_under','corners_under115','corners_under125','dc_1x','dc_x2','dnb','over05','over15','under45','over25','under25','correct_score','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
+    football: ['multi',...require('./lib/footballExtraMarkets').IDS,'oneup',...require('./lib/doubleChanceUnderMarkets').IDS,...require('./lib/shotsOnTargetMarkets').IDS,'throwins_highest_under','goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','corners_over','corners_under','corners_under115','corners_under125','dc_1x','dc_x2','dnb','over05','over15','under45','over25','under25','correct_score','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
     basketball: [...require('./lib/basketballPeriodMarkets').IDS,'basketball_rebounds_highest_under','basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
     hockey: ['hockey_shots_highest_under','hockey_winner','hockey_over','hockey_under','hockey_handicap_home','hockey_handicap_away'],
     handball: ['handball_winner','handball_over','handball_under','handball_handicap_home','handball_handicap_away'],
@@ -3649,6 +3658,7 @@ const floorDeps={
   let hockeyRows=[];try{const hockeyTotals=await loadSportyBetMarket('totals','hockey',{hours,forceRefresh:true});hockeyRows=hockeyTotals.rows||[];}catch(error){console.warn('Telegram hockey highest Under unavailable:',String(error.code||'source_unavailable'));}
   rows=require('./lib/telegramHockeyUnder').annotate(rows,hockeyRows);
   const specialty=await Promise.allSettled([loadAutoCandidates({...options,includeAllMarkets:false,betTypes:['oneup']}),require('./lib/streakGoalFeed').collectStreakGoalCandidates({hours,minProbability:70,minEdge:-100,signal}),require('./lib/doubleChanceUnderMarkets').collect({...options,hours,signal,minProbability:60}).then(p=>p.probabilityRows||p.rows||[])]);
+  let multiRows=[];try{multiRows=await require('./lib/multiPick').collect({loadCandidates:loadAutoCandidates,hours,signal});}catch(error){console.warn('Telegram Multi source unavailable:',String(error.code||'source_unavailable'));}const multiMap=new Map(multiRows.map(c=>[sportySelectionKey(c),c]));rows=rows.map(c=>multiMap.get(sportySelectionKey(c))||c);const rowKeys=new Set(rows.map(sportySelectionKey));for(const c of multiRows)if(!rowKeys.has(sportySelectionKey(c))){rows.push(c);rowKeys.add(sportySelectionKey(c));}
   const keys=new Set(rows.map(sportySelectionKey));for(const result of specialty)if(result.status==='fulfilled')for(const c of result.value)if(!keys.has(sportySelectionKey(c))){rows.push(c);keys.add(sportySelectionKey(c));}
   if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');
   const gapRows=await loadAutoCandidates({...options,winnerGapOnly:true,includeAllMarkets:false,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});
@@ -3656,7 +3666,7 @@ const floorDeps={
   const qualified=new Set(gapRows.map(sportySelectionKey));return require('./lib/sportyH2h').checkCandidates(require('./lib/telegramSmallGap').annotateSmallGap(rows.map(c=>({...c,winnerGapQualified:qualified.has(sportySelectionKey(c))})),winnerFeed.rows),{signal});
  },{signal}),
  validate:async(selections,{signal,plan})=>{
-  const fresh=await require('./lib/sportyH2h').checkCandidates(await validatePublicSelections(selections,{signal}),{signal});if(plan.winnerGapMaxOne||plan.winnerGapBelowOne||plan.winnerGapAboveEight){const feed=await require('./lib/goalKickFeed').collectFootballStatMarkets({marketIds:['1'],hours:168,signal,source:'SportyBet fresh winner gap verification'});return require('./lib/telegramSmallGap').annotateSmallGap(fresh,feed.rows);}if(!plan.winnerGapOnly)return fresh;
+  const fresh=await require('./lib/sportyH2h').checkCandidates(await validatePublicSelections(selections,{signal}),{signal});if(plan.multi||plan.winnerGapMaxOne||plan.winnerGapBelowOne||plan.winnerGapAboveEight){const feed=await require('./lib/goalKickFeed').collectFootballStatMarkets({marketIds:['1'],hours:168,signal,source:'SportyBet fresh winner gap verification'});return plan.multi?require('./lib/multiPick').annotate(fresh,feed.rows):require('./lib/telegramSmallGap').annotateSmallGap(fresh,feed.rows);}if(!plan.winnerGapOnly)return fresh;
   return withPublicSportyRequest(async()=>{const rows=await loadAutoCandidates({sportScope:'all',marketHours:168,minProbability:70,minEdge:-100,includeAllMarkets:false,liveMode:'prematch',winnerGapOnly:true,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});const keys=new Set(rows.map(sportySelectionKey));return fresh.map(c=>({...c,winnerGapQualified:keys.has(sportySelectionKey(c))}));},{signal});
  },book:selections=>bookBet(selections),send:sendTelegramMessage,
  saveCode:(redis,dateKey,code)=>saveTelegramDailyCodes(redis,dateKey,{codes:[code]}),track:trackTelegramSlip,updateTrack:updateTrackedTicket

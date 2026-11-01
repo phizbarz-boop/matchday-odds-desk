@@ -10,8 +10,8 @@ test('extra scan makes no list requests and reuses event details already read by
  assert.equal(calls.length,0);assert.equal(result.rows.length,2);assert.equal(result.coverage.discoveredFixtures,1);assert.equal(result.coverage.complete,true);
 });
 test('filters requested sports, leagues, live, expired and outside-horizon fixtures before requesting',async()=>{
- const f=fixture('only','Tennis',{tournament:'ATP'}),calls=[];
- const result=await scanExpandedMarkets([f,fixture('other','Football'),fixture('live','Tennis',{live:true}),fixture('past','Tennis',{kickoffUtc:now.toISOString()}),fixture('late','Tennis',{kickoffUtc:new Date(+now+25*3600000).toISOString()}),fixture('league','Tennis',{tournament:'WTA'})],{sports:['tennis'],leagues:['ATP'],now:()=>now,client:{fetchEventDetail:async id=>{calls.push(id);return payload(f);}}});
+ const f=fixture('only','Basketball',{tournament:'NBA'}),calls=[];
+ const result=await scanExpandedMarkets([f,fixture('other','Football'),fixture('live','Basketball',{live:true}),fixture('past','Basketball',{kickoffUtc:now.toISOString()}),fixture('late','Basketball',{kickoffUtc:new Date(+now+25*3600000).toISOString()}),fixture('league','Basketball',{tournament:'CBA'})],{sports:['basketball'],leagues:['NBA'],now:()=>now,client:{fetchEventDetail:async id=>{calls.push(id);return payload(f);}}});
  assert.deepEqual(calls,['only']);assert.equal(result.rows.length,2);
 });
 test('a hanging detail is bounded, aborted and reported without dropping successful rows',async()=>{

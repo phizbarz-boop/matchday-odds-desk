@@ -7,3 +7,5 @@ Auto Builder now has its own searchable All leagues / Selected leagues only sele
 Telegram 12-hour report is bounded to 1,800 characters and contains counts plus hypothetical ₦100 stake returns, net P/L, settled/unresolved stakes and ROI. It includes a brief data-qualified recommendation but no match detail, team names, individual code lists or multi-message leg list. Full records remain stored for calculations. Reviewed game counts include newly updated older tickets and count repeated legs per ticket.
 
 No live bookings or Telegram messages were sent in testing.
+
+League scope correction: options and filtering apply only to football and basketball. Ice hockey, tennis, handball and volleyball remain unrestricted by this selector, including mixed-sport requests. Cached choices from other sports are not restored into the visible options.
