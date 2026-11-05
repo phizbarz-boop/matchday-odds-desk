@@ -3029,10 +3029,10 @@ async function buildTelegramAiTicket(user, request) {
     trials: Number(process.env.TELEGRAM_AI_PICK_TRIALS || 1800),
     minQualityScore: 0,
     requirePositiveEV: false,
-    requireTarget: !merged.safe && targetOdds >= 100000,
+    closestFallbackMin: !merged.safe && targetOdds >= 100000 ? 1000 : null,
     excludedTickets:request?.regenerate?new Set(user.ticketVariationHistory||[]):new Set(),
   });
-  if (!result?.selections?.length) return { error: request?.regenerate?'No other ticket variation was found with the same probability model and settings.':targetOdds>=100000?'No qualifying ticket reached 100,000x with these settings. No code was booked.':'I could not find a qualifying combination from the current SportyBet fixtures.' };
+  if (!result?.selections?.length) return { error: request?.regenerate?'No other ticket variation was found with the same probability model and settings.':targetOdds>=100000?'No qualifying ticket reached the 1,000x fallback minimum with these settings. No code was booked.':'I could not find a qualifying combination from the current SportyBet fixtures.' };
   if (merged.safe && (Number(result.combinedOdds) < 1.30 || Number(result.combinedOdds) > 5.00)) {
     return { error: 'No SAFE combination currently lands inside 1.30–5.00 while keeping every leg at 90%+.' };
   }
@@ -3075,7 +3075,11 @@ async function buildTelegramAiTicket(user, request) {
     }
   }
   if (!merged.safe && Number(merged.minMatchOdds)>1 && result.selections.some(c=>Number(c.odds)<Number(merged.minMatchOdds))) return {error:'A selection fell below your minimum odds per match during revalidation. No code was booked; rebuild using current prices.'};
-  if (!merged.safe && targetOdds>=100000 && result.selections.reduce((n,c)=>n*Number(c.odds),1)<targetOdds) return {error:'The updated combined odds fell below 100,000x. No code was booked.'};
+  if (!merged.safe && targetOdds>=100000) {
+    const currentOdds=result.selections.reduce((n,c)=>n*Number(c.odds),1);
+    if(currentOdds<1000)return {error:'The updated combined odds fell below the 1,000x fallback minimum. No code was booked.'};
+    result.reachedTarget=currentOdds>=targetOdds;
+  }
   if(request?.regenerate&&(user.ticketVariationHistory||[]).includes(require('./lib/ticketVariation').ticketSignature(result.selections)))return {error:'No other ticket variation was found with the same probability model and settings.'};
   const booking = await bookBet(result.selections.map(x => ({ eventId:x.eventId, marketId:x.marketId, outcomeId:x.outcomeId, ...(x.specifier ? {specifier:x.specifier}: {}) })));
   return { result, booking, plan, droppedLive, request: { ...merged, sport, sports, targetOdds, minProbability, minEdge, maxSelections, betTypes, liveMode } };
@@ -3213,7 +3217,7 @@ For ticket actions, only set fields the user clearly requested; the app merges t
 Sport values: football, basketball, hockey, all. Do not bypass subscription restrictions. minMatchOdds is a lower bound for each selection; do not convert maximum-odds requests into a minimum. For 100,000x or higher, set targetOdds to 100000 when the user requests the 100,000x+ preset.
 liveMode: set 'quick_cash' for Quick Cash/late-stage leader requests; set 'live' only when the user clearly asks for live/in-play/ongoing matches, 'both' when they ask for live plus prematch together; otherwise null (keep the user's current setting).
 Basketball first-half total points IDs: basketball_first_half_over, basketball_first_half_under. Basketball first-quarter total points IDs: basketball_first_quarter_over, basketball_first_quarter_under. Use these exact period IDs when requested.
-Bet IDs: first5_goals_under05, home_away_under45, dc_under45, home_win, draw, away_win, oneup, corners_over, corners_under, first_half_home_team_corners, first_half_away_team_corners, dc_1x, dc_x2, dnb, over05, home_over05, away_over05, home_under45, away_under45, over15, under45, over25, under25, correct_score, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, basketball_handicap_home, basketball_handicap_away, hockey_winner, hockey_over, hockey_under, hockey_handicap_home, hockey_handicap_away.
+Bet IDs: first5_goals_under05, first10_goals_under05, first20_goals_under05, home_away_under45, dc_under45, home_win, draw, away_win, oneup, corners_over, corners_under, first_half_home_team_corners, first_half_away_team_corners, dc_1x, dc_x2, dnb, over05, home_over05, away_over05, home_under45, away_under45, over15, under45, over25, under25, correct_score, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, basketball_handicap_home, basketball_handicap_away, hockey_winner, hockey_over, hockey_under, hockey_handicap_home, hockey_handicap_away.
 If the user asks to build/rebuild/replace/remove selections but the requested transformation cannot be safely represented by these parameters, explain what can be changed and ask one concise question instead of pretending it was done.
 If discussing betting, do not promise wins or guaranteed profit.`;
   const input=[
