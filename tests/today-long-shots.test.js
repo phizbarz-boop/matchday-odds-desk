@@ -53,3 +53,16 @@ test('equally strong fixtures with identical odds favor earlier kickoffs',()=>{
  assert.ok(picks.includes(base[0]));
  assert.ok(!picks.includes(late));
 });
+test('Variation 2 rebuilds from freshly checked reserves after losing legs',async()=>{
+ const {fakeRedis}=require('./fixtures/fake-redis');
+ const booked=[],codes=[];
+ const deps={plans:T.PLANS,now:()=>now,loadPool:async()=>pool,
+  validate:async(rows,{plan})=>plan.id==='today10k2'&&rows.length===30?rows.slice(0,16):rows,
+  book:async legs=>{booked.push(legs);return{shareCode:'RECOVERED'+booked.length}},
+  saveCode:async(_redis,_date,code)=>codes.push(code),send:async()=>{},track:async()=>{},updateTrack:async()=>{}};
+ const run=await F.runFloorPicks(deps,{redis:fakeRedis(),dateKey,slotKey:'repair',slotTime:'07:00',manualTest:true});
+ assert.equal(run.ticketsSent,3);assert.equal(codes.length,3);
+ assert.ok(booked[1].length>16&&booked[1].length<30);
+ assert.ok(booked[1].reduce((n,c)=>n*c.odds,1)>1000);
+ assert.equal(new Set(booked.map(ticketSignature)).size,3);
+});
