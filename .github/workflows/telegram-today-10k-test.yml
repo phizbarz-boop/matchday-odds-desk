@@ -9,11 +9,13 @@ concurrency:
 jobs:
   picks:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: Generate and post the three Today 10,000+ variations
         env:
+          TELEGRAM_REQUEST_TIMEOUT_SECONDS: 10
+          TELEGRAM_POLL_MAX_SECONDS: 260
           TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
           MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
         run: python3 jobs/telegram-picks-runner.py --endpoint today-10k-test

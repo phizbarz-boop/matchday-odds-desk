@@ -9,3 +9,5 @@
 ## Manual test
 
 After deploying the updated server, open GitHub **Actions → Test Today 10,000+ Picks → Run workflow**. It uses the existing `TELEGRAM_JOB_SECRET` and `MATCHDAY_BASE_URL` configuration. It generates and posts the new variations only; it does not place wagers or trigger the rest of the daily batch.
+
+The manual test builds from the published catalogue and still validates selections against fresh SportyBet data. It stops polling after three consecutive transient status failures; check Telegram and server logs before retrying an unconfirmed run.

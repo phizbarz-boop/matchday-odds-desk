@@ -100,9 +100,11 @@ def main():
 
     deadline = time.monotonic() + max_wait
     last_stage = None
+    status_errors = 0
     while time.monotonic() < deadline:
         code, payload = request(status_url)
         if code == 202:
+            status_errors = 0
             stage = payload.get("stage", "pending")
             if stage != last_stage:
                 print(f"Telegram run {run_id}: {stage}", flush=True)
@@ -114,6 +116,12 @@ def main():
             print("No confirmed queued result is available. Deploy the updated app and check this run before starting another batch.", file=sys.stderr)
             return 22
         else:
+            status_errors += 1
+            if args.endpoint == "today-10k-test" and status_errors >= 3:
+                print(f"Three consecutive status checks failed (last HTTP {code}). "
+                      f"Run {run_id} is unconfirmed; check Telegram and the Render logs before retrying. "
+                      "Stopping polling does not cancel the server job.", file=sys.stderr)
+                return 22
             print(f"Telegram status check temporarily unavailable (HTTP {code}); continuing with the same run ID.", flush=True)
         time.sleep(min(poll_seconds, max(0, deadline - time.monotonic())))
     print(f"Telegram run {run_id} has not confirmed its result. It was not submitted again. "

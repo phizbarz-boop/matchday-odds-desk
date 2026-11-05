@@ -16,6 +16,7 @@ async function run(t,mode,{endpoint='daily-picks',event='workflow_dispatch',atte
       return reply(202,{runId:'gh987',runRequestStatus:'pending',stage:'queued'});
     }
     gets++;
+    if(mode==='unreachable')return reply(502,{error:'Bad Gateway'});
     if(mode==='failed')return reply(502,{runId:'gh987',runRequestStatus:'failed',code:'SPORTYBET_SOURCE_UNAVAILABLE',detail:'SportyBet football feed returned 403'});
     if(mode==='unknown')return reply(409,{runId:'gh987',runRequestStatus:'unknown',code:'TELEGRAM_RUN_OUTCOME_UNKNOWN'});
     if(mode==='not-queued')return reply(404,{code:'TELEGRAM_RUN_NOT_FOUND'});
@@ -67,3 +68,10 @@ test('the workflow never forwards its job secret through a redirect',async t=>{
 });
 
 test('manual GitHub reruns use a new test batch ID for each attempt',async t=>{const a=await run(t,'pending',{endpoint:'probability-picks',attempt:'2'});assert.equal(a.code,0);assert.equal(a.calls[0].id,'gh987-attempt-2');assert.ok(a.calls.filter(c=>c.method==='GET').every(c=>c.url.endsWith('gh987-attempt-2')));});
+
+test('Today test stops after three consecutive gateway failures without resubmitting',async t=>{
+ const result=await run(t,'unreachable',{endpoint:'today-10k-test'});
+ assert.equal(result.code,22);assert.equal(result.calls.filter(c=>c.method==='POST').length,1);
+ assert.equal(result.calls.filter(c=>c.method==='GET').length,3);
+ assert.match(result.stderr,/Stopping polling does not cancel the server job/);
+});
