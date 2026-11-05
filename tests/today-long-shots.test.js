@@ -30,3 +30,26 @@ test('finish deadline includes the next WAT day but excludes the following midni
  assert.equal(T.eligible({...pool[0],scheduledEndUtc:'2026-11-06T23:00:00Z'},now,dateKey),false);
  assert.equal(T.eligible({...pool[0],scheduledEndUtc:'bad'},now,dateKey),false);
 });
+test('correct-score markets and concentrated prices are excluded even on fresh validation',async()=>{
+ const {fakeRedis}=require('./fixtures/fake-redis');
+ const score={...pool[0],betType:'offered:99',marketDesc:'First Half Correct Score',odds:1.99};
+ const expensive={...pool[1],odds:2.01,probability:95};
+ assert.equal(T.eligible(score,now,dateKey),false);
+ assert.equal(T.eligible({...pool[0],betType:'correct_score'},now,dateKey),false);
+ assert.equal(T.eligible(expensive,now,dateKey),false);
+ const rows=[score,expensive,...pool];
+ assert.ok(T.choose(rows,{now}).every(c=>c!==score&&c!==expensive));
+ let booked;
+ const deps={plans:T.PLANS.slice(0,1),now:()=>now,loadPool:async()=>pool,validate:async rows=>rows.map((c,i)=>i===0?{...c,marketDesc:'Exact Match Score'}:i===1?{...c,odds:2.01}:c),book:async legs=>{booked=legs;return{shareCode:'BALANCED'}},saveCode:async()=>{},send:async()=>{},track:async()=>{},updateTrack:async()=>{}};
+ await F.runFloorPicks(deps,{redis:fakeRedis(),dateKey,slotKey:'balanced',slotTime:'07:00',manualTest:true});
+ assert.equal(booked.length,28);
+ assert.ok(booked.every(c=>c.odds<=2&&!c.marketDesc));
+});
+test('equally strong fixtures with identical odds favor earlier kickoffs',()=>{
+ const base=pool.slice(0,30).map(c=>({...c,odds:1.4,probability:95}));
+ const late={...base[0],eventId:'later',kickoffUtc:'2026-11-05T14:00:00Z'};
+ const picks=T.choose([late,...base],{now});
+ assert.equal(picks.length,30);
+ assert.ok(picks.includes(base[0]));
+ assert.ok(!picks.includes(late));
+});
