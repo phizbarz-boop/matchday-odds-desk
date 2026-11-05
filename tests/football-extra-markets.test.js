@@ -22,3 +22,25 @@ test('final candidate pipeline enforces one/multiple/all/empty leagues across sp
  const context={normalizeSportScopes:()=>['football','basketball'],normalizeLiveMode:x=>x,loadAutoCandidates:async()=>rows,require:()=>({checkCandidates:async x=>x}),sportyRequest:()=>null,passesRedFlagFilter:()=>true};vm.createContext(context);vm.runInContext(source.slice(start,end)+';this.prepare=prepareAutoCandidatePool;',context);
  assert.equal((await context.prepare({leagues:null})).candidates.length,3);assert.deepEqual(Array.from((await context.prepare({leagues:['League B']})).candidates).map(c=>c.eventId),['B','C']);assert.equal((await context.prepare({leagues:['League A','League B']})).candidates.length,3);assert.equal((await context.prepare({leagues:[]})).candidates.length,1);
 });
+
+test('Telegram offers first-five Under 0.5 and parses the minimum leg odds and high target independently',()=>{
+ const bot=require('../lib/telegramAiBot');
+ const parsed=bot.parseNaturalRequest('Build a 100,000x football ticket: Total Goals Over/Under from 1 to 5 minutes Under 0.5, minimum odds per match 1.20');
+ assert.deepEqual(parsed.betTypes,['first5_goals_under05']);
+ assert.equal(parsed.targetOdds,100000);
+ assert.equal(parsed.minMatchOdds,1.2);
+ assert.equal(bot.parseNaturalRequest('100000x').targetOdds,100000);
+ assert.ok(bot.allowedBetIdsForPlan('pro').includes('first5_goals_under05'));
+ const target=bot.targetKeyboard({plan:'elite',planExpiresAt:'2099-01-01'}).inline_keyboard.flat().find(b=>b.text==='100,000x+');
+ assert.equal(target.callback_data,'set:target:100000');
+});
+
+test('strict 100,000x builder rejects a near miss and finds a qualifying combination',()=>{
+ const {selectAutoBet}=require('../lib/autoPicker');
+ const fixtures=Array.from({length:17},(_,i)=>({eventId:String(i),odds:2,probability:70,qualityScore:80}));
+ const settings={targetOdds:100000,maxSelections:17,trials:50,requireTarget:true};
+ assert.equal(selectAutoBet(fixtures.slice(1),settings).selections.length,0);
+ const reached=selectAutoBet(fixtures,settings);
+ assert.equal(reached.reachedTarget,true);
+ assert.ok(reached.combinedOdds>=100000);
+});

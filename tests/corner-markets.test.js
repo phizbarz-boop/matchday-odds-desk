@@ -21,7 +21,7 @@ test('public corners feed requests observed market 166, paginates, and never cal
 });
 test('website and bot register both lines, including Pro and natural-language requests',()=>{
  const fs=require('node:fs'),bot=require('../lib/telegramAiBot'),html=fs.readFileSync(require('node:path').join(__dirname,'../public/index.html'),'utf8');for(const id of C.IDS){assert.ok(bot.ALL_BET_IDS.includes(id));assert.ok(bot.allowedBetIdsForPlan('pro').includes(id));assert.ok(html.includes(id));}
- const p=bot.parseNaturalRequest('build football corners under 11.5');assert.ok(p.betTypes.includes(C.IDS[0]));assert.ok(!p.betTypes.includes(C.IDS[1]));assert.equal(p.maxMatchOdds,null);
+ const p=bot.parseNaturalRequest('build football corners under 11.5');assert.ok(p.betTypes.includes(C.IDS[0]));assert.ok(!p.betTypes.includes(C.IDS[1]));assert.equal(p.minMatchOdds,undefined);
  const vm=require('node:vm');for(const m of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g))new vm.Script(m[1]);
 });
 test('website shows corner-feed fixtures missing from general predictions and selects only the requested line',()=>{

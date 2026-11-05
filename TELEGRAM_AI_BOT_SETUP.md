@@ -8,7 +8,7 @@ This build adds a conversational Telegram bot on top of the existing Matchday Od
 |---|---:|---:|---:|---:|---|---:|---|
 | Free | ₦0 | 2 | 10x | 12 | Football | 0 | No |
 | Pro | ₦10,000/month | 10 | 100x | 30 | Football, Basketball, Ice Hockey | 5 | No |
-| Elite | ₦20,000/month | 40 | 1000x | 40 | All currently supported sports | 30 | Yes |
+| Elite | ₦20,000/month | 40 | 100,000x | 40 | All currently supported sports | 30 | Yes |
 
 The limits are enforced server-side per Telegram user. A Redis service is strongly recommended so subscriptions and usage survive Render restarts.
 
@@ -59,7 +59,7 @@ The user is notified automatically after activation.
 
 - `10x`
 - `Build a football 20x ticket`
-- `Build 50 odds, max odds 1.25`
+- `Build 50 odds, minimum odds per match 1.25`
 - `Football 20x minimum probability 75%`
 - `Safe ticket`
 - `Only over 0.5, 10x`
