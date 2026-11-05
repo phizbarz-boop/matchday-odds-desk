@@ -1,0 +1,19 @@
+name: Test Today 10,000+ Picks
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: plot207-today-10k-test
+  cancel-in-progress: false
+jobs:
+  picks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate and post the three Today 10,000+ variations
+        env:
+          TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
+          MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
+        run: python3 jobs/telegram-picks-runner.py --endpoint today-10k-test

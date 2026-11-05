@@ -6,12 +6,12 @@ const row=(line,eventId='E')=>({eventId,sport:'Ice Hockey',marketId:'18',marketD
 test('highest is calculated before range and probability filters, never falling back to a lower line',()=>{
  const raw=[row(6.5),row(7.5),row(8.5)];let c=H.annotate(raw,raw);assert.deepEqual(c.filter(x=>x.hockeyHighestUnderQualified).map(x=>x.specifier),['total=8.5']);
  c=H.annotate(raw,[...raw,row(9.5)]);assert.ok(c.every(x=>!x.hockeyHighestUnderQualified));
- c=H.annotate(raw.map(x=>({...x,probability:x.specifier==='total=8.5'?69:99})),raw);assert.equal(F.buildPack(c,{now}).plans.find(p=>p.id===plan.id).selections.length,0);
+ c=H.annotate(raw.map(x=>({...x,probability:x.specifier==='total=8.5'?69:99})),raw);assert.equal(F.buildPack(c,{now}).plans.find(p=>p.id===plan.id).selections.length,1);
 });
-test('twenty-game cap, 70-percent boundary, future fixtures and one selection per event',()=>{
+test('twenty-game cap, no probability floor, future fixtures and one selection per event',()=>{
  const raw=Array.from({length:25},(_,i)=>[row(6.5,'E'+i),row(7.5,'E'+i)]).flat(),c=H.annotate(raw,raw);
  const p=F.buildPack(c,{now}).plans.find(p=>p.id===plan.id);assert.equal(p.maxGames,20);assert.equal(p.selections.length,20);assert.equal(new Set(p.selections.map(x=>x.eventId)).size,20);assert.ok(p.selections.every(x=>x.specifier==='total=7.5'));
- const good={...p.selections[0],probability:70};assert.equal(F.eligible(good,plan,now,'2026-10-31',new Set()),true);assert.equal(F.eligible({...good,probability:69.9},plan,now,'2026-10-31',new Set()),false);
+ const good={...p.selections[0],probability:70};assert.equal(F.eligible(good,plan,now,'2026-10-31',new Set()),true);assert.equal(F.eligible({...good,probability:1},plan,now,'2026-10-31',new Set()),true);
 });
 test('unsupported scopes, over selections and cached qualification cannot bypass current highest rows',()=>{
  const bad=['1st Period - Over/Under','Home Over/Under','Player Shots on Goal','Handicap'];for(const marketDesc of bad)assert.equal(H.describe({...row(8.5),marketDesc}),null);

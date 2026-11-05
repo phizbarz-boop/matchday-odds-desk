@@ -3690,6 +3690,16 @@ app.post('/api/telegram/probability-picks',express.json(),floorRequests.wrap(asy
  const result=await floorJob({...slot,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);
 }));
 app.get('/api/telegram/probability-picks/run-status/:runId',floorRequests.status);
+const todayTestPlans=FLOOR_PLANS.filter(p=>p.todayLongShot);
+const todayTestJob=createWatSlotJob({namespace:'telegram:today10k-test',getRedis,run:ctx=>runFloorPicks({...floorDeps,plans:todayTestPlans,namespace:'telegram:today10k-test',buildPack:(pool,opts)=>require('./lib/telegramFloorPicks').buildPack(pool,{...opts,plans:todayTestPlans})},ctx)});
+const todayTestRequests=createTelegramRunRequests({name:'today-10k-test',authorize:authorizeTelegramJob,getRedis});
+app.post('/api/telegram/today-10k-test',express.json(),todayTestRequests.wrap(async(req,res)=>{
+ let slot;try{slot=resolveFloorSlot(req.headers);}catch(e){return res.status(400).json({error:e.message});}
+ if(!slot?.manualTest)return res.status(400).json({error:'Manual workflow dispatch required'});
+ await res.jobStage?.('building_today_10k_test');
+ const result=await todayTestJob({...slot,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);
+}));
+app.get('/api/telegram/today-10k-test/run-status/:runId',todayTestRequests.status);
 registerTelegramPerformanceRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runReport:runTelegramPerformanceReport});
 
 // All hourly and three-hourly automated ticket endpoints are retired.
