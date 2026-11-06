@@ -121,3 +121,16 @@ test('basketball daily slips accept only the five selected markets and finish to
  assert.ok(picks.every(c=>c.probability===30));
  assert.deepEqual(new Set(picks.map(c=>c.betType)),new Set(plan.betTypes));
 });
+
+test('late daily high odds can use tomorrow without admitting games that finish after tomorrow',()=>{
+ const {DAILY_HIGH_ODDS,highOddsCapacity}=require('../lib/telegramFloorPicks');
+ const p=DAILY_HIGH_ODDS.find(p=>p.targetOdds===1000);
+ const options={now:new Date('2026-10-13T21:00:00Z'),dateKey:'2026-10-13'};
+ const rows=Array.from({length:10},(_,i)=>({eventId:'next'+i,marketId:'1',outcomeId:'1',betType:'home_win',sport:'football',odds:2,probability:66,kickoffUtc:'2026-10-14T12:00:00Z'}));
+ rows.push({...rows[0],eventId:'too-late',scheduledEndUtc:'2026-10-14T23:00:00Z'});
+ assert.deepEqual(highOddsCapacity(rows,p,options),{fixtures:10,maxOdds:1024});
+ const [pick]=buildPack(rows,{...options,plans:[p]}).plans;
+ assert.equal(pick.selections.length,10);
+ assert.equal(pick.capacity.sourceRows,11);
+ assert.equal(highOddsCapacity(rows,PLANS.find(p=>p.id==='today10k1'),options).fixtures,0);
+});

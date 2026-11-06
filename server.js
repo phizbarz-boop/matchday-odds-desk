@@ -3720,7 +3720,27 @@ app.post('/api/telegram/today-10k-test',express.json(),todayTestRequests.wrap(as
 }));
 app.get('/api/telegram/today-10k-test/run-status/:runId',todayTestRequests.status);
 const dailyHighTestPlans=FLOOR_PLANS.filter(p=>p.dailyHighOdds);
-const dailyHighTestJob=createWatSlotJob({namespace:'telegram:daily-high-test',getRedis,run:ctx=>runFloorPicks({...floorDeps,plans:dailyHighTestPlans,loadPool:loadTodayTestPool,namespace:'telegram:daily-high-test'},ctx)});
+async function loadDailyHighTestPool({signal,dateKey}){
+ const now=new Date();
+ let cached=[];
+ try{cached=await loadTodayTestPool({signal});}
+ catch(error){signal?.throwIfAborted();console.warn('High-odds test catalogue unavailable:',error.message);}
+ const {highOddsCapacity}=require('./lib/telegramFloorPicks');
+ if(dailyHighTestPlans.every(plan=>highOddsCapacity(cached,plan,{now,dateKey}).maxOdds>=plan.minimumOdds))return cached;
+ try{
+  const fresh=await withPublicSportyRequest(async()=>{
+   const rows=await loadAutoCandidates({sportScope:'all',marketHours:48,minProbability:0,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'});
+   return require('./lib/sportyH2h').checkCandidates(rows,{signal});
+  },{signal});
+  return fresh.length?fresh:cached;
+ }catch(error){
+  signal?.throwIfAborted();
+  if(!cached.length)throw error;
+  console.warn('High-odds test live scan unavailable:',error.message);
+  return cached;
+ }
+}
+const dailyHighTestJob=createWatSlotJob({namespace:'telegram:daily-high-test',getRedis,run:ctx=>runFloorPicks({...floorDeps,plans:dailyHighTestPlans,loadPool:opts=>loadDailyHighTestPool({...opts,dateKey:ctx.dateKey}),namespace:'telegram:daily-high-test'},ctx)});
 const dailyHighTestRequests=createTelegramRunRequests({name:'daily-high-test',authorize:authorizeTelegramJob,getRedis});
 app.post('/api/telegram/daily-high-test',express.json(),dailyHighTestRequests.wrap(async(req,res)=>{
  let slot;try{slot=resolveFloorSlot(req.headers);}catch(e){return res.status(400).json({error:e.message});}
