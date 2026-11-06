@@ -70,3 +70,32 @@ test('100,000x fallback prefers the target, then the closest odds down to an inc
  assert.equal(closest.reachedTarget,false);
  assert.equal(selectAutoBet(fixtures,settings).reachedTarget,true);
 });
+
+test('football specialty picks map the exact line, team, period and outcome in both builders',()=>{
+ const cases=[
+  ['Player to Score','No','Yes',null,'player_not_to_score','player not to score'],
+  ['Away Team Total Bookings','Over 0.5','Under 0.5',.5,'away_bookings_over05','away team total bookings over 0.5'],
+  ['Sending Off','No','Yes',null,'sending_off_no','sending off no'],
+  ['1st Half Substitutions','Under 0.5','Over 0.5',.5,'first_half_substitutions_under05','1st half substitution under 0.5'],
+  ['Goal Scored by a Substitution','No','Yes',null,'substitute_goal_no','goal scored by a substitution no'],
+  ['Total Offsides','Under 4.5','Over 4.5',4.5,'offsides_under45','offside under 4.5'],
+  ['Total Offsides','Under 5.5','Over 5.5',5.5,'offsides_under55','offside under 5.5'],
+  ['Away Team Post and Crossbar','Under 0.5','Over 0.5',.5,'away_woodwork_under05','away team post and crossbar under 0.5'],
+ ];
+ const bot=require('../lib/telegramAiBot'),{modelOfferedMarkets}=require('../lib/offeredMarketModel');
+ for(const [marketDesc,side,opposite,line,id,request] of cases){
+  const r={...row(marketDesc),outcomeDesc:side,specifier:line==null?'':'total='+line,odds:1.25};
+  const other={...r,outcomeId:'other',outcomeDesc:opposite,odds:4.5};
+  assert.equal(M.betTypeFor(r),id);
+  assert.equal(M.betTypeFor(other),null);
+  assert.equal(modelOfferedMarkets([r,other]).candidates.find(c=>c.betType===id)?.outcomeId,r.outcomeId);
+  assert.equal(modelOfferedMarkets([r]).candidates.length,0);
+  assert.deepEqual(bot.parseNaturalRequest('Build a ticket with '+request).betTypes,[id]);
+  assert.ok(bot.allowedBetIdsForPlan('pro').includes(id));
+ }
+ assert.deepEqual(bot.parseNaturalRequest('Build a ticket with offside under 4.5 - 5.5').betTypes,['offsides_under45','offsides_under55']);
+ assert.equal(M.betTypeFor(row('Home Team Total Bookings')),null);
+ assert.equal(M.betTypeFor(row('2nd Half Substitutions','Under')),null);
+ assert.equal(M.betTypeFor(row('Away Team Offsides','Under',4.5)),null);
+ assert.equal(M.betTypeFor(row('Total Offsides','Under',6.5)),null);
+});
