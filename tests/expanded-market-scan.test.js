@@ -66,3 +66,17 @@ test('half scan processes fixtures without retaining raw rows and stops at the h
  assert.equal(result.coverage.detailReads,1);
  assert.equal(result.coverage.stopReason,'memory_limit');
 });
+
+test('an unavailable fixture does not suppress the next fixture detail request',async()=>{
+ const calls=[];
+ const direct=require('../lib/sportybetDirect');
+ direct.setFetchForTesting(async url=>{
+  const u=new URL(url),id=u.searchParams.get('eventId');calls.push(id);
+  return new Response(JSON.stringify(id==='available'?{bizCode:10000,data:{eventId:id}}:{}),{status:id==='available'?200:404,headers:{'content-type':'application/json'}});
+ });
+ try{
+  await assert.rejects(direct.fetchEventDetail('missing'),e=>e.code==='SPORTYBET_ENDPOINT_UNKNOWN');
+  assert.equal((await direct.fetchEventDetail('available')).data.eventId,'available');
+  assert.ok(calls.includes('available'));
+ }finally{direct.setFetchForTesting(null);}
+});
