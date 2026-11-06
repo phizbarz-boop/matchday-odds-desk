@@ -28,3 +28,14 @@ test('imported specialty fixtures without kickoff metadata are read and accepted
  const f=fixture('imported'),result=await scanExpandedMarkets([{...f,kickoffUtc:null}],{sports:['tennis'],now:()=>now,allowUnknownKickoff:true,client:{fetchEventDetail:async()=>payload(f)}});assert.equal(result.rows.length,2);
  const expired=await scanExpandedMarkets([{...f,eventId:'expired-import',kickoffUtc:null}],{sports:['tennis'],now:()=>now,allowUnknownKickoff:true,client:{fetchEventDetail:async()=>payload({...f,eventId:'expired-import',kickoffUtc:now.toISOString()})}});assert.equal(expired.rows.length,0);
 });
+
+test('full scan bypasses the quick fixture cap and excludes games outside today WAT',async()=>{
+ const fixtures=Array.from({length:70},(_,i)=>fixture(String(i)));
+ const tomorrow=fixture('tomorrow','Tennis',{kickoffUtc:'2026-10-12T23:00:00Z'});
+ const byId=new Map([...fixtures,tomorrow].map(f=>[f.eventId,f]));
+ const result=await scanExpandedMarkets([...fixtures,tomorrow],{sports:['tennis'],now:()=>now,hours:48,fullScan:true,todayOnly:true,env:{SPORTYBET_EXPANDED_MAX_EVENTS:2},client:{fetchEventDetail:async id=>payload(byId.get(id))}});
+ assert.equal(result.coverage.discoveredFixtures,70);
+ assert.equal(result.coverage.detailReads,70);
+ assert.equal(result.coverage.complete,true);
+ assert.equal(result.rows.length,140);
+});
