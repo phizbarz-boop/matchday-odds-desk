@@ -3,12 +3,12 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const {PLANS,buildPack,typeKey,pairKey,sameDay,runFloorPicks}=require('../lib/telegramFloorPicks');
 const now=new Date('2026-10-13T06:00:00Z');
 function pool(){const rows=[];for(const sport of ['football','tennis','basketball','hockey','handball','volleyball'])for(let m=0;m<9;m++)for(let e=0;e<55;e++)rows.push({eventId:sport+e,marketId:sport+m,outcomeId:'1',betType:m===0?(sport==='football'?'home_win':sport+'_winner'):sport+'type'+m,winnerGapQualified:m===0,winnerGapMaxOneQualified:true,sport,probability:95-m*4,odds:1.2,kickoffUtc:'2026-10-13T12:00:00Z'});for(const type of ["oneup","dc_under45","home_away_under45","first5_goals_under05","over05","over15","corners_under115","corners_under125","goalkicks_under155","goalkicks_under165","streak_3_no","under45","shots_target_under135","shots_target_under125","shots_target_over45"])for(let e=0;e<40;e++)rows.push({eventId:(type==='shots_target_over45'?'specialover':'special')+e,marketId:type,outcomeId:type==='oneup'?"1":"13",betType:type,sport:"football",winnerGapBelowOneQualified:true,winnerGapMaxOneQualified:type!=='shots_target_over45',winnerGapAboveEightQualified:type==='shots_target_over45',probability:80,odds:1.3,kickoffUtc:"2026-10-13T12:00:00Z"});return rows;}
-test('10 plans retain floors and unique matches after catalogue revision',()=>{const pack=buildPack(pool(),{now});assert.equal(pack.plans.length,10);for(const p of pack.plans.filter(p=>p.floor>0)){assert.equal(p.floor,p.targetOdds?60:70);assert.ok(p.selections.length>0&&p.selections.length<=p.maxGames);assert.equal(new Set(p.selections.map(c=>c.eventId)).size,p.selections.length);if(p.targetOdds)assert.ok(p.selections.reduce((n,c)=>n*c.odds,1)>=3);for(const c of p.selections){assert.ok(c.probability>=70);if(p.sport)assert.equal(c.sport,p.sport);if(p.winnerGapOnly)assert.equal(c.winnerGapQualified,true);}}});
+test('16 plans retain floors and unique matches after catalogue revision',()=>{const pack=buildPack(pool(),{now});assert.equal(pack.plans.length,16);for(const p of pack.plans.filter(p=>p.floor>0)){assert.equal(p.floor,p.targetOdds?60:70);assert.ok(p.selections.length>0&&p.selections.length<=p.maxGames);assert.equal(new Set(p.selections.map(c=>c.eventId)).size,p.selections.length);if(p.targetOdds)assert.ok(p.selections.reduce((n,c)=>n*c.odds,1)>=3);for(const c of p.selections){assert.ok(c.probability>=70);if(p.sport)assert.equal(c.sport,p.sport);if(p.winnerGapOnly)assert.equal(c.winnerGapQualified,true);}}});
 test('gap qualification is exclusive to winner ticket and long shots rank odds first',()=>{const rows=pool().map((c,i)=>({...c,winnerGapQualified:false,odds:1.01+i/10000}));const p=buildPack(rows,{now}).plans;assert.equal(p.some(p=>p.winnerGapOnly),false);const long=p.find(x=>x.id==='football70long');assert.equal(long.selections.length,20);assert.ok(long.selections[0].odds>=long.selections.at(-1).odds);});
 test('evening excludes morning match/type pairs even at 95 percent',()=>{const am=buildPack(pool(),{now});const excluded=new Set(am.plans.flatMap(p=>p.selections.map(pairKey)));const pm=buildPack(pool().map(c=>({...c,kickoffUtc:'2026-10-13T17:10:00Z'})),{now:new Date('2026-10-13T17:00:00Z'),excluded});for(const p of pm.plans)for(const c of p.selections)assert.ok(!excluded.has(pairKey(c)));});
 test('late tennis, live, started, next-day and invalid end times are excluded',()=>{const c={...pool().find(c=>c.betType==='streak_3_no'),kickoffUtc:'2026-10-13T20:00:00Z'};assert.equal(sameDay(c,now,'2026-10-13'),false);assert.equal(sameDay({...c,kickoffUtc:'2026-10-13T12:00:00Z'},now,'2026-10-13'),true);for(const change of [{live:true},{kickoffUtc:'2026-10-13T05:00:00Z'},{kickoffUtc:'2026-10-14T12:00:00Z'},{scheduledEndUtc:'bad'}])assert.equal(sameDay({...c,...change},now,'2026-10-13'),false);});
 function redis(){const values=new Map(),hashes=new Map();return {get:async k=>values.get(k),set:async(k,v)=>{values.set(k,v);return 'OK';},hVals:async k=>[...(hashes.get(k)?.values()||[])],hSet:async(k,f,v)=>{if(!hashes.has(k))hashes.set(k,new Map());hashes.get(k).set(f,v);},expire:async()=>1};}
-test('persistent checkpoints avoid duplicate sends after restart and save every code',async()=>{const r=redis(),codes=[],sent=[];let books=0;const deps={now:()=>now,loadPool:async()=>pool().map(c=>({...c,kickoffUtc:'2026-10-13T12:00:00Z'})),validate:async x=>x,book:async()=>({shareCode:'CODE'+(++books),shareURL:'https://example.test/booking/'+books}),saveCode:async(r,d,c)=>codes.push(c),track:async()=>{},updateTrack:async()=>{},send:async t=>sent.push(t)};const ctx={redis:r,dateKey:'2026-10-13',slotKey:'2026-10-13T07:00',slotTime:'07:00'};const a=await runFloorPicks(deps,ctx);assert.equal(a.ticketsSent,9);assert.equal(codes.length,9);assert.ok(sent.filter(t=>!t.includes("no qualifying variation")).every(t=>t.includes("https://example.test/booking/")));await runFloorPicks(deps,ctx);assert.equal(books,9);assert.equal(sent.length,10);});
+test('persistent checkpoints avoid duplicate sends after restart and save every code',async()=>{const r=redis(),codes=[],sent=[];let books=0;const deps={now:()=>now,loadPool:async()=>pool().map(c=>({...c,kickoffUtc:'2026-10-13T12:00:00Z'})),validate:async x=>x,book:async()=>({shareCode:'CODE'+(++books),shareURL:'https://example.test/booking/'+books}),saveCode:async(r,d,c)=>codes.push(c),track:async()=>{},updateTrack:async()=>{},send:async t=>sent.push(t)};const ctx={redis:r,dateKey:'2026-10-13',slotKey:'2026-10-13T07:00',slotTime:'07:00'};const a=await runFloorPicks(deps,ctx);assert.equal(a.ticketsSent,9);assert.equal(codes.length,9);assert.ok(sent.filter(t=>!t.includes("no qualifying variation")&&!t.includes("No distinct slip")).every(t=>t.includes("https://example.test/booking/")));await runFloorPicks(deps,ctx);assert.equal(books,9);assert.equal(sent.length,16);});
 test('ambiguous booking reserves selections and cannot be booked again',async()=>{const r=redis();let books=0;const deps={now:()=>now,loadPool:async()=>pool().filter(c=>c.sport==='football'),validate:async x=>x,book:async()=>{books++;throw Error('timeout');},send:async()=>{},saveCode:async()=>{},track:async()=>{},updateTrack:async()=>{}};const ctx={redis:r,dateKey:'2026-10-13',slotKey:'2026-10-13T07:00',slotTime:'07:00'};await runFloorPicks(deps,ctx);await runFloorPicks(deps,ctx);assert.equal(books,7);assert.ok((await r.hVals('telegram:floor:used:2026-10-13')).length);});
 test('long shots accept seven days and daily plans allow tomorrow fallback',()=>{
  const {withinWeek,eligible}=require('../lib/telegramFloorPicks');const c={...pool()[0],kickoffUtc:'2026-10-14T12:00:00Z'};
@@ -81,4 +81,33 @@ test('cached unbooked handicaps are rejected again and replaced with eligible al
 test('new goal-streak tickets contain only No selections with a 70 percent floor and 10/20 limits',()=>{
  const plans=buildPack([...pool(),{...pool()[0],eventId:'streak-yes',betType:'streak_3_yes',probability:99}],{now}).plans.filter(p=>p.id.startsWith('streak3no'));
  assert.equal(plans.length,1);assert.deepEqual(plans.map(p=>p.selections.length),[10]);for(const p of plans){assert.equal(p.floor,70);assert.ok(p.selections.every(c=>c.betType==='streak_3_no'&&c.probability>=70));}
+});
+
+test('daily high-odds tiers book two unique slips each within their game cap',async()=>{
+ const {DAILY_HIGH_ODDS}=require('../lib/telegramFloorPicks');
+ const sig=require('../lib/telegramNext12h').ticketSignature;
+ const rows=Array.from({length:30},(_,i)=>({eventId:'high'+i,marketId:'1',outcomeId:'1',betType:'home_win',sport:'football',
+   probability:86-i*.7,qualityScore:80,edge:0,odds:i%3===0?2.25:2,kickoffUtc:new Date(+now+(90+i*6)*60000).toISOString()}));
+ const booked=[],messages=[];
+ const deps={plans:DAILY_HIGH_ODDS,now:()=>now,loadPool:async()=>rows,validate:async x=>x,book:async x=>{booked.push(x);return{shareCode:'H'+booked.length}},saveCode:async()=>{},track:async()=>{},updateTrack:async()=>{},send:async x=>messages.push(x)};
+ const result=await runFloorPicks(deps,{redis:redis(),dateKey:'2026-10-13',slotKey:'high-test',slotTime:'07:00'});
+ assert.equal(result.ticketsSent,6);
+ assert.equal(new Set(booked.map(sig)).size,6);
+ for(const [i,p] of DAILY_HIGH_ODDS.entries()){
+  assert.ok(booked[i].length<=p.maxGames);
+  assert.ok(booked[i].every((c,j,a)=>!j||a[j-1].kickoffUtc<=c.kickoffUtc));
+  assert.ok(result.results[i].combinedOdds>=p.targetOdds);
+  assert.match(messages[i],/Kickoff order/);
+ }
+});
+
+test('short daily tiers use the closest qualifying fallback and accept exactly 1,000x',()=>{
+ const {DAILY_HIGH_ODDS}=require('../lib/telegramFloorPicks');
+ const p=DAILY_HIGH_ODDS.find(x=>x.targetOdds===10000);
+ const rows=Array.from({length:10},(_,i)=>({eventId:'exact'+i,marketId:'1',outcomeId:'1',betType:'home_win',sport:'football',probability:67,odds:i===9?1.953125:2,kickoffUtc:'2026-10-13T12:00:00Z'}));
+ const one=buildPack(rows,{now,plans:[p]}).plans[0];
+ assert.equal(one.selections.reduce((n,c)=>n*c.odds,1),1000);
+ assert.equal(buildPack(rows.slice(1),{now,plans:[p]}).plans[0].selections.length,0);
+ const more=[...rows,{...rows[0],eventId:'extra',odds:2}];
+ assert.equal(buildPack(more,{now,plans:[p]}).plans[0].selections.reduce((n,c)=>n*c.odds,1),2000);
 });
