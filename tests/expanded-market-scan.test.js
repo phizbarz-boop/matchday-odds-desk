@@ -29,15 +29,16 @@ test('imported specialty fixtures without kickoff metadata are read and accepted
  const expired=await scanExpandedMarkets([{...f,eventId:'expired-import',kickoffUtc:null}],{sports:['tennis'],now:()=>now,allowUnknownKickoff:true,client:{fetchEventDetail:async()=>payload({...f,eventId:'expired-import',kickoffUtc:now.toISOString()})}});assert.equal(expired.rows.length,0);
 });
 
-test('full scan bypasses the quick fixture cap and excludes games outside today WAT',async()=>{
+test('half scan checks half of eligible fixtures independently of the quick cap',async()=>{
  const fixtures=Array.from({length:70},(_,i)=>fixture(String(i)));
  const tomorrow=fixture('tomorrow','Tennis',{kickoffUtc:'2026-10-12T23:00:00Z'});
  const byId=new Map([...fixtures,tomorrow].map(f=>[f.eventId,f]));
- const result=await scanExpandedMarkets([...fixtures,tomorrow],{sports:['tennis'],now:()=>now,hours:48,fullScan:true,todayOnly:true,env:{SPORTYBET_EXPANDED_MAX_EVENTS:2},client:{fetchEventDetail:async id=>payload(byId.get(id))}});
+ const result=await scanExpandedMarkets([...fixtures,tomorrow],{sports:['tennis'],now:()=>now,hours:48,halfScan:true,todayOnly:true,env:{SPORTYBET_EXPANDED_MAX_EVENTS:2},client:{fetchEventDetail:async id=>payload(byId.get(id))}});
  assert.equal(result.coverage.discoveredFixtures,70);
- assert.equal(result.coverage.detailReads,70);
- assert.equal(result.coverage.complete,true);
- assert.equal(result.rows.length,140);
+ assert.equal(result.coverage.detailReads,35);
+ assert.equal(result.coverage.complete,false);
+ assert.equal(result.coverage.stopReason,'half_scan_sample');
+ assert.equal(result.rows.length,70);
 });
 
 test('full discovery keeps successful pages after retrying a timed-out page',async()=>{
@@ -53,4 +54,15 @@ test('full discovery keeps successful pages after retrying a timed-out page',asy
  assert.deepEqual(pages,[1,2,2]);
  assert.equal(result.fixtures.length,100);
  assert.equal(result.coverage.failedPage,2);
+});
+
+test('half scan processes fixtures without retaining raw rows and stops at the heap guard',async()=>{
+ const fixtures=Array.from({length:8},(_,i)=>fixture('memory'+i));
+ const byId=new Map(fixtures.map(f=>[f.eventId,f]));
+ const consumed=[];
+ const result=await scanExpandedMarkets(fixtures,{sports:['tennis'],now:()=>now,halfScan:true,env:{SPORTYBET_EXPANDED_CONCURRENCY:1},heapLimit:100,heapUsed:()=>consumed.length?80:10,onFixtureRows:rows=>consumed.push(rows.length),client:{fetchEventDetail:async id=>payload(byId.get(id))}});
+ assert.deepEqual(consumed,[2]);
+ assert.equal(result.rows.length,0);
+ assert.equal(result.coverage.detailReads,1);
+ assert.equal(result.coverage.stopReason,'memory_limit');
 });

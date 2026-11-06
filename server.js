@@ -1418,7 +1418,7 @@ function normalizeAutoBetTypesForSports(sports, betTypes) {
   return [...compatible].filter(id=>id!=='multi');
 }
 
-async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, ignoreEdge = false, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch', includeAllMarkets = null, fullScan = false, todayOnly = false, winnerGapOnly = false, winnerGapMaxOne = false, winnerGapAboveEight = false } = {}) {
+async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, ignoreEdge = false, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch', includeAllMarkets = null, halfScan = false, todayOnly = false, winnerGapOnly = false, winnerGapMaxOne = false, winnerGapAboveEight = false } = {}) {
   return withFreshSportyRequest(async()=>{
     // Discover and model public SportyBet data independently of booking login.
     if([winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight].filter(Boolean).length>1)throw Error('Choose only one winner odds gap filter');
@@ -1438,35 +1438,35 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     // Fetch only the market families actually requested. Previously, even a one-market
     // Analyzer request could fan out to every football/basketball/hockey market.
     const effectiveBetTypes = normalizeAutoBetTypesForSports(selectedSports, betTypes);
-    if(!fullScan&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/doubleChanceUnderMarkets').IDS.includes(id))&&['prematch','both'].includes(liveModeNorm)){return (await require('./lib/doubleChanceUnderMarkets').collect({hours:marketHours||168,leagues,signal:sportyRequest()?.signal,minProbability,minEdge,betTypes:effectiveBetTypes,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight})).rows;}
+    if(!halfScan&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/doubleChanceUnderMarkets').IDS.includes(id))&&['prematch','both'].includes(liveModeNorm)){return (await require('./lib/doubleChanceUnderMarkets').collect({hours:marketHours||168,leagues,signal:sportyRequest()?.signal,minProbability,minEdge,betTypes:effectiveBetTypes,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight})).rows;}
     const expandedPolicy=require('./lib/expandedScanPolicy').expandedScanPolicy(betTypes,marketHours);
     const requestedBetTypes = effectiveBetTypes.length ? new Set(effectiveBetTypes) : null;
-    if(!fullScan&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/basketballPeriodMarkets').IDS.includes(id))&&includeAllMarkets!==true&&liveModeNorm==='prematch'){return (await require('./lib/basketballPeriodMarkets').collect({hours:marketHours||168,leagues,minProbability,minEdge,betTypes:effectiveBetTypes,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight})).candidates;}
-    if(!fullScan&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/shotsOnTargetMarkets').IDS.includes(id))&&includeAllMarkets!==true&&liveModeNorm==='prematch'){
+    if(!halfScan&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/basketballPeriodMarkets').IDS.includes(id))&&includeAllMarkets!==true&&liveModeNorm==='prematch'){return (await require('./lib/basketballPeriodMarkets').collect({hours:marketHours||168,leagues,minProbability,minEdge,betTypes:effectiveBetTypes,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight})).candidates;}
+    if(!halfScan&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/shotsOnTargetMarkets').IDS.includes(id))&&includeAllMarkets!==true&&liveModeNorm==='prematch'){
       return require('./lib/shotsOnTargetMarkets').collectShotsOnTargetCandidates({hours:marketHours||168,leagues,signal:sportyRequest()?.signal,minProbability,minEdge,betTypes:effectiveBetTypes,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight});
     }
-    if(!fullScan&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>['corners_over','corners_under',...require('./lib/cornerMarkets').IDS].includes(id))&&includeAllMarkets!==true&&liveModeNorm==='prematch'&&!gapFilterOn){
+    if(!halfScan&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>['corners_over','corners_under',...require('./lib/cornerMarkets').IDS].includes(id))&&includeAllMarkets!==true&&liveModeNorm==='prematch'&&!gapFilterOn){
       const scan=await require('./lib/cornerMarkets').collectCornerMarkets({hours:marketHours||168,leagues,signal:sportyRequest()?.signal});
       const candidates=await require('./lib/cornerMarkets').candidatesFromRows(scan.rows,{betTypes:effectiveBetTypes,minProbability,minEdge});
       candidates.marketCoverage={scan:scan.coverage};candidates.sourceErrors=scan.errors;candidates.dataSource=scan.coverage.source;candidates.dataFetchedAt=scan.generatedAt;return candidates;
     }
-    if(!fullScan&&expandedPolicy.goalKickOnly&&includeAllMarkets!==true&&liveModeNorm==='prematch'&&!gapFilterOn){
+    if(!halfScan&&expandedPolicy.goalKickOnly&&includeAllMarkets!==true&&liveModeNorm==='prematch'&&!gapFilterOn){
       const scan=await require('./lib/goalKickFeed').collectGoalKickMarkets({hours:expandedPolicy.hours,leagues,signal:sportyRequest()?.signal});
       const modeled=require('./lib/offeredMarketModel').modelOfferedMarkets(scan.rows,{minProbability,minEdge});
       const candidates=modeled.candidates.filter(c=>requestedBetTypes.has(c.betType));
       candidates.marketCoverage={...modeled.coverage,collectionErrors:scan.errors,scan:scan.coverage};candidates.sourceErrors=scan.errors;
       candidates.dataSource=scan.coverage.source;candidates.dataFetchedAt=scan.generatedAt;candidates.winnerGapOnly=false;return candidates;
     }
-    if(!fullScan&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/highestUnderMarkets').IDS.includes(id))&&includeAllMarkets!==true&&liveModeNorm==='prematch'&&!gapFilterOn){
+    if(!halfScan&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/highestUnderMarkets').IDS.includes(id))&&includeAllMarkets!==true&&liveModeNorm==='prematch'&&!gapFilterOn){
       const scan=await require('./lib/highestUnderFeed').collectHighestUnderMarkets({sports:selectedSports,hours:marketHours||168,leagues,signal:sportyRequest()?.signal});
       const model=require('./lib/offeredMarketModel').modelOfferedMarkets(scan.rows,{minProbability,minEdge});
       const candidates=model.candidates.filter(c=>requestedBetTypes.has(c.betType)&&c.highestAvailableUnder===true);
       candidates.marketCoverage={...model.coverage,collectionErrors:scan.errors,scan:scan.coverage};candidates.sourceErrors=scan.errors;candidates.dataSource=scan.coverage.source;candidates.dataFetchedAt=scan.generatedAt;return candidates;
     }
-    if(Array.isArray(betTypes)&&betTypes.includes('multi'))return require('./lib/multiPick').collect({loadCandidates:loadAutoCandidates,hours:marketHours||168,leagues,signal:sportyRequest()?.signal,fullScan,todayOnly});
-    if(!fullScan&&!gapFilterOn&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/footballExtraMarkets').IDS.includes(id))&&liveModeNorm==='prematch')return require('./lib/footballExtraMarkets').collect({hours:marketHours||168,leagues,minProbability,minEdge,betTypes:effectiveBetTypes,signal:sportyRequest()?.signal,fullScan,todayOnly});
+    if(Array.isArray(betTypes)&&betTypes.includes('multi'))return require('./lib/multiPick').collect({loadCandidates:loadAutoCandidates,hours:marketHours||168,leagues,signal:sportyRequest()?.signal,halfScan,todayOnly});
+    if(!halfScan&&!gapFilterOn&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/footballExtraMarkets').IDS.includes(id))&&liveModeNorm==='prematch')return require('./lib/footballExtraMarkets').collect({hours:marketHours||168,leagues,minProbability,minEdge,betTypes:effectiveBetTypes,signal:sportyRequest()?.signal,halfScan,todayOnly});
     const wantsAny = ids => !requestedBetTypes || ids.some(id => requestedBetTypes.has(id));
-    const needF1x2 = wantsFootball && (fullScan || wantsAny([...require('./lib/footballExtraMarkets').IDS,...require('./lib/doubleChanceUnderMarkets').IDS]) || gapFilterOn || wantsAny([...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS,'throwins_highest_under']) || wantsAny(['home_win','draw','away_win','dc_1x','dc_x2']));
+    const needF1x2 = wantsFootball && (halfScan || wantsAny([...require('./lib/footballExtraMarkets').IDS,...require('./lib/doubleChanceUnderMarkets').IDS]) || gapFilterOn || wantsAny([...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS,'throwins_highest_under']) || wantsAny(['home_win','draw','away_win','dc_1x','dc_x2']));
     const needFGg = wantsFootball && wantsAny(['gg_yes','ng_no']);
     const needFDc = wantsFootball && wantsAny(['dc_1x','dc_x2']);
     const needFDnb = wantsFootball && wantsAny(['dnb']);
@@ -1483,20 +1483,20 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     const needFCs = wantsFootball && wantsAny(['correct_score']);
     const needF1hCorners = false;
     const needFOneup = wantsFootball && wantsAny(['oneup']);
-    const needBasketballWinner = wantsBasketball && (fullScan || gapFilterOn || wantsAny(['basketball_winner','basketball_rebounds_highest_under']));
+    const needBasketballWinner = wantsBasketball && (halfScan || gapFilterOn || wantsAny(['basketball_winner','basketball_rebounds_highest_under']));
     const needBasketballTotals = wantsBasketball && wantsAny(['basketball_over','basketball_under']);
     const needBasketballHandicap = wantsBasketball && wantsAny(['basketball_handicap_home','basketball_handicap_away']);
-    const needHockeyWinner = wantsHockey && (fullScan || gapFilterOn || wantsAny(['hockey_winner','hockey_shots_highest_under']));
+    const needHockeyWinner = wantsHockey && (halfScan || gapFilterOn || wantsAny(['hockey_winner','hockey_shots_highest_under']));
     const needHockeyTotals = wantsHockey && wantsAny(['hockey_over','hockey_under']);
     const needHockeyHandicap = wantsHockey && wantsAny(['hockey_handicap_home','hockey_handicap_away']);
-    const needHandballWinner = wantsHandball && (fullScan || gapFilterOn || wantsAny(['handball_winner']));
+    const needHandballWinner = wantsHandball && (halfScan || gapFilterOn || wantsAny(['handball_winner']));
     const needHandballTotals = wantsHandball && wantsAny(['handball_over','handball_under']);
     const needHandballHandicap = wantsHandball && wantsAny(['handball_handicap_home','handball_handicap_away']);
-    const needVolleyballWinner = wantsVolleyball && (fullScan || gapFilterOn || wantsAny(['volleyball_winner']));
+    const needVolleyballWinner = wantsVolleyball && (halfScan || gapFilterOn || wantsAny(['volleyball_winner']));
     const needVolleyballTotals = wantsVolleyball && wantsAny(['volleyball_over','volleyball_under']);
     const needVolleyballSets = wantsVolleyball && wantsAny(['volleyball_sets_over','volleyball_sets_under']);
     const needVolleyballHandicap = wantsVolleyball && wantsAny(['volleyball_handicap_home','volleyball_handicap_away']);
-    const needTennisWinner = wantsTennis && (fullScan || gapFilterOn || wantsAny(['tennis_winner']));
+    const needTennisWinner = wantsTennis && (halfScan || gapFilterOn || wantsAny(['tennis_winner']));
     const needTennisTotals = wantsTennis && wantsAny(['tennis_over','tennis_under']);
     const needTennisHandicap = wantsTennis && wantsAny(['tennis_handicap_home','tennis_handicap_away']);
 
@@ -1504,7 +1504,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     // snapshots never decide which matches or prices a user can select.
     const autoMarketOptions = {
       hours: expandedPolicy.hours,
-      maxPages: fullScan ? 20 : marketMaxPages || undefined,
+      maxPages: marketMaxPages || undefined,
       fixtures:Array.isArray(requestedFixtures)?requestedFixtures:null,
       kickoffBufferSeconds: Math.max(0, parseInt(process.env.SPORTYBET_KICKOFF_BUFFER_SECONDS || '60', 10)),
     };
@@ -1723,21 +1723,37 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     if(wantsPrematch&&wantsFootball&&wantsAny(require('./lib/shotsOnTargetMarkets').IDS)){
       try{const shots=await require('./lib/shotsOnTargetMarkets').collectShotsOnTargetCandidates({hours:marketHours||168,leagues,signal:sportyRequest()?.signal,minProbability,minEdge,betTypes:effectiveBetTypes,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight});const known=new Set(candidates.map(sportySelectionKey));for(const c of shots)if(!known.has(sportySelectionKey(c))){candidates.push(c);known.add(sportySelectionKey(c));}}catch(e){sourceErrors['shots on target']=String(e.message).slice(0,160);}
     }
-    if((fullScan||includeAllMarkets===true||includeAllMarkets==null&&betTypes==null||[...require('./lib/footballExtraMarkets').IDS,...require('./lib/doubleChanceUnderMarkets').IDS,...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS,...require('./lib/highestUnderMarkets').IDS].some(id=>betTypes?.includes(id)))&&(fullScan||!['false','0','off'].includes(String(process.env.SPORTYBET_EXPANDED_MARKETS_ENABLED||'true').toLowerCase()))&&liveModeNorm!=='live'&&liveModeNorm!=='quick_cash'){
+    if((halfScan||includeAllMarkets===true||includeAllMarkets==null&&betTypes==null||[...require('./lib/footballExtraMarkets').IDS,...require('./lib/doubleChanceUnderMarkets').IDS,...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS,...require('./lib/highestUnderMarkets').IDS].some(id=>betTypes?.includes(id)))&&(halfScan||!['false','0','off'].includes(String(process.env.SPORTYBET_EXPANDED_MARKETS_ENABLED||'true').toLowerCase()))&&liveModeNorm!=='live'&&liveModeNorm!=='quick_cash'){
       try{
         const fixtures=[f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners,basketballWinner,basketballTotals,basketballHandicap,hockeyWinner,hockeyTotals,hockeyHandicap,handballWinner,handballTotals,handballHandicap,volleyballWinner,volleyballTotals,volleyballSets,volleyballHandicap,tennisWinner,tennisTotals,tennisHandicap].flatMap(p=>p?.rows||[]);
-        const discovery=fullScan?await Promise.allSettled(selectedSports.map(sport=>require('./lib/sportybet').listPrematchFixtures(sport))):[];
+        const discovery=halfScan?await Promise.allSettled(selectedSports.map(sport=>require('./lib/sportybet').listPrematchFixtures(sport))):[];
         const missingSports=selectedSports.filter((_,i)=>discovery[i]?.status==='rejected'||discovery[i]?.value?.coverage?.reason);
-        const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets([...fixtures,...discovery.flatMap(r=>r.status==='fulfilled'?r.value.fixtures:[]),...(requestedFixtures||[])],{sports:selectedSports,leagues,...expandedPolicy,fullScan,todayOnly,allowUnknownKickoff:Array.isArray(requestedFixtures)});
+        const model=require('./lib/offeredMarketModel').modelOfferedMarkets;
+        const allow=c=>require('./lib/streakGoalModel').expandedSelectionAllowed(c,betTypes,includeAllMarkets===true||includeAllMarkets==null&&betTypes==null);
+        const streamed={discoveredMarketInstances:0,existingModel:0,marketEstimates:0,unmodeled:0};
+        const knownByEvent=new Map();
+        if(halfScan)for(const c of candidates){const id=String(c.eventId);if(!knownByEvent.has(id))knownByEvent.set(id,[]);knownByEvent.get(id).push(c);}
+        const onFixtureRows=halfScan?(rows,fixture)=>{
+          if(gapFilterOn){const gap=require('./lib/winnerOddsGap');const eligible=gap.configuredWinnerOddsGap(rows,{winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight});rows=rows.filter(r=>eligible.has(gap.key(r)));}
+          if(!rows.length)return;
+          const modeled=model(rows,{known:knownByEvent.get(String(fixture.eventId))||[],predictions,minProbability,minEdge,includeMarketDetails:false});
+          for(const k of Object.keys(streamed))streamed[k]+=modeled.coverage[k];
+          for(const c of modeled.candidates)if(allow(c))candidates.push(c);
+        }:null;
+        const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets([...fixtures,...discovery.flatMap(r=>r.status==='fulfilled'?r.value.fixtures:[]),...(requestedFixtures||[])],{sports:selectedSports,leagues,...expandedPolicy,halfScan,todayOnly,onFixtureRows,allowUnknownKickoff:Array.isArray(requestedFixtures)});
         if(missingSports.length){
           scan.coverage={...scan.coverage,complete:false,partial:true,stopReason:'discovery_errors',missingSports};
-          sourceErrors['fixture discovery']='Incomplete fixture listing for '+missingSports.map(sport=>{const c=discovery[selectedSports.indexOf(sport)]?.value?.coverage;return c?.failedPage?sport+' (page '+c.failedPage+' timed out or could not connect)':sport;}).join(', ');
+          sourceErrors['fixture discovery']='Incomplete fixture listing for '+missingSports.map(sport=>{const c=discovery[selectedSports.indexOf(sport)]?.value?.coverage;return c?.failedPage?sport+' (listing stopped at page '+c.failedPage+')':sport;}).join(', ');
         }
-        const freshGap=gapFilterOn?require('./lib/winnerOddsGap').configuredWinnerOddsGap(scan.rows,{winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight}):null;
-        const expandedRows=gapFilterOn?scan.rows.filter(r=>freshGap.has(require('./lib/winnerOddsGap').key(r))):scan.rows;
-        const expanded=require('./lib/offeredMarketModel').modelOfferedMarkets(expandedRows,{known:candidates,predictions,minProbability,minEdge});
-        candidates.push(...expanded.candidates.filter(c=>require('./lib/streakGoalModel').expandedSelectionAllowed(c,betTypes,includeAllMarkets===true||includeAllMarkets==null&&betTypes==null)));candidates.marketCoverage={...expanded.coverage,collectionErrors:scan.errors,scan:scan.coverage};
-        if(!scan.rows.length&&Object.keys(scan.errors).length)sourceErrors['expanded markets']='Extra market detail requests were unavailable or timed out; regular candidates retained';
+        let coverage=streamed;
+        if(!halfScan){
+          const freshGap=gapFilterOn?require('./lib/winnerOddsGap').configuredWinnerOddsGap(scan.rows,{winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight}):null;
+          const expandedRows=gapFilterOn?scan.rows.filter(r=>freshGap.has(require('./lib/winnerOddsGap').key(r))):scan.rows;
+          const expanded=model(expandedRows,{known:candidates,predictions,minProbability,minEdge});
+          candidates.push(...expanded.candidates.filter(allow));coverage=expanded.coverage;
+        }
+        candidates.marketCoverage={...coverage,collectionErrors:scan.errors,scan:scan.coverage};
+        if(!scan.coverage.detailReads&&Object.keys(scan.errors).length)sourceErrors['expanded markets']='Extra market detail requests were unavailable or timed out; regular candidates retained';
       }catch(error){sourceErrors['expanded markets']=String(error.message).slice(0,160);}
     }
     if(wantsLive) {
@@ -1795,7 +1811,7 @@ async function prepareAutoCandidatePool({
   marketHours=null,
   marketMaxPages=null,
   todayOnly=false,
-  fullScan=false,
+  halfScan=false,
   liveMode='prematch',
   includeAllMarkets=null,
   winnerGapOnly=false,
@@ -1821,7 +1837,7 @@ async function prepareAutoCandidatePool({
     marketHours,
     marketMaxPages,
     liveMode: liveModeNorm,
-    includeAllMarkets,fullScan,todayOnly,
+    includeAllMarkets,halfScan,todayOnly,
     winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight,
   });
 
@@ -2256,14 +2272,14 @@ async function autoCornerDiagnostics(betTypes,liveMode='prematch') {
 app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs.wrap(async (req, res) => {
   try {
     const body = req.body || {};
-    const fullScan=body.fullScan===true;
-    if(fullScan&&['live','quick_cash'].includes(normalizeLiveMode(body.liveMode)))return res.status(400).json({error:'Full Scan checks upcoming fixtures. Choose Prematch or Both.'});
+    const halfScan=body.halfScan===true||body.fullScan===true;
+    if(halfScan&&['live','quick_cash'].includes(normalizeLiveMode(body.liveMode)))return res.status(400).json({error:'Half Scan checks upcoming fixtures. Choose Prematch or Both.'});
     if(body.winnerGapMaxTwo===true)return res.status(400).json({error:'The odds gap ≤2 option was removed. Select odds gap above 8.00 instead.'});
     if([body.winnerGapOnly,body.winnerGapMaxOne,body.winnerGapAboveEight].filter(v=>v===true).length>1)return res.status(400).json({error:'Choose only one winner odds gap filter'});
     if(Array.isArray(body.betTypes)&&body.betTypes.includes('multi')){
       const multi=require('./lib/multiPick');let excluded;try{excluded=require('./lib/ticketVariation').exclusions(body.excludedTicketSignatures);}catch(error){return res.status(400).json({error:error.message});}
       const leagues=Array.isArray(body.leagues)?body.leagues.map(String):null;
-      const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:['multi'],minProbability:0,minEdge:-25,leagues,todayOnly:body.todayOnly===true,liveMode:'prematch',includeAllMarkets:true,fullScan});
+      const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:['multi'],minProbability:0,minEdge:-25,leagues,todayOnly:body.todayOnly===true,liveMode:'prematch',includeAllMarkets:true,halfScan});
       const multiMaxSelections=Math.max(1,Math.min(50,parseInt(body.maxSelections,10)||20));
       const result=multi.ticket(prepared.candidates,{maxSelections:multiMaxSelections,excludedTickets:excluded});
       if(!result.selections.length)return res.status(404).json({error:excluded.size?'No other Multi ticket variation is available under these rules.':'No available games matched the Multi market and odds-gap rules.',code:excluded.size?'NO_OTHER_VARIATION':'NO_MULTI_GAMES'});
@@ -2288,7 +2304,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     const todayOnly = body.todayOnly === true || String(body.todayOnly || '').toLowerCase() === 'true';
     const liveMode = normalizeLiveMode(body.liveMode);
 
-    const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly, liveMode,fullScan,includeAllMarkets:body.includeAllMarkets===true,winnerGapOnly:body.winnerGapOnly===true,winnerGapMaxOne:body.winnerGapMaxOne===true,winnerGapAboveEight:body.winnerGapAboveEight===true });
+    const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly, liveMode,halfScan,includeAllMarkets:body.includeAllMarkets===true,winnerGapOnly:body.winnerGapOnly===true,winnerGapMaxOne:body.winnerGapMaxOne===true,winnerGapAboveEight:body.winnerGapAboveEight===true });
     const oddsFilteredCandidates = prepared.candidates;
     const redFlagSafeCandidatesCount = prepared.diagnostics.afterRedFlag;
     const rawCandidatesCount = prepared.diagnostics.rawCandidates;
