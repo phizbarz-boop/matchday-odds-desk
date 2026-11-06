@@ -39,3 +39,18 @@ test('full scan bypasses the quick fixture cap and excludes games outside today 
  assert.equal(result.coverage.complete,true);
  assert.equal(result.rows.length,140);
 });
+
+test('full discovery keeps successful pages after retrying a timed-out page',async()=>{
+ const {listPrematchFixtures}=require('../lib/sportybet');
+ const pages=[];
+ const result=await withFreshSportyRequest(()=>listPrematchFixtures('football',{client:{
+  fetchPrematchPage:async(_sport,page)=>{
+   pages.push(page);
+   if(page===2)throw Object.assign(Error('timeout'),{code:'SPORTYBET_TIMEOUT'});
+   return {data:{total:200,events:Array.from({length:100},(_,i)=>({eventId:'fixture'+i,homeTeamName:'A',awayTeamName:'B',estimateStartTime:+now+3600000}))}};
+  }
+ }}),{reset:true});
+ assert.deepEqual(pages,[1,2,2]);
+ assert.equal(result.fixtures.length,100);
+ assert.equal(result.coverage.failedPage,2);
+});

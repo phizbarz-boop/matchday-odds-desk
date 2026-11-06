@@ -1727,11 +1727,11 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
       try{
         const fixtures=[f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners,basketballWinner,basketballTotals,basketballHandicap,hockeyWinner,hockeyTotals,hockeyHandicap,handballWinner,handballTotals,handballHandicap,volleyballWinner,volleyballTotals,volleyballSets,volleyballHandicap,tennisWinner,tennisTotals,tennisHandicap].flatMap(p=>p?.rows||[]);
         const discovery=fullScan?await Promise.allSettled(selectedSports.map(sport=>require('./lib/sportybet').listPrematchFixtures(sport))):[];
-        const missingSports=selectedSports.filter((_,i)=>discovery[i]?.status==='rejected');
-        const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets([...fixtures,...discovery.flatMap(r=>r.status==='fulfilled'?r.value:[]),...(requestedFixtures||[])],{sports:selectedSports,leagues,...expandedPolicy,fullScan,todayOnly,allowUnknownKickoff:Array.isArray(requestedFixtures)});
+        const missingSports=selectedSports.filter((_,i)=>discovery[i]?.status==='rejected'||discovery[i]?.value?.coverage?.reason);
+        const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets([...fixtures,...discovery.flatMap(r=>r.status==='fulfilled'?r.value.fixtures:[]),...(requestedFixtures||[])],{sports:selectedSports,leagues,...expandedPolicy,fullScan,todayOnly,allowUnknownKickoff:Array.isArray(requestedFixtures)});
         if(missingSports.length){
           scan.coverage={...scan.coverage,complete:false,partial:true,stopReason:'discovery_errors',missingSports};
-          sourceErrors['fixture discovery']='Could not list all fixtures for '+missingSports.join(', ');
+          sourceErrors['fixture discovery']='Incomplete fixture listing for '+missingSports.map(sport=>{const c=discovery[selectedSports.indexOf(sport)]?.value?.coverage;return c?.failedPage?sport+' (page '+c.failedPage+' timed out or could not connect)':sport;}).join(', ');
         }
         const freshGap=gapFilterOn?require('./lib/winnerOddsGap').configuredWinnerOddsGap(scan.rows,{winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight}):null;
         const expandedRows=gapFilterOn?scan.rows.filter(r=>freshGap.has(require('./lib/winnerOddsGap').key(r))):scan.rows;
