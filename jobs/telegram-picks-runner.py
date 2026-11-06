@@ -13,7 +13,7 @@ import urllib.request
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--endpoint", choices=["probability-picks", "daily-picks", "next-12h-picks", "hourly-picks", "three-hourly-picks", "today-10k-test"], default="daily-picks")
+    parser.add_argument("--endpoint", choices=["probability-picks", "daily-picks", "next-12h-picks", "hourly-picks", "three-hourly-picks", "today-10k-test", "daily-high-test"], default="daily-picks")
     args = parser.parse_args()
     secret = os.environ.get("TELEGRAM_JOB_SECRET", "")
     base = os.environ.get("MATCHDAY_BASE_URL", "https://matchday-odds-desk.onrender.com").rstrip("/")
@@ -117,7 +117,7 @@ def main():
             return 22
         else:
             status_errors += 1
-            if args.endpoint == "today-10k-test" and status_errors >= 3:
+            if args.endpoint in ("today-10k-test", "daily-high-test") and status_errors >= 3:
                 print(f"Three consecutive status checks failed (last HTTP {code}). "
                       f"Run {run_id} is unconfirmed; check Telegram and the Render logs before retrying. "
                       "Stopping polling does not cancel the server job.", file=sys.stderr)

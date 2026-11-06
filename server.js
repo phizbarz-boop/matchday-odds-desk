@@ -3666,7 +3666,7 @@ const floorDeps={
  loadPool:({signal,hours=168})=>withPublicSportyRequest(async()=>{
   const options={sportScope:'all',marketHours:hours,minProbability:0,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'};
   let rows=await loadAutoCandidates(options);
-  const specialty=await Promise.allSettled([loadAutoCandidates({...options,includeAllMarkets:false,betTypes:['oneup']}),require('./lib/doubleChanceUnderMarkets').collect({...options,hours,signal,minProbability:60}).then(p=>p.probabilityRows||p.rows||[]),require('./lib/streakGoalFeed').collectStreakGoalCandidates({hours,minProbability:70,minEdge:-100,signal}),loadAutoCandidates({...options,includeAllMarkets:false,betTypes:['first5_goals_under05']})]);
+  const specialty=await Promise.allSettled([loadAutoCandidates({...options,includeAllMarkets:false,betTypes:['oneup']}),require('./lib/doubleChanceUnderMarkets').collect({...options,hours,signal,minProbability:60}).then(p=>p.probabilityRows||p.rows||[]),require('./lib/streakGoalFeed').collectStreakGoalCandidates({hours,minProbability:70,minEdge:-100,signal}),loadAutoCandidates({...options,includeAllMarkets:false,betTypes:['first5_goals_under05']}),loadAutoCandidates({...options,sportScope:'basketball',includeAllMarkets:false,betTypes:['basketball_rebounds_highest_under']}),loadAutoCandidates({...options,sportScope:'basketball',includeAllMarkets:false,betTypes:require('./lib/basketballPeriodMarkets').IDS})]);
   let multiRows=[];try{multiRows=await require('./lib/multiPick').collect({loadCandidates:loadAutoCandidates,hours,signal});}catch(error){console.warn('Telegram Multi source unavailable:',String(error.code||'source_unavailable'));}const multiMap=new Map(multiRows.map(c=>[sportySelectionKey(c),c]));rows=rows.map(c=>multiMap.get(sportySelectionKey(c))||c);const rowKeys=new Set(rows.map(sportySelectionKey));for(const c of multiRows)if(!rowKeys.has(sportySelectionKey(c))){rows.push(c);rowKeys.add(sportySelectionKey(c));}
   const keys=new Set(rows.map(sportySelectionKey));for(const result of specialty)if(result.status==='fulfilled')for(const c of result.value)if(!keys.has(sportySelectionKey(c))){rows.push(c);keys.add(sportySelectionKey(c));}
   if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');
@@ -3686,9 +3686,9 @@ const floorScheduler=createWatScheduler({name:'Telegram probability floors',time
  enabled:String(process.env.TELEGRAM_FLOOR_PICKS_ENABLED||'true')!=='false',configured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),catchupMinutes:120});
 const threeHourSafe=require('./lib/telegramThreeHourSafe');
 const threeSafeJob=createWatSlotJob({namespace:'telegram:three-safe:v1',getRedis,run:ctx=>runFloorPicks({...floorDeps,plans:threeHourSafe.PLANS,namespace:'telegram:three-safe:v1',buildPack:threeHourSafe.buildPack,preparePack:threeHourSafe.preparePack,reserveSelections:threeHourSafe.reserveSelections,loadPool:options=>floorDeps.loadPool({...options,hours:168})},ctx)});
-const threeSafeScheduler=createWatScheduler({name:'Telegram 3-hour safe variations',times:threeHourSafe.TIMES,runJob:threeSafeJob,enabled:String(process.env.TELEGRAM_THREE_HOUR_SAFE_ENABLED||'true')!=='false',configured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),catchupMinutes:30});
+const threeSafeScheduler=createWatScheduler({name:'Telegram 6-hour safe variations',times:threeHourSafe.TIMES,runJob:threeSafeJob,enabled:String(process.env.TELEGRAM_THREE_HOUR_SAFE_ENABLED||'true')!=='false',configured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),catchupMinutes:30});
 const threeSafeRequests=createTelegramRunRequests({name:'three-hourly-picks',authorize:authorizeTelegramJob,getRedis});
-app.post('/api/telegram/three-hourly-picks',express.json(),threeSafeRequests.wrap(async(req,res)=>{let slot;try{slot=threeHourSafe.resolveSlot(req.headers);}catch(e){return res.status(400).json({error:e.message});}await res.jobStage?.('building_three_hour_variations');const result=await threeSafeJob({...slot,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);}));
+app.post('/api/telegram/three-hourly-picks',express.json(),threeSafeRequests.wrap(async(req,res)=>{let slot;try{slot=threeHourSafe.resolveSlot(req.headers);}catch(e){return res.status(400).json({error:e.message});}await res.jobStage?.('building_six_hour_variations');const result=await threeSafeJob({...slot,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);}));
 app.get('/api/telegram/three-hourly-picks/run-status/:runId',threeSafeRequests.status);
 const floorRequests=createTelegramRunRequests({name:'probability-picks',authorize:authorizeTelegramJob,getRedis});
 app.post('/api/telegram/probability-picks',express.json(),floorRequests.wrap(async(req,res)=>{
@@ -3698,7 +3698,7 @@ app.post('/api/telegram/probability-picks',express.json(),floorRequests.wrap(asy
  const result=await floorJob({...slot,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);
 }));
 app.get('/api/telegram/probability-picks/run-status/:runId',floorRequests.status);
-const todayTestPlans=FLOOR_PLANS.filter(p=>p.todayLongShot);
+const todayTestPlans=FLOOR_PLANS.filter(p=>p.todayLongShot&&!p.dailyHighOdds);
 // The manual test uses the published catalogue, rather than repeating the
 // full production scan for unrelated hockey, streak and Multi plans.
 async function loadTodayTestPool({signal}){
@@ -3719,6 +3719,17 @@ app.post('/api/telegram/today-10k-test',express.json(),todayTestRequests.wrap(as
  const result=await todayTestJob({...slot,signal:AbortSignal.timeout(240000)});return res.status(result.statusCode).json(result.body);
 }));
 app.get('/api/telegram/today-10k-test/run-status/:runId',todayTestRequests.status);
+const dailyHighTestPlans=FLOOR_PLANS.filter(p=>p.dailyHighOdds);
+const dailyHighTestJob=createWatSlotJob({namespace:'telegram:daily-high-test',getRedis,run:ctx=>runFloorPicks({...floorDeps,plans:dailyHighTestPlans,loadPool:loadTodayTestPool,namespace:'telegram:daily-high-test'},ctx)});
+const dailyHighTestRequests=createTelegramRunRequests({name:'daily-high-test',authorize:authorizeTelegramJob,getRedis});
+app.post('/api/telegram/daily-high-test',express.json(),dailyHighTestRequests.wrap(async(req,res)=>{
+ let slot;try{slot=resolveFloorSlot(req.headers);}catch(e){return res.status(400).json({error:e.message});}
+ if(!slot?.manualTest)return res.status(400).json({error:'Manual workflow dispatch required'});
+ await res.jobStage?.('building_daily_high_test');
+ const result=await dailyHighTestJob({...slot,signal:AbortSignal.timeout(240000)});
+ return res.status(result.statusCode).json(result.body);
+}));
+app.get('/api/telegram/daily-high-test/run-status/:runId',dailyHighTestRequests.status);
 registerTelegramPerformanceRoute(app,{express,authorize:authorizeTelegramJob,getRedis,runReport:runTelegramPerformanceReport});
 
 // All hourly and three-hourly automated ticket endpoints are retired.
