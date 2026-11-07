@@ -1,0 +1,36 @@
+name: Plot207 SportyBet Player Lineups
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sporty-player-lineups.yml'
+      - 'lib/sportyLineup*.js'
+      - 'jobs/sporty-lineups-worker.js'
+  workflow_dispatch:
+  schedule:
+    - cron: '11,41 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: plot207-sporty-player-lineups
+  cancel-in-progress: false
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      H2H_BROWSER_HEADED: 'true'
+      PLAYWRIGHT_BROWSERS_PATH: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Check shared cache
+        run: test -n "$REDIS_URL" || (echo 'Set REDIS_URL to the Redis used by Render' && exit 1)
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - name: Read public SportyBet usual lineups
+        run: xvfb-run --auto-servernum node jobs/sporty-lineups-worker.js

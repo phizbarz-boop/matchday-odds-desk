@@ -1,0 +1,534 @@
+[
+  {
+    "queryUrl": "stats_team_usuallineup/32/140756",
+    "doc": [
+      {
+        "event": "stats_team_usuallineup",
+        "data": {
+          "formation": "4-2-3-1",
+          "players": [
+            {
+              "_id": 198038,
+              "name": "Walton, Christian",
+              "position": {
+                "_id": 1,
+                "name": "Goalie",
+                "order": 1,
+                "matchpos": "G",
+                "basename": "Goalie",
+                "baseshortname": "GK",
+                "baseabbr": "G"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "2",
+                "_position": "G",
+                "_sportid": 1,
+                "_type": "G",
+                "name": "Goalkeeper",
+                "shortname": "GK",
+                "abbr": "G"
+              }
+            },
+            {
+              "_id": 2313399,
+              "name": "Ouattara, Abdoul",
+              "position": {
+                "_id": 2,
+                "name": "Right back",
+                "order": 2,
+                "matchpos": "D",
+                "basename": "Defender",
+                "baseshortname": "DEF",
+                "baseabbr": "D"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "6",
+                "_position": "M",
+                "_sportid": 1,
+                "_type": "M",
+                "name": "Midfielder",
+                "shortname": "MID",
+                "abbr": "M"
+              }
+            },
+            {
+              "_id": 361320,
+              "name": "Diop, Issa",
+              "position": {
+                "_id": 3,
+                "name": "Central defender",
+                "order": 3,
+                "matchpos": "D",
+                "basename": "Defender",
+                "baseshortname": "DEF",
+                "baseabbr": "D"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "4",
+                "_position": "D",
+                "_sportid": 1,
+                "_type": "D",
+                "name": "Defender",
+                "shortname": "DEF",
+                "abbr": "D"
+              }
+            },
+            {
+              "_id": 934550,
+              "name": "O'Shea, Dara",
+              "position": {
+                "_id": 3,
+                "name": "Central defender",
+                "order": 4,
+                "matchpos": "D",
+                "basename": "Defender",
+                "baseshortname": "DEF",
+                "baseabbr": "D"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "4",
+                "_position": "D",
+                "_sportid": 1,
+                "_type": "D",
+                "name": "Defender",
+                "shortname": "DEF",
+                "abbr": "D"
+              }
+            },
+            {
+              "_id": 1640266,
+              "name": "Davis, Leif",
+              "position": {
+                "_id": 4,
+                "name": "Left back",
+                "order": 5,
+                "matchpos": "D",
+                "basename": "Defender",
+                "baseshortname": "DEF",
+                "baseabbr": "D"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "4",
+                "_position": "D",
+                "_sportid": 1,
+                "_type": "D",
+                "name": "Defender",
+                "shortname": "DEF",
+                "abbr": "D"
+              }
+            },
+            {
+              "_id": 1720568,
+              "name": "Enciso, Julio",
+              "position": {
+                "_id": 6,
+                "name": "Central midfielder",
+                "order": 6,
+                "matchpos": "M",
+                "basename": "Midfielder",
+                "baseshortname": "MID",
+                "baseabbr": "M"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "8",
+                "_position": "F",
+                "_sportid": 1,
+                "_type": "F",
+                "name": "Forward",
+                "shortname": "FWD",
+                "abbr": "F"
+              }
+            },
+            {
+              "_id": 918918,
+              "name": "Palacios, Exequiel",
+              "position": {
+                "_id": 6,
+                "name": "Central midfielder",
+                "order": 7,
+                "matchpos": "M",
+                "basename": "Midfielder",
+                "baseshortname": "MID",
+                "baseabbr": "M"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "6",
+                "_position": "M",
+                "_sportid": 1,
+                "_type": "M",
+                "name": "Midfielder",
+                "shortname": "MID",
+                "abbr": "M"
+              }
+            },
+            {
+              "_id": 2140422,
+              "name": "Fatawu, Abdul",
+              "position": {
+                "_id": 5,
+                "name": "Right winger",
+                "order": 8,
+                "matchpos": "M",
+                "basename": "Midfielder",
+                "baseshortname": "MID",
+                "baseabbr": "M"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "8",
+                "_position": "F",
+                "_sportid": 1,
+                "_type": "F",
+                "name": "Forward",
+                "shortname": "FWD",
+                "abbr": "F"
+              }
+            },
+            {
+              "_id": 936366,
+              "name": "Luis, Florentino",
+              "position": {
+                "_id": 6,
+                "name": "Central midfielder",
+                "order": 9,
+                "matchpos": "M",
+                "basename": "Midfielder",
+                "baseshortname": "MID",
+                "baseabbr": "M"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "6",
+                "_position": "M",
+                "_sportid": 1,
+                "_type": "M",
+                "name": "Midfielder",
+                "shortname": "MID",
+                "abbr": "M"
+              }
+            },
+            {
+              "_id": 2134236,
+              "name": "Philogene, Jaden",
+              "position": {
+                "_id": 7,
+                "name": "Left winger",
+                "order": 10,
+                "matchpos": "M",
+                "basename": "Midfielder",
+                "baseshortname": "MID",
+                "baseabbr": "M"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "8",
+                "_position": "F",
+                "_sportid": 1,
+                "_type": "F",
+                "name": "Forward",
+                "shortname": "FWD",
+                "abbr": "F"
+              }
+            },
+            {
+              "_id": 2184518,
+              "name": "Emersonn",
+              "position": {
+                "_id": 8,
+                "name": "Forward",
+                "order": 11,
+                "matchpos": "F",
+                "basename": "Forward",
+                "baseshortname": "FWD",
+                "baseabbr": "F"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "8",
+                "_position": "F",
+                "_sportid": 1,
+                "_type": "F",
+                "name": "Forward",
+                "shortname": "FWD",
+                "abbr": "F"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "queryUrl": "stats_team_usuallineup/60/140756",
+    "doc": [
+      {
+        "event": "stats_team_usuallineup",
+        "data": {
+          "formation": "4-2-3-1",
+          "players": [
+            {
+              "_id": 1060571,
+              "name": "Petrovic, Djordje",
+              "position": {
+                "_id": 1,
+                "name": "Goalie",
+                "order": 1,
+                "matchpos": "G",
+                "basename": "Goalie",
+                "baseshortname": "GK",
+                "baseabbr": "G"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "2",
+                "_position": "G",
+                "_sportid": 1,
+                "_type": "G",
+                "name": "Goalkeeper",
+                "shortname": "GK",
+                "abbr": "G"
+              }
+            },
+            {
+              "_id": 44566,
+              "name": "Smith, Adam",
+              "position": {
+                "_id": 2,
+                "name": "Right back",
+                "order": 2,
+                "matchpos": "D",
+                "basename": "Defender",
+                "baseshortname": "DEF",
+                "baseabbr": "D"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "4",
+                "_position": "D",
+                "_sportid": 1,
+                "_type": "D",
+                "name": "Defender",
+                "shortname": "DEF",
+                "abbr": "D"
+              }
+            },
+            {
+              "_id": 1653565,
+              "name": "Hill, James",
+              "position": {
+                "_id": 3,
+                "name": "Central defender",
+                "order": 3,
+                "matchpos": "D",
+                "basename": "Defender",
+                "baseshortname": "DEF",
+                "baseabbr": "D"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "4",
+                "_position": "D",
+                "_sportid": 1,
+                "_type": "D",
+                "name": "Defender",
+                "shortname": "DEF",
+                "abbr": "D"
+              }
+            },
+            {
+              "_id": 1987393,
+              "name": "Silva, Antonio",
+              "position": {
+                "_id": 3,
+                "name": "Central defender",
+                "order": 4,
+                "matchpos": "D",
+                "basename": "Defender",
+                "baseshortname": "DEF",
+                "baseabbr": "D"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "4",
+                "_position": "D",
+                "_sportid": 1,
+                "_type": "D",
+                "name": "Defender",
+                "shortname": "DEF",
+                "abbr": "D"
+              }
+            },
+            {
+              "_id": 1951496,
+              "name": "Truffert, Adrien",
+              "position": {
+                "_id": 4,
+                "name": "Left back",
+                "order": 5,
+                "matchpos": "D",
+                "basename": "Defender",
+                "baseshortname": "DEF",
+                "baseabbr": "D"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "4",
+                "_position": "D",
+                "_sportid": 1,
+                "_type": "D",
+                "name": "Defender",
+                "shortname": "DEF",
+                "abbr": "D"
+              }
+            },
+            {
+              "_id": 809778,
+              "name": "Adams, Tyler",
+              "position": {
+                "_id": 6,
+                "name": "Central midfielder",
+                "order": 6,
+                "matchpos": "M",
+                "basename": "Midfielder",
+                "baseshortname": "MID",
+                "baseabbr": "M"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "6",
+                "_position": "M",
+                "_sportid": 1,
+                "_type": "M",
+                "name": "Midfielder",
+                "shortname": "MID",
+                "abbr": "M"
+              }
+            },
+            {
+              "_id": 322391,
+              "name": "Christie, Ryan",
+              "position": {
+                "_id": 6,
+                "name": "Central midfielder",
+                "order": 7,
+                "matchpos": "M",
+                "basename": "Midfielder",
+                "baseshortname": "MID",
+                "baseabbr": "M"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "6",
+                "_position": "M",
+                "_sportid": 1,
+                "_type": "M",
+                "name": "Midfielder",
+                "shortname": "MID",
+                "abbr": "M"
+              }
+            },
+            {
+              "_id": 2284493,
+              "name": "Rayan",
+              "position": {
+                "_id": 5,
+                "name": "Right winger",
+                "order": 8,
+                "matchpos": "M",
+                "basename": "Midfielder",
+                "baseshortname": "MID",
+                "baseabbr": "M"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "8",
+                "_position": "F",
+                "_sportid": 1,
+                "_type": "F",
+                "name": "Forward",
+                "shortname": "FWD",
+                "abbr": "F"
+              }
+            },
+            {
+              "_id": 548188,
+              "name": "Cook, Lewis",
+              "position": {
+                "_id": 6,
+                "name": "Central midfielder",
+                "order": 9,
+                "matchpos": "M",
+                "basename": "Midfielder",
+                "baseshortname": "MID",
+                "baseabbr": "M"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "6",
+                "_position": "M",
+                "_sportid": 1,
+                "_type": "M",
+                "name": "Midfielder",
+                "shortname": "MID",
+                "abbr": "M"
+              }
+            },
+            {
+              "_id": 944820,
+              "name": "Tavernier, Marcus",
+              "position": {
+                "_id": 7,
+                "name": "Left winger",
+                "order": 10,
+                "matchpos": "M",
+                "basename": "Midfielder",
+                "baseshortname": "MID",
+                "baseabbr": "M"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "8",
+                "_position": "F",
+                "_sportid": 1,
+                "_type": "F",
+                "name": "Forward",
+                "shortname": "FWD",
+                "abbr": "F"
+              }
+            },
+            {
+              "_id": 1436414,
+              "name": "Evanilson",
+              "position": {
+                "_id": 8,
+                "name": "Forward",
+                "order": 11,
+                "matchpos": "F",
+                "basename": "Forward",
+                "baseshortname": "FWD",
+                "baseabbr": "F"
+              },
+              "primaryposition": {
+                "_doc": "playerposition",
+                "_id": "8",
+                "_position": "F",
+                "_sportid": 1,
+                "_type": "F",
+                "name": "Forward",
+                "shortname": "FWD",
+                "abbr": "F"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+]
