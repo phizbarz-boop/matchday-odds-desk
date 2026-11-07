@@ -31,3 +31,9 @@ test('builder prefers defenders only after the requested probability floor passe
  assert.equal((await c.prepare({minProbability:70})).candidates[0].playerPositionRank,2);
  rows[0].probability=80;assert.equal((await c.prepare({minProbability:70})).candidates[0].playerPositionRank,0);
 });
+test('SportyBet team suffixes are stripped only when they identify one of the fixture teams',()=>{assert.equal(P.playerName(row('John Defender (Home)')),'John Defender');assert.equal(P.playerName(row('John Defender (Unrelated)')),'John Defender (Unrelated)');});
+test('soonest fixtures are checked first and a daily-budget error stops the remaining upstream calls',async()=>{
+ const rows=P.singlePriceCandidates([row('Later Player',{eventId:'later',kickoffUtc:'2026-11-08T18:00:00Z'}),row('Soon Player',{eventId:'soon',kickoffUtc:'2026-11-07T18:00:00Z'})]),calls=[],d={};
+ await P.enrich(rows,{diagnostics:d,loadLineup:async c=>{calls.push(c.eventId);throw Object.assign(Error('quota'),{code:'API_DAILY_BUDGET'});}});
+ assert.deepEqual(calls,['soon']);assert.equal(d.blockedReason,'API_DAILY_BUDGET');assert.equal(d.fixturesUnavailable,1);assert.equal(d.scanLimited,1);
+});
