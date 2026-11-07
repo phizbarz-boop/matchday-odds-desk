@@ -2,13 +2,13 @@
 const test=require('node:test'),assert=require('node:assert/strict'),M=require('../lib/footballExtraMarkets');
 const row=(name,side='Over',line=.5)=>({sport:'Football',eventId:'E',marketId:'900999',marketDesc:name,specifier:'total='+line,outcomeId:side==='Over'?'12':'13',outcomeDesc:side+' '+line,odds:side==='Over'?1.25:4.5});
 test('exact home/away offsides and first-five-minute goals; other lines and scopes rejected',()=>{
- assert.equal(M.betTypeFor(row('Away Team Offsides')),M.IDS[0]);assert.equal(M.betTypeFor(row('Home Team - Offsides')),M.IDS[1]);assert.equal(M.betTypeFor(row('Total Goals Over/Under - 1-5 Minutes','Under')),M.IDS[2]);
+ assert.equal(M.betTypeFor(row('Away Team Offsides')),M.IDS[0]);assert.equal(M.betTypeFor(row('Home Team - Offsides')),M.IDS[1]);assert.equal(M.betTypeFor(row('Total Goals Over/Under - 1-5 Minutes','Under')),'first5_goals_under05');
  for(const c of [row('Total Goals Over/Under','Under'),row('Total Goals Over/Under - 6-10 Minutes','Under'),row('1st Half Away Team Offsides'),row('Away Team Offsides','Over',1.5),row('Total Goals Over/Under - 1-5 Minutes','Over'),{...row('Away Team Offsides'),live:true}])assert.equal(M.betTypeFor(c),null);
 });
 test('complete prices model the exact selection; missing opposite price is not scored',()=>{
  const {modelOfferedMarkets}=require('../lib/offeredMarketModel');for(const name of ['Away Team Offsides','Home Team Offsides','Total Goals Over/Under - 1-5 Minutes','Total Goals Over/Under - 1-10 Minutes','Total Goals Over/Under - 1-20 Minutes']){
  const rows=[row(name),row(name,'Under')],out=modelOfferedMarkets(rows,{minProbability:0,minEdge:-100}).candidates;
- const desired=out.find(c=>M.IDS.includes(c.betType));assert.ok(desired);assert.equal(desired.marketId,'900999');assert.equal(desired.specifier,'total=0.5');assert.ok(desired.probability>0&&desired.probability<100);assert.equal(desired.independentModel,false);
+ const desired=out.find(c=>(M.IDS.includes(c.betType)||/^first(?:5|10|20)_goals_under05$/.test(c.betType)));assert.ok(desired);assert.equal(desired.marketId,'900999');assert.equal(desired.specifier,'total=0.5');assert.ok(desired.probability>0&&desired.probability<100);assert.equal(desired.independentModel,false);
  assert.equal(modelOfferedMarkets([rows[0]],{minProbability:0,minEdge:-100}).candidates.length,0);
  }
 });
@@ -19,18 +19,18 @@ test('compact report remains one message even for thousands of tickets',()=>{con
 test('final candidate pipeline enforces one/multiple/all/empty leagues across sports',async()=>{
  const fs=require('node:fs'),vm=require('node:vm'),source=fs.readFileSync(require.resolve('../server'),'utf8'),start=source.indexOf('async function prepareAutoCandidatePool('),end=source.indexOf('\n}\n',start)+2;
  const rows=[{eventId:'A',sport:'Football',tournament:'League A',probability:80,odds:1.2},{eventId:'B',sport:'Basketball',tournament:'League B',probability:80,odds:1.2},{eventId:'C',sport:'Ice Hockey',tournament:'League C',probability:80,odds:1.2}];
- const context={normalizeSportScopes:()=>['football','basketball'],normalizeLiveMode:x=>x,loadAutoCandidates:async()=>rows,require:()=>({checkCandidates:async x=>x}),sportyRequest:()=>null,passesRedFlagFilter:()=>true};vm.createContext(context);vm.runInContext(source.slice(start,end)+';this.prepare=prepareAutoCandidatePool;',context);
+ const context={normalizeSportScopes:()=>['football','basketball'],normalizeLiveMode:x=>x,loadAutoCandidates:async()=>rows,require:(name)=>name==='./lib/footballExtraMarkets'?M:({checkCandidates:async x=>x}),sportyRequest:()=>null,passesRedFlagFilter:()=>true};vm.createContext(context);vm.runInContext(source.slice(start,end)+';this.prepare=prepareAutoCandidatePool;',context);
  assert.equal((await context.prepare({leagues:null})).candidates.length,3);assert.deepEqual(Array.from((await context.prepare({leagues:['League B']})).candidates).map(c=>c.eventId),['B','C']);assert.equal((await context.prepare({leagues:['League A','League B']})).candidates.length,3);assert.equal((await context.prepare({leagues:[]})).candidates.length,1);
 });
 
 test('Telegram offers first-five Under 0.5 and parses the minimum leg odds and high target independently',()=>{
  const bot=require('../lib/telegramAiBot');
  const parsed=bot.parseNaturalRequest('Build a 100,000x football ticket: Total Goals Over/Under from 1 to 5 minutes Under 0.5, minimum odds per match 1.20');
- assert.deepEqual(parsed.betTypes,['first5_goals_under05']);
+ assert.ok(!parsed.betTypes?.includes('first5_goals_under05'));
  assert.equal(parsed.targetOdds,100000);
  assert.equal(parsed.minMatchOdds,1.2);
  assert.equal(bot.parseNaturalRequest('100000x').targetOdds,100000);
- assert.ok(bot.allowedBetIdsForPlan('pro').includes('first5_goals_under05'));
+ assert.ok(!bot.allowedBetIdsForPlan('pro').includes('first5_goals_under05'));
  const target=bot.targetKeyboard({plan:'elite',planExpiresAt:'2099-01-01'}).inline_keyboard.flat().find(b=>b.text==='100,000x+');
  assert.equal(target.callback_data,'set:target:100000');
 });
@@ -53,8 +53,8 @@ test('the two new periods can be selected on demand and cannot enter automated d
   const c={...row(label,'Under'),betType:id,kickoffUtc:'2026-11-05T12:00:00Z',probability:92,odds:1.4};
   assert.equal(M.betTypeFor(c),id);
   assert.equal(M.betTypeFor(row(label,'Over')),null);
-  assert.deepEqual(bot.parseNaturalRequest('build a football ticket: '+label+' — Under 0.5').betTypes,[id]);
-  assert.ok(bot.allowedBetIdsForPlan('pro').includes(id));
+  assert.ok(!bot.parseNaturalRequest('build a football ticket: '+label+' — Under 0.5').betTypes?.includes(id));
+  assert.ok(!bot.allowedBetIdsForPlan('pro').includes(id));
   for(const plan of daily.PLANS)assert.equal(daily.eligible(c,plan,now,'2026-11-05',new Set()),false);
  }
 });
@@ -90,12 +90,30 @@ test('football specialty picks map the exact line, team, period and outcome in b
   assert.equal(M.betTypeFor(other),null);
   assert.equal(modelOfferedMarkets([r,other]).candidates.find(c=>c.betType===id)?.outcomeId,r.outcomeId);
   assert.equal(modelOfferedMarkets([r]).candidates.length,0);
-  assert.deepEqual(bot.parseNaturalRequest('Build a ticket with '+request).betTypes,[id]);
-  assert.ok(bot.allowedBetIdsForPlan('pro').includes(id));
+  if(M.REMOVED_IDS.includes(id)){assert.ok(!bot.parseNaturalRequest('Build a ticket with '+request).betTypes?.includes(id));assert.ok(!bot.allowedBetIdsForPlan('pro').includes(id));}
+  else {assert.deepEqual(bot.parseNaturalRequest('Build a ticket with '+request).betTypes,[id]);assert.ok(bot.allowedBetIdsForPlan('pro').includes(id));}
  }
- assert.deepEqual(bot.parseNaturalRequest('Build a ticket with offside under 4.5 - 5.5').betTypes,['offsides_under45','offsides_under55']);
+ assert.ok(!bot.parseNaturalRequest('Build a ticket with offside under 4.5 - 5.5').betTypes?.some(id=>M.REMOVED_IDS.includes(id)));
  assert.equal(M.betTypeFor(row('Home Team Total Bookings')),null);
  assert.equal(M.betTypeFor(row('2nd Half Substitutions','Under')),null);
  assert.equal(M.betTypeFor(row('Away Team Offsides','Under',4.5)),null);
  assert.equal(M.betTypeFor(row('Total Offsides','Under',6.5)),null);
+});
+
+test('player totals use only a verified half-goal binary partition, never a player list',()=>{
+ const {modelOfferedMarkets}=require('../lib/offeredMarketModel');
+ const total={...row('Player Goals Over/Under','Under'),playerName:'Example Player',specifier:'player=7|total=0.5'};
+ const other={...total,outcomeId:'over',outcomeDesc:'Over 0.5',odds:1.25};
+ const result=modelOfferedMarkets([total,other]);
+ assert.ok(result.candidates.some(c=>c.betType==='player_not_to_score'));
+ const diagnostics=M.playerDiagnostics([total,other],result.candidates);
+ assert.equal(diagnostics.binary,1);
+ assert.equal(diagnostics.modeled,1);
+ assert.equal(M.betTypeFor({...total,marketDesc:'Away - Goals'}),null);
+ assert.equal(M.betTypeFor({...total,marketDesc:'Example Player - Goals',playerName:null}),null);
+ const list=[{...row('Player Not to Score'),outcomeDesc:'Player A',odds:1.1},{...row('Player Not to Score'),outcomeId:'B',outcomeDesc:'Player B',odds:1.2}];
+ assert.equal(modelOfferedMarkets(list).candidates.length,0);
+ assert.equal(M.playerDiagnostics(list).binary,0);
+ assert.match(M.playerDiagnosticText(M.playerDiagnostics(list)),/Player A/);
+ assert.equal(M.playerDiagnostics([]).marketInstances,0);
 });

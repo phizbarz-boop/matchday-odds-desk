@@ -21,3 +21,10 @@ test('exact market identity prevents the analyzer scoring a different bet on the
  assert.equal(ctx.score({eventId:'1',marketId:'900',outcomeId:'yes'},{eventId:'1',marketId:'1',outcomeId:'home'}),-1);
  assert.ok(ctx.score({eventId:'1',marketId:'900',outcomeId:'yes'},{eventId:'1',marketId:'900',outcomeId:'yes'})>=60);
 });
+
+test('empty variation diagnostics distinguish no candidates from a failed distinct target',()=>{
+ const {explainEmptyTicket}=require('../lib/autoPicker');
+ const opts={excludedTickets:new Set(['seen']),requireTarget:true,targetOdds:10,action:'Auto Pick'};
+ assert.match(explainEmptyTicket({...opts,result:{candidateCount:0}}),/No eligible selections/);
+ assert.match(explainEmptyTicket({...opts,result:{candidateCount:2}}),/2 eligible.*original 10x target.*Auto Pick/);
+});
