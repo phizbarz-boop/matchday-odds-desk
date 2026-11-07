@@ -37,3 +37,5 @@ test('soonest fixtures are checked first and a daily-budget error stops the rema
  await P.enrich(rows,{diagnostics:d,loadLineup:async c=>{calls.push(c.eventId);throw Object.assign(Error('quota'),{code:'API_DAILY_BUDGET'});}});
  assert.deepEqual(calls,['soon']);assert.equal(d.blockedReason,'API_DAILY_BUDGET');assert.equal(d.fixturesUnavailable,1);assert.equal(d.scanLimited,1);
 });
+
+test('initials preserve complete compound surnames without fuzzy surname matching',()=>{assert.equal(P.samePlayer('Morgan Gibbs-White','M. Gibbs-White'),true);assert.equal(P.samePlayer('Callum Hudson-Odoi','C. Hudson-Odoi'),true);assert.equal(P.samePlayer('Callum Hudson-Odoi','C. Hudson'),false);});
