@@ -100,7 +100,7 @@ test('football specialty picks map the exact line, team, period and outcome in b
  assert.equal(M.betTypeFor(row('Total Offsides','Under',6.5)),null);
 });
 
-test('player totals use only a verified half-goal binary partition, never a player list',()=>{
+test('player totals use the exact half-goal selection and explicit negative lists use individual prices',()=>{
  const {modelOfferedMarkets}=require('../lib/offeredMarketModel');
  const total={...row('Player Goals Over/Under','Under'),playerName:'Example Player',specifier:'player=7|total=0.5'};
  const other={...total,outcomeId:'over',outcomeDesc:'Over 0.5',odds:1.25};
@@ -112,7 +112,7 @@ test('player totals use only a verified half-goal binary partition, never a play
  assert.equal(M.betTypeFor({...total,marketDesc:'Away - Goals'}),null);
  assert.equal(M.betTypeFor({...total,marketDesc:'Example Player - Goals',playerName:null}),null);
  const list=[{...row('Player Not to Score'),outcomeDesc:'Player A',odds:1.1},{...row('Player Not to Score'),outcomeId:'B',outcomeDesc:'Player B',odds:1.2}];
- assert.equal(modelOfferedMarkets(list).candidates.length,0);
+ assert.equal(modelOfferedMarkets(list).candidates.length,2);assert.ok(modelOfferedMarkets(list).candidates.every(c=>c.modelBasis==='single_offered_price'&&!c.independentModel));
  assert.equal(M.playerDiagnostics(list).binary,0);
  assert.match(M.playerDiagnosticText(M.playerDiagnostics(list)),/Player A/);
  assert.equal(M.playerDiagnostics([]).marketInstances,0);

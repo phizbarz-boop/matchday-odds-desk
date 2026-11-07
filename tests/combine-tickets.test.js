@@ -13,10 +13,18 @@ test('two or three tickets preserve exact market, player and line; duplicates co
  assert.equal(result.selections[0].outcomeId,'away');
  assert.ok(Math.abs(result.combinedOdds-1.4**4)<1e-10);
 });
-test('same fixture with another outcome, market or player is rejected instead of silently replaced',async()=>{
+test('same fixture keeps the biggest verified current odds across outcomes, markets and players',async()=>{
  for(const extra of [{outcomeId:'over'},{marketId:'18'},{specifier:'player=8|total=0.5'}]){
-  await assert.rejects(C.preview(['AAA1','BBB2'],load({AAA1:{selections:[leg('1')]},BBB2:{selections:[leg('1',extra)]}})),/same match has different selections/);
+  const first=leg('1',{odds:10}),second=leg('1',{...extra,odds:1.1});
+  const result=await C.preview(['AAA1','BBB2'],{...load({AAA1:{selections:[first]},BBB2:{selections:[second]}}),getCurrent:async()=>[{...first,odds:1.3},{...second,odds:2.2}]});
+  assert.equal(result.selections.length,1);assert.equal(result.selections[0].odds,2.2);assert.equal(result.selections[0].oddsVerified,true);assert.equal(result.conflictsResolved.length,1);assert.equal(result.conflictsResolved[0].discarded.length,1);
  }
+});
+test('unavailable conflicts are excluded and unverifiable conflicts fail without stale odds',async()=>{
+ const first=leg('1'),second=leg('1',{marketId:'18',odds:20}),deps=load({AAA1:{selections:[first]},BBB2:{selections:[second]}});
+ const r=await C.preview('AAA1 BBB2',{...deps,getCurrent:async()=>[first,{...second,suspended:true}]});assert.equal(r.selections[0].marketId,'17');
+ await assert.rejects(C.preview('AAA1 BBB2',{...deps,getCurrent:async()=>[]}),/None of the conflicting/);
+ await assert.rejects(C.preview('AAA1 BBB2',{...deps,getCurrent:async()=>{throw Error('offline');}}),/Could not verify/);
 });
 test('50 games are allowed; 51 and unreadable identities are rejected',async()=>{
  const rows=Array.from({length:50},(_,i)=>leg(String(i)));
