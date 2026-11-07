@@ -12,3 +12,15 @@ test('cached evidence is rejected when expired or attached to different teams',(
 test('worker resumes queued fixtures, saves only validated usual evidence and reuses fresh results',async()=>{const redis=cache();await redis.set(S.fixtureKey(c),JSON.stringify(c));await redis.sAdd(S.QUEUE,c.eventId);let calls=0;const deps={redis,discover:async()=>[c],collect:async()=>{calls++;return {...c,basis:'usual',players:parsed(),capturedAt:new Date().toISOString()};},logger:{info(){},warn(){}}};const run=require('../jobs/sporty-lineups-worker').run;assert.equal((await run(deps)).saved,1);assert.equal((await run(deps)).skippedFresh,1);assert.equal(calls,1);assert.equal(redis.queue.size,0);});
 
 test('name matching accepts comma order and preserves compound surnames',()=>{assert.equal(P.samePlayer('Diop, Issa','Issa Diop'),true);assert.equal(P.samePlayer('Van Dijk, Virgil','Virgil Van Dijk'),true);assert.equal(P.samePlayer('Diop, Issa','Moussa Diop'),false);});
+test('real prematch discovery output is eligible without a prior website request',async()=>{
+ const sporty=require('../lib/sportybet'),redis=cache(),now=Date.parse('2026-11-07T18:00:00Z');
+ const listed=await sporty.listPrematchFixtures('football',{client:{fetchPrematchPage:async()=>({data:{totalNum:1,events:[{eventId:c.eventId,homeTeamName:c.home,awayTeamName:c.away,estimateStartTime:Date.parse(c.kickoffUtc)}]}})}});
+ assert.equal(listed.fixtures.length,1);assert.equal(listed.fixtures[0].kickoffUtc,c.kickoffUtc);
+ const r=await require('../jobs/sporty-lineups-worker').run({redis,now:()=>now,discover:async()=>listed.fixtures,collect:async fixture=>({...fixture,capturedAt:new Date(now).toISOString(),basis:'usual',players:parsed()}),logger:{info(){},warn(){}}});
+ assert.equal(r.discoveredFixtures,1);assert.equal(r.eligibleFixtures,1);assert.equal(r.checked,1);assert.equal(r.saved,1);assert.equal(r.missingKickoff,0);
+});
+test('worker also normalizes legacy start timestamps and reports invalid dates explicitly',async()=>{
+ const run=require('../jobs/sporty-lineups-worker').run,now=Date.parse('2026-11-07T18:00:00Z'),fixture={...c,kickoffUtc:null,estimateStartTime:Date.parse(c.kickoffUtc)/1000};
+ const r=await run({redis:cache(),now:()=>now,discover:async()=>[fixture],collect:async f=>({...f,capturedAt:new Date(now).toISOString(),basis:'usual',players:parsed()}),logger:{info(){},warn(){}}});assert.equal(r.saved,1);
+ const bad=await run({redis:cache(),now:()=>now,discover:async()=>[{...fixture,estimateStartTime:null}],collect:()=>assert.fail('Invalid timestamp must not be read'),logger:{info(){},warn(){}}});assert.equal(bad.status,'invalid_fixture_times');assert.equal(bad.missingKickoff,1);
+});
