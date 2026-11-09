@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Generate and post up to six Daily 30k, 10k and 1k variations
+      - name: Generate up to one ticket per target: 30k, 10k and 1k
         env:
           TELEGRAM_REQUEST_TIMEOUT_SECONDS: 10
           TELEGRAM_POLL_MAX_SECONDS: 260

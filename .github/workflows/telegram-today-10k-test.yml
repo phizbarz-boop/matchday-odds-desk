@@ -1,4 +1,4 @@
-name: Test Today 10,000+ Picks
+name: Test Today 100,000x Pick
 on:
   workflow_dispatch: {}
 permissions:
@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Generate and post the three Today 10,000+ variations
+      - name: Generate up to one Today 100,000x ticket
         env:
           TELEGRAM_REQUEST_TIMEOUT_SECONDS: 10
           TELEGRAM_POLL_MAX_SECONDS: 260
