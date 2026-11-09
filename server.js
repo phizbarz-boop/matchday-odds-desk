@@ -2277,6 +2277,15 @@ async function autoCornerDiagnostics(betTypes,liveMode='prematch') {
   }
 }
 
+app.post('/api/sportybet/sim-preview', express.json({limit:'32kb'}), analysisJobs.wrap(async(req,res)=>{
+  const sim=require('./lib/simFootball'),body=req.body||{},mode=body.mode;
+  if(mode!=='srl'&&mode!=='virtual')return res.status(400).json({error:'Choose SRL or Virtual Football.'});
+  let rows;
+  try{rows=await sim.loadFixtures(mode);}catch{return res.status(502).json({error:'SportyBet '+sim.names[mode]+' feed could not be read. Try again shortly.'});}
+  if(!rows.length)return res.status(404).json({error:'SportyBet returned no upcoming '+sim.names[mode]+' fixtures with open 1X2 prices.'});
+  return res.json({...sim.analyse(rows,body),source:'SportyBet prematch feed'});
+}));
+
 app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs.wrap(async (req, res) => {
   try {
     const body = req.body || {};
@@ -2293,7 +2302,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
       const leagues=Array.isArray(body.leagues)?body.leagues.map(String):null;
       const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:['multi'],minProbability:0,minEdge:-25,leagues,todayOnly:body.todayOnly===true,liveMode:'prematch',includeAllMarkets:true,halfScan});
       const multiMaxSelections=Math.max(1,Math.min(50,parseInt(body.maxSelections,10)||20));
-      const result=multi.ticket(prepared.candidates,{maxSelections:multiMaxSelections,excludedTickets:excluded});
+      const result=multi.ticket(prepared.candidates.filter(c=>!require('./lib/simFootball').product(c)),{maxSelections:multiMaxSelections,excludedTickets:excluded});
       if(!result.selections.length)return res.status(404).json({error:excluded.size?'No other Multi ticket variation is available under these rules.':'No available games matched the Multi market and odds-gap rules.',code:excluded.size?'NO_OTHER_VARIATION':'NO_MULTI_GAMES'});
       return res.json({...result,sportScope:'football',sports:['football'],betTypes:['multi'],minProbability:0,minEdge:0,maxSelections:multiMaxSelections,liveMode:'prematch',dataFetchedAt:prepared.diagnostics.dataFetchedAt,marketCoverage:prepared.diagnostics.marketCoverage,h2hCoverage:prepared.diagnostics.h2hCoverage,multi:true});
     }
@@ -2320,13 +2329,14 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     const requiredDays=weekly?Array.from({length:7},(_,i)=>fixtureDateKeyInTimeZone(weekStart+i*86400000)):null;
     const allowedDays=weekly?new Set(requiredDays):null;
     const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly, liveMode,marketHours:weekly?168:null,marketMaxPages:weekly?20:null,halfScan,includeAllMarkets:body.includeAllMarkets===true,winnerGapOnly:body.winnerGapOnly===true,winnerGapMaxOne:body.winnerGapMaxOne===true,winnerGapAboveEight:body.winnerGapAboveEight===true });
+    const regularCandidates=prepared.candidates.filter(c=>!require('./lib/simFootball').product(c));
     const dayByKickoff=new Map();
-    const oddsFilteredCandidates = weekly?prepared.candidates.flatMap(c=>{
+    const oddsFilteredCandidates = weekly?regularCandidates.flatMap(c=>{
       if(c.live||!c.eventId||Date.parse(c.kickoffUtc)<=Date.now())return [];
       if(!dayByKickoff.has(c.kickoffUtc))dayByKickoff.set(c.kickoffUtc,fixtureDateKeyInTimeZone(c.kickoffUtc));
       const ticketDay=dayByKickoff.get(c.kickoffUtc);
       return allowedDays.has(ticketDay)&&Number(c.odds)>1&&Number(c.probability)>0?[{...c,ticketDay}]:[];
-    }):prepared.candidates;
+    }):regularCandidates;
     if(weekly){
       const available=new Set(oddsFilteredCandidates.map(c=>c.ticketDay));
       const missingDays=requiredDays.filter(d=>!available.has(d));
@@ -3900,7 +3910,17 @@ app.post('/api/sportybet/book', express.json(), bookingRequests.wrap(async (req,
     if (!Array.isArray(selections) || selections.length === 0 || selections.length > 50) {
       return res.status(400).json({ error: 'selections must be an array containing 1-50 selections' });
     }
-    const requireAll=req.body?.requireAllSelections===true;
+    const simMode=req.body?.simMode;
+    const requireAll=req.body?.requireAllSelections===true||simMode!==undefined;
+    if(simMode!==undefined){
+      if(simMode!=='srl'&&simMode!=='virtual')return res.status(400).json({error:'Invalid simulated football product.'});
+      res.bookingStage?.('checking_selections');
+      const sim=require('./lib/simFootball');
+      let rows;
+      try{rows=await withPublicSportyRequest(()=>sim.loadFixtures(simMode));}
+      catch{return res.status(503).json({error:'Could not refresh SportyBet prices. No code was requested.'});}
+      if(!sim.validateTicket(rows,selections))return res.status(409).json({error:'A match or price changed. Scan again to build a fresh sim ticket.'});
+    }
     if(requireAll){
       const seen=new Set();
       for(const leg of selections){

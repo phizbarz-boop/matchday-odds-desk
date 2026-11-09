@@ -158,6 +158,16 @@
   </section>
 
 
+  <section class="panel auto-builder" id="sim-analysis">
+    <div class="auto-title">Sim Football Analysis <small>· Trial</small></div>
+    <p class="auto-note">1X2 only. Estimates remove the bookmaker margin from the three prices. They do not use real team form or predict the simulator. Review the selections before generating a booking code.</p>
+    <label class="field"><span class="settings-label">Product</span><select id="sim-mode"><option value="srl">Simulated Reality League (SRL)</option><option value="virtual">Virtual Football (vFootball)</option></select></label>
+    <p class="auto-note">Scans the selected SportyBet product. Uses the odds and selection limits above.</p>
+    <button type="button" class="secondary" id="sim-preview">Scan and Build Sim Ticket</button>
+    <div class="auto-status" id="sim-status" role="status"></div>
+    <div id="sim-results"></div>
+  </section>
+
   <section class="panel analyzer-panel" id="analyzer">
     <div class="analyzer-title">Booking Code Analyzer</div>
     <div class="analyzer-desc">Paste a SportyBet booking code from outside this website. Matchday will decode the slip, run each supported selection through the same probability/value engine, and show which legs meet the probability level you choose. Unsupported markets are marked clearly and are never given a guessed score.</div>
@@ -427,6 +437,35 @@ async function replaceUnsupportedWebsiteAnalysis(btn){
     btn.disabled=false;btn.textContent=oldText;
   }
 }
+
+document.getElementById('sim-mode').onchange=()=>{
+ for(const id of ['sim-status','sim-results'])document.getElementById(id).textContent='';
+};
+document.getElementById('sim-preview').onclick=async event=>{
+ const button=event.currentTarget,mode=document.getElementById('sim-mode'),status=document.getElementById('sim-status'),out=document.getElementById('sim-results');
+ button.disabled=mode.disabled=true;status.textContent='Scanning SportyBet…';out.textContent='';
+ try{
+  const {response,data}=await SportyAnalysis.request('/api/sportybet/sim-preview',{mode:mode.value,targetOdds:document.getElementById('auto-target').value,minProbability:document.getElementById('auto-min-prob').value,maxSelections:document.getElementById('auto-max').value,maxMatchOdds:document.getElementById('auto-max-match-odds').value});
+  if(!response.ok)throw Error(data.error||'Sim scan unavailable.');
+  if(!data.selections.length){status.textContent='No selections met your probability and per-match odds filters.';return;}
+  status.textContent=data.label+' · '+(data.reachedTarget?'Target reached':'Below target')+' · '+data.combinedOdds.toFixed(2)+' total odds';
+  out.innerHTML=data.selections.map(c=>`<div class="slip-row"><div>${esc(c.home)} vs ${esc(c.away)} · ${esc(c.pick)} · ${c.probability.toFixed(1)}% odds-implied</div><b>${c.odds.toFixed(2)}</b></div>`).join('');
+  const book=document.createElement('button'),result=document.createElement('div');
+  book.type='button';book.className='primary';book.textContent='Generate SportyBet Code';
+  result.setAttribute('role','status');out.append(book,result);
+  book.onclick=async()=>{
+   book.disabled=button.disabled=mode.disabled=true;result.textContent='Checking current prices…';
+   try{
+    const selections=data.selections.map(({eventId,marketId,outcomeId,odds})=>({eventId,marketId,outcomeId,odds}));
+    const p=await SportyBooking.book({selections,simMode:data.mode,requireAllSelections:true});
+    if(!p.shareCode)throw Error('SportyBet did not confirm a booking code.');
+    result.textContent='SportyBet booking code: '+p.shareCode;
+   }catch(e){result.textContent=e.message||'Could not generate a code.';book.disabled=false;}
+   finally{button.disabled=mode.disabled=false;}
+  };
+ }catch(e){status.textContent=e.message||'Sim scan unavailable.';}
+ finally{button.disabled=mode.disabled=false;}
+};
 
 async function analyzeBookingCode(){const btn=document.getElementById('analyze-code'),code=String(document.getElementById('analyzer-code').value||'').trim().toUpperCase(),minProbability=Math.min(95,Math.max(0,Number(document.getElementById('analyzer-min-prob').value)||0)),horizonDays=Number(document.getElementById('analyzer-horizon')?.value||14);if(!code){analyzerSetStatus('Enter a SportyBet booking code first.','err');return}btn.disabled=true;btn.textContent='Analyzing…';analyzerSetStatus(`Loading ${code}, searching ${horizonDays} days ahead, and scoring every supported leg…`,'loading');document.getElementById('analyzer-results').innerHTML='';try{const {response:res,data:p}=await SportyAnalysis.request('/api/sportybet/analyze-code',{bookingCode:code,minProbability,horizonDays});if(!res.ok)throw new Error(p.detail||p.error||`Analyzer failed (HTTP ${res.status})`);if(!Array.isArray(p.analyzed))throw new Error('The analyser returned no confirmed selection results. Please retry.');renderAnalyzerResults(p);analyzerSetStatus(`Analysis complete across ${p.horizonDays||horizonDays} days: ${p.qualifiedCount||0} of ${p.originalSelectionCount||0} selections meet ${minProbability}% or higher.`,'ok')}catch(e){const msg=/networkerror|failed to fetch/i.test(String(e?.message||e))?'The analyzer connection was interrupted before Render returned a response. Please retry once; if it repeats, check the Render log for the analyzer request.':e.message;analyzerSetStatus(msg||'Could not analyze this code','err')}finally{btn.disabled=false;btn.textContent='Analyze Code'}}
 
