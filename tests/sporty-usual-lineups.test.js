@@ -43,3 +43,40 @@ test('missing widget data is distinct from a received match mismatch',async()=>{
  const page={context:()=>context,goto:async()=>({status:()=>200}),locator:()=>({locator:()=>({all:async()=>[]})}),frames:()=>[]};context.pages=()=>[page];
  await assert.rejects(require('../lib/sportyLineupCollector').collectPage(page,c,{timeoutMs:1}),e=>e.message==='SPORTYBET_LINEUP_TIMELINE_NOT_RECEIVED'&&e.lineupDiagnostics.timelineResponses===0);
 });
+
+test('without a visible Lineups tab, reads both verified teams and reports an upstream refusal',async()=>{
+ const {EventEmitter}=require('node:events'),context=new EventEmitter(),collector=require('../lib/sportyLineupCollector');
+ const id='72221382',calls=[];
+ const path='match_timelinedelta/'+id;
+ const timeline={queryUrl:path,doc:[{event:'match_timelinedelta',data:{match:{_id:Number(id),_sid:1,_seasonid:140756,_dt:{uts:1794146400},teams:{home:{uid:32,name:'Ipswich'},away:{uid:60,name:'Bournemouth'}}}}}]};
+ const page={context:()=>context,frames:()=>[],locator:()=>({locator:()=>({all:async()=>[]})}),goto:async()=>{
+  context.emit('response',{url:()=>'https://lmt.fn.sportradar.com/common/en/Etc:UTC/gismo/'+path+'?T=test',status:()=>200,headers:()=>({}),json:async()=>timeline});
+  return {status:()=>200};
+ }};
+ context.pages=()=>[page];
+ let refused=false;
+ context.request={get:async(url,opts)=>{
+  const request=new URL(url);
+  assert.equal(opts.maxRedirects,0);
+  assert.equal(request.searchParams.get('T'),'test');
+  const doc=docs.find(d=>request.pathname.endsWith('/'+d.queryUrl));
+  assert.ok(doc);
+  calls.push(doc.queryUrl);
+  const status=refused&&doc===docs[1]?403:200;
+  return {status:()=>status,ok:()=>status===200,json:async()=>doc,dispose:async()=>{}};
+ }};
+ assert.equal((await collector.collectPage(page,c,{timeoutMs:1000})).players.length,22);
+ assert.equal(calls.length,2);
+ refused=true;
+ await assert.rejects(collector.collectPage(page,c,{timeoutMs:1000}),e=>e.message==='SPORTYBET_USUAL_LINEUP_UNAVAILABLE'&&e.lineupDiagnostics.usualLineups.some(d=>d.httpStatus===403&&d.outcome==='http_error'));
+});
+
+test('a limited worker batch checks an analyser request before unrequested discovery',async()=>{
+ const redis=cache(),now=()=>Date.parse('2026-11-07T18:00:00Z');
+ await redis.set(S.fixtureKey(c),JSON.stringify(c));await redis.sAdd(S.QUEUE,c.eventId);
+ const result=await require('../jobs/sporty-lineups-worker').run({redis,now,maxFixtures:1,discover:async()=>[{...c,eventId:'sr:match:1',kickoffUtc:'2026-11-08T12:00:00.000Z'}],collect:async fixture=>{
+  assert.equal(fixture.eventId,c.eventId);
+  return {...fixture,basis:'usual',players:parsed(),capturedAt:new Date(now()).toISOString()};
+ },logger:{info(){},warn(){}}});
+ assert.equal(result.checked,1);assert.equal(result.saved,1);assert.equal(result.requestedFixtures,1);
+});
