@@ -24,3 +24,32 @@ test('virtual scan requests the virtual sport and books only matching fresh pric
  assert.equal(S.validateTicket(rows,[r.selections[0],r.selections[0]],now),false);
  assert.equal(S.validateTicket(rows,r.selections,now+3600000),false);
 });
+
+test('rescans skip previously shown fixtures without relaxing filters',()=>{
+ const rows=['a','b','c'].map(eventId=>({eventId,marketId:'1',outcomeIds:['1','2','3'],odds:[1.5,4,6]}));
+ const settings={mode:'virtual',targetOdds:10,maxSelections:2,minProbability:55};
+ const first=S.analyse(rows,settings);
+ const excludedEventIds=first.selections.map(x=>x.eventId);
+ const next=S.analyse(rows,{...settings,excludedEventIds});
+ assert.equal(next.selections.length,1);
+ assert.ok(!excludedEventIds.includes(next.selections[0].eventId));
+ const empty=S.analyse(rows,{...settings,excludedEventIds:[...excludedEventIds,next.selections[0].eventId]});
+ assert.equal(empty.selections.length,0);
+ assert.equal(empty.excludedFixtureCount,3);
+});
+
+test('SRL fallback finds a league fixture when the general board returns only regular games',async()=>{
+ const now=Date.parse('2026-11-09T08:00Z');
+ const fixture={eventId:'sr:match:123',homeTeamName:'Home SRL',awayTeamName:'Away SRL',estimateStartTime:now+3600000};
+ const calls=[];
+ const rows=await S.loadFixtures('srl',{now:()=>now,lite:async()=>[],client:{
+  fetchPrematchPage:async(_,page,size,{tournamentId})=>{
+   calls.push(tournamentId);
+   return {data:{events:tournamentId==='sr:tournament:32215'?[fixture]:[]}};
+  },
+  fetchEventDetail:async id=>({data:{...fixture,eventId:id,markets:[{market_id:'1',status:0,outcomes:[{outcome_id:'1',price:1.5},{outcome_id:'2',price:4},{outcome_id:'3',price:6}]}]}})
+ }});
+ assert.ok(calls.includes('sr:tournament:32215'));
+ assert.deepEqual(rows.map(x=>x.eventId),[fixture.eventId]);
+ assert.deepEqual(rows[0].odds,[1.5,4,6]);
+});

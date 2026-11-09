@@ -2280,9 +2280,9 @@ async function autoCornerDiagnostics(betTypes,liveMode='prematch') {
 app.post('/api/sportybet/sim-preview', express.json({limit:'32kb'}), analysisJobs.wrap(async(req,res)=>{
   const sim=require('./lib/simFootball'),body=req.body||{},mode=body.mode;
   if(mode!=='srl'&&mode!=='virtual')return res.status(400).json({error:'Choose SRL or Virtual Football.'});
-  let rows;
-  try{rows=await sim.loadFixtures(mode);}catch{return res.status(502).json({error:'SportyBet '+sim.names[mode]+' feed could not be read. Try again shortly.'});}
-  if(!rows.length)return res.status(404).json({error:'SportyBet returned no upcoming '+sim.names[mode]+' fixtures with open 1X2 prices.'});
+  let rows;const diagnostics={};
+  try{rows=await sim.loadFixtures(mode,{diagnostics});}catch{return res.status(502).json({error:'SportyBet '+sim.names[mode]+' feed could not be read. Try again shortly.'});}
+  if(!rows.length){console.info('[Sim football scan]',mode,diagnostics);return res.status(404).json({error:'No open '+sim.names[mode]+' 1X2 prices were found in the feeds checked. Try again shortly.',diagnostics});}
   return res.json({...sim.analyse(rows,body),source:'SportyBet prematch feed'});
 }));
 
