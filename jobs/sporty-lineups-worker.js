@@ -13,10 +13,10 @@ async function run({redis,collect,discover,close=async()=>{},now=Date.now,budget
  try{for(const c of queue){
   if(now()-started>=budgetMs||summary.checked>=maxFixtures)break;
   const old=S.decode(await redis.get(S.dataKey(c)));if(S.usable(old,c,now())){summary.skippedFresh++;await redis.sRem(S.QUEUE,String(c.eventId));continue;}
-  if(await redis.get(S.PREFIX+'retry:'+c.eventId)){summary.retriesDeferred=(summary.retriesDeferred||0)+1;continue;}
+  if(await redis.get(S.PREFIX+'retry:desktop:'+c.eventId)){summary.retriesDeferred=(summary.retriesDeferred||0)+1;continue;}
   summary.checked++;
   try{const e=await collect(c);if(!S.usable(e,c,now()))throw Error('SPORTYBET_USUAL_LINEUP_INVALID');await redis.set(S.dataKey(c),JSON.stringify(e),{EX:21600});await redis.sRem(S.QUEUE,String(c.eventId));summary.saved++;logger.info('[SportyBet usual lineup] '+JSON.stringify({eventId:c.eventId,players:e.players.length,confirmed:false}));}
-  catch(error){summary.failed++;await redis.set(S.PREFIX+'retry:'+c.eventId,'1',{EX:3600});const reason=/^SPORTYBET_[A-Z_]+$/.test(error.message||'')?error.message:'SPORTYBET_LINEUP_READ_FAILED';logger.warn('[SportyBet usual lineup] '+JSON.stringify({eventId:c.eventId,reason}));}
+  catch(error){summary.failed++;await redis.set(S.PREFIX+'retry:desktop:'+c.eventId,'1',{EX:3600});const reason=/^SPORTYBET_[A-Z_]+$/.test(error.message||'')?error.message:'SPORTYBET_LINEUP_READ_FAILED';logger.warn('[SportyBet usual lineup] '+JSON.stringify({eventId:c.eventId,reason,...(error.lineupDiagnostics?{diagnostics:error.lineupDiagnostics}:{})}));}
  }}finally{await close();}
  summary.status=summary.failed&&!summary.saved?'failed':!queue.length?(summary.missingKickoff===normalized.length&&normalized.length?'invalid_fixture_times':'no_eligible_fixtures'):summary.saved||summary.skippedFresh?'completed':'deferred';
  summary.finishedAt=new Date(now()).toISOString();await redis.set(S.PREFIX+'status',JSON.stringify(summary),{EX:86400});logger.info('[SportyBet lineup worker] '+JSON.stringify(summary));return summary;
