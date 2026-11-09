@@ -2144,12 +2144,6 @@ app.post('/api/sportybet/replace-unsupported', express.json(), async (req, res) 
 
 const analysisJobs=require('./lib/analysisJobs').createAnalysisJobs({getRedis,runInScope:(fn,options)=>withPublicSportyRequest(fn,options)});
 app.get('/api/sportybet/analysis-jobs/:id',analysisJobs.status);
-app.post('/api/sportybet/combine-preview',express.json({limit:'8kb'}),analysisJobs.wrap(async(req,res)=>{
- try{
-  const pack=await require('./lib/combineTickets').preview(req.body?.codes,{getBooking,normalize:normalizeBookingLeg});
-  return res.json(pack);
- }catch(error){return res.status(400).json({error:error.message||'Could not load source tickets. No booking was submitted.'});}
-}));
 app.post('/api/sportybet/analyze-code', express.json(), analysisJobs.wrap(async (req, res) => {
   try {
     const bookingCode = String(req.body?.bookingCode || '').trim().toUpperCase();
@@ -2290,6 +2284,10 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     if(halfScan&&['live','quick_cash'].includes(normalizeLiveMode(body.liveMode)))return res.status(400).json({error:'Half Scan checks upcoming fixtures. Choose Prematch or Both.'});
     if(body.winnerGapMaxTwo===true)return res.status(400).json({error:'The odds gap ≤2 option was removed. Select odds gap above 8.00 instead.'});
     if([body.winnerGapOnly,body.winnerGapMaxOne,body.winnerGapAboveEight].filter(v=>v===true).length>1)return res.status(400).json({error:'Choose only one winner odds gap filter'});
+    const weekly=body.weekly===true;
+    if(weekly&&(normalizeLiveMode(body.liveMode)!=='prematch'||body.todayOnly===true))return res.status(400).json({error:'Choose Prematch only for a 7-day ticket.'});
+    if(weekly&&Number(body.maxSelections??8)<7)return res.status(400).json({error:'A 7-day ticket needs at least 7 selections. Increase Maximum selections.'});
+    if(weekly&&Array.isArray(body.betTypes)&&body.betTypes.includes('multi'))return res.status(400).json({error:'Use Auto Pick with individual bet types for a 7-day ticket.'});
     if(Array.isArray(body.betTypes)&&body.betTypes.includes('multi')){
       const multi=require('./lib/multiPick');let excluded;try{excluded=require('./lib/ticketVariation').exclusions(body.excludedTicketSignatures);}catch(error){return res.status(400).json({error:error.message});}
       const leagues=Array.isArray(body.leagues)?body.leagues.map(String):null;
@@ -2303,7 +2301,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     // Website Auto Builder probability is user-adjustable.
     const requestedProbability = body.minProbability == null ? 55 : Number(body.minProbability);
     const minProbability = Math.min(95, Math.max(0, Number.isFinite(requestedProbability) ? requestedProbability : 55));
-    const maxSelections = Math.min(50, Math.max(1, parseInt(body.maxSelections || '8', 10)));
+    const maxSelections = Math.min(50, Math.max(1, parseInt(body.maxSelections || '8', 10)||8));
     const minEdge = Math.min(50, Math.max(-25, Number(body.minEdge) || 0));
     // Optional website-only ceiling for the bookmaker odds of each individual selection.
     // Null/blank means no per-match odds ceiling.
@@ -2318,13 +2316,29 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     const todayOnly = body.todayOnly === true || String(body.todayOnly || '').toLowerCase() === 'true';
     const liveMode = normalizeLiveMode(body.liveMode);
 
-    const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly, liveMode,halfScan,includeAllMarkets:body.includeAllMarkets===true,winnerGapOnly:body.winnerGapOnly===true,winnerGapMaxOne:body.winnerGapMaxOne===true,winnerGapAboveEight:body.winnerGapAboveEight===true });
-    const oddsFilteredCandidates = prepared.candidates;
+    const weekStart=Date.now();
+    const requiredDays=weekly?Array.from({length:7},(_,i)=>fixtureDateKeyInTimeZone(weekStart+i*86400000)):null;
+    const allowedDays=weekly?new Set(requiredDays):null;
+    const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly, liveMode,marketHours:weekly?168:null,marketMaxPages:weekly?20:null,halfScan,includeAllMarkets:body.includeAllMarkets===true,winnerGapOnly:body.winnerGapOnly===true,winnerGapMaxOne:body.winnerGapMaxOne===true,winnerGapAboveEight:body.winnerGapAboveEight===true });
+    const dayByKickoff=new Map();
+    const oddsFilteredCandidates = weekly?prepared.candidates.flatMap(c=>{
+      if(c.live||!c.eventId||Date.parse(c.kickoffUtc)<=Date.now())return [];
+      if(!dayByKickoff.has(c.kickoffUtc))dayByKickoff.set(c.kickoffUtc,fixtureDateKeyInTimeZone(c.kickoffUtc));
+      const ticketDay=dayByKickoff.get(c.kickoffUtc);
+      return allowedDays.has(ticketDay)&&Number(c.odds)>1&&Number(c.probability)>0?[{...c,ticketDay}]:[];
+    }):prepared.candidates;
+    if(weekly){
+      const available=new Set(oddsFilteredCandidates.map(c=>c.ticketDay));
+      const missingDays=requiredDays.filter(d=>!available.has(d));
+      if(missingDays.length)return res.status(404).json({error:'No qualifying SportyBet selections found for '+missingDays.join(', ')+' (WAT). A 7-day ticket needs a different match on every date. Try broader sports or markets, or check again later.',code:'WEEK_DAYS_MISSING',missingDays,requiredDays});
+    }
     const redFlagSafeCandidatesCount = prepared.diagnostics.afterRedFlag;
     const rawCandidatesCount = prepared.diagnostics.rawCandidates;
     const redFlagRejected = prepared.diagnostics.redFlagRejected;
     let excludedTickets;try{excludedTickets=require('./lib/ticketVariation').exclusions(body.excludedTicketSignatures);}catch(error){return res.status(400).json({error:error.message});}
-    const result = selectAutoBet(oddsFilteredCandidates, { targetOdds, maxSelections,excludedTickets,requireTarget:body.requireTarget===true });
+    const result = selectAutoBet(oddsFilteredCandidates, { targetOdds, maxSelections,excludedTickets,requireTarget:body.requireTarget===true,requiredDays,...(weekly?{trials:240}:{}) });
+    if(weekly&&result.selections.length)result.selections.sort((a,b)=>Date.parse(a.kickoffUtc)-Date.parse(b.kickoffUtc));
+    if(weekly&&!result.selections.length)return res.status(404).json({error:'No different 7-day ticket met these settings.',code:'NO_WEEKLY_TICKET',requiredDays});
     if(!result.selections.length&&excludedTickets.size){
       const error=require('./lib/autoPicker').explainEmptyTicket({result,excludedTickets,requireTarget:body.requireTarget===true,targetOdds,action:'Auto Pick'});
       return res.status(404).json({error,code:result.candidateCount?'NO_OTHER_VARIATION':'NO_ELIGIBLE_SELECTIONS',marketCoverage:prepared.diagnostics.marketCoverage,sourceErrors:prepared.diagnostics.sourceErrors,requestedBetTypes:betTypes});
@@ -2374,6 +2388,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
 
     res.json({
       ...result,
+      ...(weekly?{requiredDays}:{}),
       sportScope,
       sports: selectedSports,
       minProbability,
@@ -3889,7 +3904,7 @@ app.post('/api/sportybet/book', express.json(), bookingRequests.wrap(async (req,
     if(requireAll){
       const seen=new Set();
       for(const leg of selections){
-        if(!leg?.eventId||!leg.marketId||!leg.outcomeId||seen.has(String(leg.eventId)))return res.status(400).json({error:'Combined tickets need unique matches with complete market identities.'});
+        if(!leg?.eventId||!leg.marketId||!leg.outcomeId||seen.has(String(leg.eventId)))return res.status(400).json({error:'This ticket needs unique matches with complete market identities.'});
         seen.add(String(leg.eventId));
       }
     }
@@ -3937,10 +3952,10 @@ app.post('/api/sportybet/book', express.json(), bookingRequests.wrap(async (req,
         });
       }
     }
-    if(requireAll&&droppedLive.length)return res.status(409).json({error:'Some selections are no longer available. No combined ticket was booked.',droppedLive});
+    if(requireAll&&droppedLive.length)return res.status(409).json({error:'Some selections are no longer available. No ticket was booked.',droppedLive});
     res.bookingStage?.('creating_code');
     const result = await bookBet(bookable, { preferFullMarket });
-    if(requireAll&&(!result?.shareCode||result.unavailableOutcomes?.length))return res.status(409).json({error:'SportyBet did not confirm every merged selection. The combined ticket is not complete. Review the source tickets before trying again.',bookingOutcomeUnknown:true});
+    if(requireAll&&(!result?.shareCode||result.unavailableOutcomes?.length))return res.status(409).json({error:'SportyBet did not confirm every selection. The complete ticket could not be verified. Review the selections before trying again.',bookingOutcomeUnknown:true});
     const slip = sanitizeTelegramSlip(req.body && req.body.telegramContext);
     let sendTimer;
     const telegramSendToken = await Promise.race([createTelegramSendToken({
