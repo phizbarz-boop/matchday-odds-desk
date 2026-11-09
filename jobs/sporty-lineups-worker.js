@@ -7,21 +7,57 @@ async function run({redis,collect,discover,online,close=async()=>{},now=Date.now
  try{for(const c of await discover())if(!fixtures.has(String(c.eventId)))fixtures.set(String(c.eventId),c);}catch{summary.discoveryUnavailable=true;}
  const normalized=[...fixtures.values()].map(c=>({...c,kickoffUtc:c.kickoffUtc||require('../lib/sportybet').normalizeOutcome(c).kickoffUtc}));
  summary.discoveredFixtures=normalized.length;summary.missingKickoff=normalized.filter(c=>!Number.isFinite(Date.parse(c.kickoffUtc))).length;
- const queue=normalized.filter(c=>/^sr:match:\d+$/.test(String(c.eventId))&&!c.live&&Date.parse(c.kickoffUtc)>now()&&Date.parse(c.kickoffUtc)<now()+48*3600000).sort((a,b)=>Number(requested.has(String(b.eventId)))-Number(requested.has(String(a.eventId)))||Date.parse(a.kickoffUtc)-Date.parse(b.kickoffUtc));
+ let queue=normalized.filter(c=>/^sr:match:\d+$/.test(String(c.eventId))&&!c.live&&Date.parse(c.kickoffUtc)>now()&&Date.parse(c.kickoffUtc)<now()+48*3600000).sort((a,b)=>Number(requested.has(String(b.eventId)))-Number(requested.has(String(a.eventId)))||Date.parse(a.kickoffUtc)-Date.parse(b.kickoffUtc));
  summary.eligibleFixtures=queue.length;summary.requestedFixtures=queue.filter(c=>requested.has(String(c.eventId))).length;
- logger.info('[SportyBet lineup batch] '+JSON.stringify({eligible:queue.length,requested:summary.requestedFixtures,maxFixtures,budgetMs}));
+ const matches=new Map(),boardErrors=new Set();
+ if(online?.find){
+  // Each UTC date shares one scoreboard request. Match the whole board
+  // before spending any of the per-fixture budget on browsers or lineups.
+  await Promise.all(queue.map(async c=>{
+   try{const g=await online.find(c);if(g)matches.set(String(c.eventId),g);}
+   catch(error){boardErrors.add(/^ESPN_HTTP_\d+$/.test(error.message)?error.message:'ESPN_SCOREBOARD_UNAVAILABLE');}
+  }));
+  queue=queue.filter(c=>matches.has(String(c.eventId))).concat(queue.filter(c=>!matches.has(String(c.eventId))));
+  summary.espnMatched=matches.size;summary.espnUnmatched=queue.length-matches.size;
+  if(boardErrors.size)summary.espnBoardErrors=[...boardErrors];
+ }
+ const deferred=[];
+ logger.info('[SportyBet lineup batch] '+JSON.stringify({eligible:queue.length,requested:summary.requestedFixtures,espnMatched:summary.espnMatched,espnUnmatched:summary.espnUnmatched,espnBoardErrors:summary.espnBoardErrors,maxFixtures,budgetMs}));
 
- try{for(const c of queue){
-  if(now()-started>=budgetMs||summary.checked>=maxFixtures)break;
-  const old=S.decode(await redis.get(S.dataKey(c)));if(S.usable(old,c,now())&&!(online&&old.basis==='usual'&&Date.parse(c.kickoffUtc)-now()<=90*60000&&now()-Date.parse(old.capturedAt)>=12*60000)){summary.skippedFresh++;await redis.sRem(S.QUEUE,String(c.eventId));continue;}
-  if(await redis.get(S.PREFIX+'retry:online:'+c.eventId)){summary.retriesDeferred=(summary.retriesDeferred||0)+1;continue;}
-  summary.checked++;
-  logger.info('[SportyBet lineup progress] '+JSON.stringify({eventId:c.eventId,checked:summary.checked,saved:summary.saved,requested:requested.has(String(c.eventId))}));
-  try{let e;
-  if(online)try{e=await online(c);}catch(error){logger.warn('[ESPN lineup] '+JSON.stringify({eventId:c.eventId,reason:/^ESPN_HTTP_\d+$/.test(error.message)?error.message:'ESPN_READ_FAILED'}));}
-  if(!S.usable(e,c,now()))e=await collect(c);if(!S.usable(e,c,now()))throw Error('SPORTYBET_USUAL_LINEUP_INVALID');await redis.set(S.dataKey(c),JSON.stringify(e),{EX:21600});await redis.sRem(S.QUEUE,String(c.eventId));summary.saved++;logger.info('[SportyBet usual lineup] '+JSON.stringify({eventId:c.eventId,players:e.players.length,provider:e.provider||'sportybet',confirmed:e.startingLineupConfirmed===true}));}
-  catch(error){summary.failed++;await redis.set(S.PREFIX+'retry:online:'+c.eventId,'1',{EX:900});const reason=/^SPORTYBET_[A-Z_]+$/.test(error.message||'')?error.message:'SPORTYBET_LINEUP_READ_FAILED';logger.warn('[SportyBet usual lineup] '+JSON.stringify({eventId:c.eventId,reason,...(error.lineupDiagnostics?{diagnostics:error.lineupDiagnostics}:{})}));}
- }}finally{await close();}
+ const available=()=>now()-started<budgetMs;
+ const save=async(c,e)=>{
+  await redis.set(S.dataKey(c),JSON.stringify(e),{EX:21600});await redis.sRem(S.QUEUE,String(c.eventId));summary.saved++;
+  logger.info('[SportyBet usual lineup] '+JSON.stringify({eventId:c.eventId,players:e.players.length,provider:e.provider||'sportybet',confirmed:e.startingLineupConfirmed===true}));
+ };
+ try{
+  for(const c of queue){
+   if(!available()||summary.checked>=maxFixtures)break;
+   const id=String(c.eventId),old=S.decode(await redis.get(S.dataKey(c)));
+   if(S.usable(old,c,now())&&!(online&&old.basis==='usual'&&Date.parse(c.kickoffUtc)-now()<=90*60000&&now()-Date.parse(old.capturedAt)>=12*60000)){summary.skippedFresh++;await redis.sRem(S.QUEUE,id);continue;}
+   if(online?.find&&!matches.has(id)){deferred.push(c);continue;}
+   if(!online){deferred.push(c);continue;}
+   summary.checked++;
+   let e;
+   try{e=await online(c,matches.get(id));}
+   catch(error){logger.warn('[ESPN lineup] '+JSON.stringify({eventId:id,reason:/^ESPN_HTTP_\d+$/.test(error.message)?error.message:'ESPN_READ_FAILED'}));}
+   if(S.usable(e,c,now()))await save(c,e);
+   else {summary.espnNoLineup=(summary.espnNoLineup||0)+1;deferred.push(c);}
+  }
+  if(online)deferred.sort((a,b)=>Number(requested.has(String(b.eventId)))-Number(requested.has(String(a.eventId))));
+  for(const c of deferred){
+   if(!available()||(summary.fallbackChecked||0)>=(online?Math.min(maxFixtures,4):maxFixtures))break;
+   const id=String(c.eventId);
+   if(Date.parse(c.kickoffUtc)<=now())continue;
+   if(await redis.get(S.PREFIX+'retry:online:'+id)){summary.retriesDeferred=(summary.retriesDeferred||0)+1;continue;}
+   summary.fallbackChecked=(summary.fallbackChecked||0)+1;
+   if(!online?.find||!matches.has(id)){if(!online||online.find)summary.checked++;}
+   logger.info('[SportyBet lineup progress] '+JSON.stringify({eventId:id,checked:summary.checked,saved:summary.saved,requested:requested.has(id),provider:'sportybet'}));
+   let e;
+   try{e=await collect(c);if(!S.usable(e,c,now()))throw Error('SPORTYBET_USUAL_LINEUP_INVALID');}
+   catch(error){summary.failed++;await redis.set(S.PREFIX+'retry:online:'+id,'1',{EX:900});const reason=/^SPORTYBET_[A-Z_]+$/.test(error.message||'')?error.message:'SPORTYBET_LINEUP_READ_FAILED';logger.warn('[SportyBet usual lineup] '+JSON.stringify({eventId:id,reason,...(error.lineupDiagnostics?{diagnostics:error.lineupDiagnostics}:{})}));continue;}
+   await save(c,e);
+  }
+ }finally{await close();}
  summary.status=summary.failed&&!summary.saved?'failed':!queue.length?(summary.missingKickoff===normalized.length&&normalized.length?'invalid_fixture_times':'no_eligible_fixtures'):summary.saved||summary.skippedFresh?'completed':'deferred';
  summary.finishedAt=new Date(now()).toISOString();await redis.set(S.PREFIX+'status',JSON.stringify(summary),{EX:86400});logger.info('[SportyBet lineup worker] '+JSON.stringify(summary));return summary;
 }

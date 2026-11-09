@@ -32,3 +32,14 @@ test('a recent completed XI stays historical and a mismatched prior match is rej
  previous.competitors[1].team.id='999';
  assert.equal(await E.createCollector({now,request})(c),null);
 });
+
+test('worker reaches covered fixtures behind twenty unsupported fixtures',async()=>{
+ const vals=new Map(),redis={sMembers:async()=>[],get:async k=>vals.get(k),set:async(k,v)=>vals.set(k,v),sRem:async()=>{}};
+ const upcoming=Array.from({length:20},(_,i)=>({...c,eventId:'sr:match:'+String(i+100),kickoffUtc:'2026-04-19T15:20Z'}));
+ const online=E.createCollector({now,request:async url=>url.includes('/scoreboard?')?{events:[{competitions:[current]}]}:summary(current,['382','359'].map(roster))});
+ for(const fixture of upcoming){fixture.home='Unsupported '+fixture.eventId;}
+ const fallback=[];
+ const r=await require('../jobs/sporty-lineups-worker').run({redis,online,now,discover:async()=>[...upcoming,c],collect:async f=>{fallback.push(f.eventId);throw Error('SPORTYBET_USUAL_LINEUP_UNAVAILABLE');},logger:{info(){},warn(){}}});
+ assert.equal(r.espnMatched,1);assert.equal(r.espnUnmatched,20);assert.equal(r.saved,1);assert.equal(fallback.length,4);
+ assert.equal(S.decode(vals.get(S.dataKey(c))).provider,'espn');
+});
