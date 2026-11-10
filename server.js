@@ -2292,6 +2292,26 @@ app.post('/api/sportybet/sim-preview', express.json({limit:'32kb'}), analysisJob
   return res.json({...sim.analyse(rows,body),source:'SportyBet prematch feed'});
 }));
 
+async function prepareBetBuilderPreview(settings={}){
+ const requested=Array.isArray(settings.betTypes)?settings.betTypes.map(String):[];
+ const builder=require('./lib/betBuilderPreview');
+ const compatible=new Set(builder.marketTypes);
+ const types=requested.length?requested.filter(t=>t!=='multi'&&compatible.has(t)):[...compatible].filter(t=>t!=='multi');
+ if(!types.length)return {builders:[],candidateMatches:0};
+ const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:types,
+   leagues:Array.isArray(settings.leagues)?settings.leagues.map(String):null,
+   minProbability:settings.minProbability,minEdge:settings.minEdge,
+   maxMatchOdds:settings.maxMatchOdds,minMatchOdds:settings.minMatchOdds,todayOnly:settings.todayOnly===true,
+   winnerGapOnly:settings.winnerGapOnly===true,winnerGapMaxOne:settings.winnerGapMaxOne===true,
+   winnerGapAboveEight:settings.winnerGapAboveEight===true,liveMode:'prematch'});
+ return builder.quotePreview(prepared.candidates.filter(c=>!require('./lib/simFootball').product(c)),{
+   minProbability:settings.minProbability,maxMatches:settings.maxSelections,targetOdds:settings.targetOdds},require('./lib/sportybetDirect').quoteBetBuilder);
+}
+app.post('/api/sportybet/bet-builder-preview',express.json({limit:'32kb'}),analysisJobs.wrap(async(req,res)=>{
+ try{return res.json(await prepareBetBuilderPreview(req.body||{}));}
+ catch{return res.status(502).json({error:'Could not load the current football markets for Bet Builder.'});}
+}));
+
 app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs.wrap(async (req, res) => {
   try {
     const body = req.body || {};
@@ -3373,6 +3393,21 @@ async function handleTelegramAiUpdate(update) {
   let user = await getTelegramAiUser(redis, from.id || chatId, from);
   let text = String(msg.text || '').trim();
   let callbackAction = null;
+
+  if(callback?.data==='builder:same-match'||/^\/betbuilder(?:@\w+)?$/i.test(text)){
+    if(callback)await telegramAiRequest('answerCallbackQuery',{callback_query_id:callback.id}).catch(()=>{});
+    const plan=getTelegramAiPlan(user),settings=user.preferences.builder;
+    if(plan.id==='free')return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(plan,'same-match Bet Builder markets'),{reply_markup:telegramAiPlanKeyboard()});
+    const allowed=new Set(telegramAiBetTypesForSport(plan.id,'football'));
+    const betTypes=settings.betTypes.filter(id=>allowed.has(id));
+    if(!betTypes.length)return sendTelegramAiMessageTo(chatId,'Select eligible football markets in Bet Types first.');
+    try{
+      const p=await withPublicSportyRequest(()=>prepareBetBuilderPreview({...settings,betTypes,maxSelections:Math.min(settings.maxSelections,plan.maxSelections)}));
+      if(!p.builders.length)return sendTelegramAiMessageTo(chatId,p.attempts?'SportyBet returned no valid combination prices for the groups checked.':'No same-match groups met your settings. Select a result and a goals or BTTS market, or select match goals and team goals.');
+      const lines=p.builders.map((b,i)=>[String(i+1)+'. '+b.home+' vs '+b.away,...b.selections.map(c=>c.pick+' · '+c.modelProbability.toFixed(1)+'% model'), 'Joint lower bound if model probabilities hold: '+b.modelLowerBound.toFixed(1)+'%', 'SportyBet group odds: '+b.odds.toFixed(2)].join('\n'));
+      return sendTelegramAiLongMessage(chatId,'BET BUILDER MULTI · '+p.combinedOdds.toFixed(2)+'x quoted'+(p.targetReached===false?' (below target)':'')+'\n\n'+lines.join('\n\n')+'\n\nBooking codes are not available for these grouped selections yet.',{reply_markup:telegramAiBuilderKeyboard(user)});
+    }catch{return sendTelegramAiMessageTo(chatId,'Could not load current football markets. Try the Bet Builder preview again shortly.');}
+  }
 
   if (callback) {
     await telegramAiRequest('answerCallbackQuery', { callback_query_id: callback.id }).catch(()=>{});
