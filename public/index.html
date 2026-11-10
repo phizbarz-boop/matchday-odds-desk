@@ -157,7 +157,7 @@
     <div class="auto-note">Every Auto Analyser request checks the current SportyBet board for your selected sports, bet types and match status. Football uses available SportyBet goal averages and H2H; complete offered prices supply labelled probability estimates when historical statistics are unavailable. Other sports use margin-adjusted market estimates. Live selections must be at least halfway through and currently winning against their actual market line. Quick Cash uses late-stage games. Missing progress or score data excludes a selection. Your probability and edge settings still apply, and live selections are checked again before code generation.</div>
     <div class="auto-market-box">
       <div class="settings-label">Bet Builder Multi · SportyBet quotes</div>
-      <p class="auto-note">Pairs eligible football markets in each match, such as match goals and team goals, then groups different matches into one preview. Uses your probability floor for each pick and up to eight matches. Only groups with a valid SportyBet quote are shown. Booking codes are not available yet.</p>
+      <p class="auto-note">Pairs eligible football markets in each match, such as match goals and team goals, then groups different matches into one preview. Uses your probability floor for each pick and up to eight matches. Only groups with a valid SportyBet quote are shown. Generate a booking code for the quoted groups below.</p>
       <button type="button" class="secondary" id="same-match-preview">Price Bet Builder Multi</button>
       <div id="same-match-status" class="auto-status" role="status"></div>
       <div id="same-match-results"></div>
@@ -459,6 +459,20 @@ document.getElementById('same-match-preview').onclick=async event=>{
   if(!response.ok)throw Error(data.error||'Could not build the preview.');
   status.textContent=data.builders.length?data.builders.length+' same-match groups · '+data.combinedOdds.toFixed(2)+'x quoted'+(data.targetReached===false?' · below target':''):data.attempts?'SportyBet returned no valid combination prices for the groups checked.':'No groups met your settings. Select a result and a goals or BTTS market, or select match goals and team goals.';
   out.innerHTML=data.builders.map(b=>`<div class="codebox"><b>${esc(b.home)} vs ${esc(b.away)}</b><br>${b.selections.map(c=>`${esc(c.pick)} · ${c.modelProbability.toFixed(1)}% model`).join('<br>')}<br>Joint lower bound if model probabilities hold: ${b.modelLowerBound.toFixed(1)}%<br>SportyBet group odds: ${b.odds.toFixed(2)}x</div>`).join('');
+  if(data.builders.length&&data.builders.every(b=>/^\d+bb\d+$/.test(b.bookingSelection?.marketId||'')&&/^\d+$/.test(b.bookingSelection?.outcomeId||''))){
+   const generate=document.createElement('button'),result=document.createElement('div');
+   generate.type='button';generate.className='primary';generate.textContent='Generate Code';
+   out.append(generate,result);
+   generate.onclick=async()=>{
+    generate.disabled=true;button.disabled=true;result.textContent='Generating booking code…';
+    try{
+     const booking=await SportyBooking.book({betBuilderMulti:true,selections:data.builders.map(b=>b.bookingSelection)});
+     result.textContent='Booking code: '+(booking.shareCode||booking.bookingCode||booking.booking_code||booking.code);button.disabled=false;
+     const url=safeSplitUrl(booking.shareURL);
+     if(url){const link=document.createElement('a');link.href=url;link.target='_blank';link.rel='noopener';link.textContent='Open in SportyBet';result.append(' · ',link);}
+    }catch(error){result.textContent=error.message;generate.disabled=false;button.disabled=!!error.bookingOutcomeUnknown;}
+   };
+  }
  }catch(e){status.textContent=e.message;}
  finally{button.disabled=false;}
 };

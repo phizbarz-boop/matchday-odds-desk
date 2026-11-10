@@ -39,3 +39,17 @@ test('allows match goals with team goals without requiring a match result',()=>{
  const rows=[goals,{...goals,marketId:'19',betType:'home_over05'}];
  assert.equal(preview(rows,{now,minProbability:70}).builders.length,1);
 });
+test('shares one synthetic selection per match and requires exact lookup confirmation',async()=>{
+ const {bookGroups}=require('../lib/betBuilderPreview');
+ const groups=[1,2].map(id=>({eventId:'sr:match:'+id,marketId:'261110073951bb2352207'+id,outcomeId:'1'}));
+ let calls=0;
+ const bookBet=async rows=>{calls++;assert.deepEqual(rows,groups);return {shareCode:'TEST01'};};
+ const result=await bookGroups(groups,{bookBet,getBooking:async(code,options)=>{
+  assert.equal(code,'TEST01');assert.equal(options.fresh,true);
+  return {ticket:{selections:groups}};
+ }});
+ assert.equal(result.shareCode,'TEST01');
+ await assert.rejects(bookGroups(groups,{bookBet,getBooking:async()=>({ticket:{selections:groups.slice(0,1)}})}),{code:'BET_BUILDER_UNCONFIRMED',bookingOutcomeUnknown:true});
+ await assert.rejects(bookGroups([groups[0],groups[0]],{bookBet}),/valid SportyBet group quotes/);
+ assert.equal(calls,2);
+});

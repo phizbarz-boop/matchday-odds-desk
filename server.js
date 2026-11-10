@@ -1001,7 +1001,7 @@ app.get('/api/sportybet/odds', async (req, res) => {
     console.error('SportyBet odds error:', err.message);
     const status = err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : (err.code === 'SPORTYBET_BOOKING_TIMEOUT' || err.code === 'SPORTYBET_TIMEOUT' ? 504 : 502);
     res.status(status).json({
-      error: err.code === 'SPORTYBET_NOT_CONFIGURED'
+      error: err.code === 'BET_BUILDER_UNCONFIRMED' ? err.message : err.code === 'SPORTYBET_NOT_CONFIGURED'
         ? 'SportyBet integration is not configured yet'
         : err.code === 'SPORTYBET_GEO_BLOCKED'
           ? 'SportyBet geo-blocked this server IP — set SPORTYBET_PROXY_URL to a Nigeria-exit proxy'
@@ -1197,7 +1197,7 @@ app.get('/api/sportybet/sport/:sport', async (req, res) => {
     console.error('SportyBet sport odds error:', err.message);
     const status = err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : 502;
     res.status(status).json({
-      error: err.code === 'SPORTYBET_NOT_CONFIGURED'
+      error: err.code === 'BET_BUILDER_UNCONFIRMED' ? err.message : err.code === 'SPORTYBET_NOT_CONFIGURED'
         ? 'SportyBet integration is not configured yet'
         : 'Failed to load SportyBet sport odds',
       detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
@@ -1273,7 +1273,7 @@ app.post('/api/sportybet/live/book', express.json(), bookingRequests.wrap(async 
     const authFailure=safeAuthDiagnostics(err);
     const status = authFailure || err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : (err.code === 'SPORTYBET_BOOKING_TIMEOUT' ? 504 : 502);
     res.status(status).json({
-      error: err.code === 'SPORTYBET_NOT_CONFIGURED'
+      error: err.code === 'BET_BUILDER_UNCONFIRMED' ? err.message : err.code === 'SPORTYBET_NOT_CONFIGURED'
         ? 'SportyBet booking configuration is unavailable'
         : 'Failed to create live SportyBet booking code',
       bookingErrorCode: err.code || null,
@@ -3398,15 +3398,22 @@ async function handleTelegramAiUpdate(update) {
     if(callback)await telegramAiRequest('answerCallbackQuery',{callback_query_id:callback.id}).catch(()=>{});
     const plan=getTelegramAiPlan(user),settings=user.preferences.builder;
     if(plan.id==='free')return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(plan,'same-match Bet Builder markets'),{reply_markup:telegramAiPlanKeyboard()});
+    if(!telegramAiHasTicketCredit(user))return sendTelegramAiMessageTo(chatId,'Your daily ticket allowance is used up.',{reply_markup:telegramAiTicketLimitKeyboard(user)});
     const allowed=new Set(telegramAiBetTypesForSport(plan.id,'football'));
     const betTypes=settings.betTypes.filter(id=>allowed.has(id));
     if(!betTypes.length)return sendTelegramAiMessageTo(chatId,'Select eligible football markets in Bet Types first.');
     try{
       const p=await withPublicSportyRequest(()=>prepareBetBuilderPreview({...settings,betTypes,maxSelections:Math.min(settings.maxSelections,plan.maxSelections)}));
       if(!p.builders.length)return sendTelegramAiMessageTo(chatId,p.attempts?'SportyBet returned no valid combination prices for the groups checked.':'No same-match groups met your settings. Select a result and a goals or BTTS market, or select match goals and team goals.');
+      const builder=require('./lib/betBuilderPreview');
+      const groups=p.builders.map(b=>b.bookingSelection);
+      if(!builder.validBookingSelections(groups))return sendTelegramAiMessageTo(chatId,'SportyBet priced the groups but did not supply bookable market IDs.');
+      const booking=await builder.bookGroups(groups,{bookBet,getBooking});
+      const use=await consumeTelegramAiUsage(redis,user,'ticket');
+      await saveTelegramAiUser(redis,{...use.user,lastBookingCode:booking.shareCode}).catch(()=>{});
       const lines=p.builders.map((b,i)=>[String(i+1)+'. '+b.home+' vs '+b.away,...b.selections.map(c=>c.pick+' · '+c.modelProbability.toFixed(1)+'% model'), 'Joint lower bound if model probabilities hold: '+b.modelLowerBound.toFixed(1)+'%', 'SportyBet group odds: '+b.odds.toFixed(2)].join('\n'));
-      return sendTelegramAiLongMessage(chatId,'BET BUILDER MULTI · '+p.combinedOdds.toFixed(2)+'x quoted'+(p.targetReached===false?' (below target)':'')+'\n\n'+lines.join('\n\n')+'\n\nBooking codes are not available for these grouped selections yet.',{reply_markup:telegramAiBuilderKeyboard(user)});
-    }catch{return sendTelegramAiMessageTo(chatId,'Could not load current football markets. Try the Bet Builder preview again shortly.');}
+      return sendTelegramAiLongMessage(chatId,'BET BUILDER MULTI · '+p.combinedOdds.toFixed(2)+'x quoted'+(p.targetReached===false?' (below target)':'')+'\n\n'+lines.join('\n\n')+'\n\nBooking code: '+booking.shareCode+(booking.shareURL?'\n'+booking.shareURL:''),{reply_markup:telegramAiBuilderKeyboard(user)});
+    }catch(error){return sendTelegramAiMessageTo(chatId,error.bookingOutcomeUnknown?'SportyBet did not confirm the grouped slip. No verified code is available.':'Could not price or book the Bet Builder slip with SportyBet.');}
   }
 
   if (callback) {
@@ -3954,6 +3961,12 @@ app.post('/api/sportybet/book', express.json(), bookingRequests.wrap(async (req,
     if (!Array.isArray(selections) || selections.length === 0 || selections.length > 50) {
       return res.status(400).json({ error: 'selections must be an array containing 1-50 selections' });
     }
+    if(req.body?.betBuilderMulti===true){
+      const builder=require('./lib/betBuilderPreview');
+      if(!builder.validBookingSelections(selections))return res.status(400).json({error:'Refresh Bet Builder to get valid SportyBet group quotes.'});
+      res.bookingStage?.('creating_code');
+      return res.json(await builder.bookGroups(selections,{bookBet,getBooking}));
+    }
     const simMode=req.body?.simMode;
     const requireAll=req.body?.requireAllSelections===true||simMode!==undefined;
     const disabledMarket=require('./lib/footballExtraMarkets').removedSelection;
@@ -4038,7 +4051,7 @@ app.post('/api/sportybet/book', express.json(), bookingRequests.wrap(async (req,
     const authFailure=safeAuthDiagnostics(err);
     const status = authFailure || err.code === 'SPORTYBET_NOT_CONFIGURED' ? 503 : (err.code==='SPORTYBET_BOOKING_TIMEOUT'?504:502);
     res.status(status).json({
-      error: err.code === 'SPORTYBET_NOT_CONFIGURED'
+      error: err.code === 'BET_BUILDER_UNCONFIRMED' ? err.message : err.code === 'SPORTYBET_NOT_CONFIGURED'
         ? 'SportyBet integration is not configured yet'
         : 'Failed to create SportyBet booking code',
       bookingErrorCode: err.code || null,
