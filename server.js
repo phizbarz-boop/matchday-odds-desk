@@ -1422,7 +1422,7 @@ function normalizeAutoBetTypesForSports(sports, betTypes) {
   return [...compatible].filter(id=>id!=='multi');
 }
 
-async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, ignoreEdge = false, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch', includeAllMarkets = null, halfScan = false, todayOnly = false, winnerGapOnly = false, winnerGapMaxOne = false, winnerGapAboveEight = false } = {}) {
+async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, ignoreEdge = false, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch', includeAllMarkets = null, boundedBuilderScan = false, halfScan = false, todayOnly = false, winnerGapOnly = false, winnerGapMaxOne = false, winnerGapAboveEight = false } = {}) {
   return withFreshSportyRequest(async()=>{
     // Discover and model public SportyBet data independently of booking login.
     if([winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight].filter(Boolean).length>1)throw Error('Choose only one winner odds gap filter');
@@ -1736,9 +1736,10 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
         const allow=c=>require('./lib/streakGoalModel').expandedSelectionAllowed(c,betTypes,includeAllMarkets===true||includeAllMarkets==null&&betTypes==null);
         const streamed={discoveredMarketInstances:0,existingModel:0,marketEstimates:0,unmodeled:0};
         const scorerDiagnostics={marketInstances:0,recognized:0,binary:0,negative:0,modeled:0,samples:[]};
+        const streamDetails=halfScan||boundedBuilderScan;
         const knownByEvent=new Map();
-        if(halfScan)for(const c of candidates){const id=String(c.eventId);if(!knownByEvent.has(id))knownByEvent.set(id,[]);knownByEvent.get(id).push(c);}
-        const onFixtureRows=halfScan?(rows,fixture)=>{
+        if(streamDetails)for(const c of candidates){const id=String(c.eventId);if(!knownByEvent.has(id))knownByEvent.set(id,[]);knownByEvent.get(id).push(c);}
+        const onFixtureRows=streamDetails?(rows,fixture)=>{
           if(gapFilterOn){const gap=require('./lib/winnerOddsGap');const eligible=gap.configuredWinnerOddsGap(rows,{winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight});rows=rows.filter(r=>eligible.has(gap.key(r)));}
           if(!rows.length)return;
           const modeled=model(rows,{known:knownByEvent.get(String(fixture.eventId))||[],predictions,minProbability,minEdge,includeMarketDetails:false});
@@ -1746,21 +1747,23 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
           for(const k of ['marketInstances','recognized','binary','negative','modeled'])scorerDiagnostics[k]+=player[k];
           scorerDiagnostics.samples.push(...player.samples.slice(0,Math.max(0,3-scorerDiagnostics.samples.length)));
           for(const k of Object.keys(streamed))streamed[k]+=modeled.coverage[k];
-          for(const c of modeled.candidates)if(allow(c))candidates.push(c);
+          const eligible=modeled.candidates.filter(allow);
+          if(boundedBuilderScan)eligible.sort((a,b)=>Number(b.probability)-Number(a.probability));
+          candidates.push(...(boundedBuilderScan?eligible.slice(0,120):eligible));
         }:null;
-        const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets([...fixtures,...discovery.flatMap(r=>r.status==='fulfilled'?r.value.fixtures:[]),...(requestedFixtures||[])],{sports:selectedSports,leagues,...expandedPolicy,halfScan,todayOnly,onFixtureRows,allowUnknownKickoff:Array.isArray(requestedFixtures)});
+        const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets([...fixtures,...discovery.flatMap(r=>r.status==='fulfilled'?r.value.fixtures:[]),...(requestedFixtures||[])],{sports:selectedSports,leagues,...expandedPolicy,...(boundedBuilderScan?{maxEventsOverride:48,concurrencyOverride:2,budgetMs:15000,checkMemory:betBuilderMemoryLow}:{}),halfScan,todayOnly,onFixtureRows,allowUnknownKickoff:Array.isArray(requestedFixtures)});
         if(missingSports.length){
           scan.coverage={...scan.coverage,complete:false,partial:true,stopReason:'discovery_errors',missingSports};
           sourceErrors['fixture discovery']='Incomplete fixture listing for '+missingSports.map(sport=>{const c=discovery[selectedSports.indexOf(sport)]?.value?.coverage;return c?.failedPage?sport+' (listing stopped at page '+c.failedPage+')':sport;}).join(', ');
         }
         let coverage=streamed;
-        if(!halfScan){
+        if(!streamDetails){
           const freshGap=gapFilterOn?require('./lib/winnerOddsGap').configuredWinnerOddsGap(scan.rows,{winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight}):null;
           const expandedRows=gapFilterOn?scan.rows.filter(r=>freshGap.has(require('./lib/winnerOddsGap').key(r))):scan.rows;
           const expanded=model(expandedRows,{known:candidates,predictions,minProbability,minEdge});
           candidates.push(...expanded.candidates.filter(allow));coverage=expanded.coverage;
         }
-        candidates.marketCoverage={...coverage,collectionErrors:scan.errors,scan:scan.coverage,playerScorer:halfScan?scorerDiagnostics:require('./lib/footballExtraMarkets').playerDiagnostics(scan.rows,candidates)};
+        candidates.marketCoverage={...coverage,collectionErrors:scan.errors,scan:scan.coverage,playerScorer:streamDetails?scorerDiagnostics:require('./lib/footballExtraMarkets').playerDiagnostics(scan.rows,candidates)};
         if(!scan.coverage.detailReads&&Object.keys(scan.errors).length)sourceErrors['expanded markets']='Extra market detail requests were unavailable or timed out; regular candidates retained';
       }catch(error){sourceErrors['expanded markets']=String(error.message).slice(0,160);}
     }
@@ -1820,6 +1823,7 @@ async function prepareAutoCandidatePool({
   minMatchOdds=null,
   marketHours=null,
   marketMaxPages=null,
+  boundedBuilderScan=false,
   todayOnly=false,
   halfScan=false,
   liveMode='prematch',
@@ -1840,14 +1844,14 @@ async function prepareAutoCandidatePool({
   const sourceCandidates = await loadAutoCandidates({
     sportScope: selectedSports,
     sports: selectedSports,
-    minProbability: 0,
+    minProbability: boundedBuilderScan?probabilityFloor:0,
     minEdge: edgeFloor,
     leagues,
     betTypes,
     marketHours,
     marketMaxPages,
     liveMode: liveModeNorm,
-    includeAllMarkets,halfScan,todayOnly,
+    includeAllMarkets,boundedBuilderScan,halfScan,todayOnly,
     winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight,
   });
 
@@ -2292,10 +2296,21 @@ app.post('/api/sportybet/sim-preview', express.json({limit:'32kb'}), analysisJob
   return res.json({...sim.analyse(rows,body),source:'SportyBet prematch feed'});
 }));
 
+function betBuilderMemoryLow(){
+ const state=require('./lib/runtimeMemory').snapshot();
+ return (state.availableMiB!=null&&state.availableMiB<96)||state.heapUsedMiB>=state.heapLimitMiB*.75;
+}
+let betBuilderRunning=false;
 async function prepareBetBuilderPreview(settings={}){
+ if(betBuilderRunning||betBuilderMemoryLow())throw Object.assign(Error('Bet Builder is busy. Try again shortly.'),{code:'BET_BUILDER_BUSY'});
+ betBuilderRunning=true;
+ try{return await runBetBuilderPreview(settings);}finally{betBuilderRunning=false;}
+}
+async function runBetBuilderPreview(settings={}){
+
  const builder=require('./lib/betBuilderPreview');
  const types=Array.isArray(settings.allowedBetTypes)?settings.allowedBetTypes.filter(t=>t!=='multi'):null;
- const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:types,includeAllMarkets:types===null,
+ const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:types,includeAllMarkets:types===null,boundedBuilderScan:true,marketMaxPages:3,
    leagues:Array.isArray(settings.leagues)?settings.leagues.map(String):null,
    minProbability:settings.minProbability,minEdge:settings.minEdge,
    maxMatchOdds:settings.maxMatchOdds,minMatchOdds:settings.minMatchOdds,todayOnly:settings.todayOnly===true,
@@ -2306,7 +2321,7 @@ async function prepareBetBuilderPreview(settings={}){
 }
 app.post('/api/sportybet/bet-builder-preview',express.json({limit:'32kb'}),analysisJobs.wrap(async(req,res)=>{
  try{return res.json(await prepareBetBuilderPreview({...req.body,allowedBetTypes:null}));}
- catch{return res.status(502).json({error:'Could not load the current football markets for Bet Builder.'});}
+ catch(error){return res.status(error.code==='BET_BUILDER_BUSY'?503:502).json({error:error.code==='BET_BUILDER_BUSY'?error.message:'Could not load the current football markets for Bet Builder.'});}
 }));
 
 app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs.wrap(async (req, res) => {
@@ -3407,7 +3422,7 @@ async function handleTelegramAiUpdate(update) {
       await saveTelegramAiUser(redis,{...use.user,lastBookingCode:booking.shareCode}).catch(()=>{});
       const lines=p.builders.map((b,i)=>[String(i+1)+'. '+b.home+' vs '+b.away,...b.selections.map(c=>c.pick+' · '+c.modelProbability.toFixed(1)+'% model'), 'Joint lower bound if model probabilities hold: '+b.modelLowerBound.toFixed(1)+'%', 'SportyBet group odds: '+b.odds.toFixed(2)].join('\n'));
       return sendTelegramAiLongMessage(chatId,'BET BUILDER MULTI · '+p.combinedOdds.toFixed(2)+'x quoted'+(p.targetReached===false?' (below target)':'')+'\n\n'+lines.join('\n\n')+'\n\nBooking code: '+booking.shareCode+(booking.shareURL?'\n'+booking.shareURL:''),{reply_markup:telegramAiBuilderKeyboard(user)});
-    }catch(error){return sendTelegramAiMessageTo(chatId,error.bookingOutcomeUnknown?'SportyBet did not confirm the grouped slip. No verified code is available.':'Could not price or book the Bet Builder slip with SportyBet.');}
+    }catch(error){return sendTelegramAiMessageTo(chatId,error.code==='BET_BUILDER_BUSY'?error.message:error.bookingOutcomeUnknown?'SportyBet did not confirm the grouped slip. No verified code is available.':'Could not price or book the Bet Builder slip with SportyBet.');}
   }
 
   if (callback) {
