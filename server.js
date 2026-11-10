@@ -2293,22 +2293,19 @@ app.post('/api/sportybet/sim-preview', express.json({limit:'32kb'}), analysisJob
 }));
 
 async function prepareBetBuilderPreview(settings={}){
- const requested=Array.isArray(settings.betTypes)?settings.betTypes.map(String):[];
  const builder=require('./lib/betBuilderPreview');
- const compatible=new Set(builder.marketTypes);
- const types=requested.length?requested.filter(t=>t!=='multi'&&compatible.has(t)):[...compatible].filter(t=>t!=='multi');
- if(!types.length)return {builders:[],candidateMatches:0};
- const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:types,
+ const types=Array.isArray(settings.allowedBetTypes)?settings.allowedBetTypes.filter(t=>t!=='multi'):null;
+ const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:types,includeAllMarkets:types===null,
    leagues:Array.isArray(settings.leagues)?settings.leagues.map(String):null,
    minProbability:settings.minProbability,minEdge:settings.minEdge,
    maxMatchOdds:settings.maxMatchOdds,minMatchOdds:settings.minMatchOdds,todayOnly:settings.todayOnly===true,
    winnerGapOnly:settings.winnerGapOnly===true,winnerGapMaxOne:settings.winnerGapMaxOne===true,
    winnerGapAboveEight:settings.winnerGapAboveEight===true,liveMode:'prematch'});
  return builder.quotePreview(prepared.candidates.filter(c=>!require('./lib/simFootball').product(c)),{
-   minProbability:settings.minProbability,maxMatches:settings.maxSelections,targetOdds:settings.targetOdds},require('./lib/sportybetDirect').quoteBetBuilder);
+   minProbability:settings.minProbability,maxMatches:settings.maxSelections,maxPicks:settings.maxPicks,targetOdds:settings.targetOdds},require('./lib/sportybetDirect').quoteBetBuilder);
 }
 app.post('/api/sportybet/bet-builder-preview',express.json({limit:'32kb'}),analysisJobs.wrap(async(req,res)=>{
- try{return res.json(await prepareBetBuilderPreview(req.body||{}));}
+ try{return res.json(await prepareBetBuilderPreview({...req.body,allowedBetTypes:null}));}
  catch{return res.status(502).json({error:'Could not load the current football markets for Bet Builder.'});}
 }));
 
@@ -3399,12 +3396,9 @@ async function handleTelegramAiUpdate(update) {
     const plan=getTelegramAiPlan(user),settings=user.preferences.builder;
     if(plan.id==='free')return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(plan,'same-match Bet Builder markets'),{reply_markup:telegramAiPlanKeyboard()});
     if(!telegramAiHasTicketCredit(user))return sendTelegramAiMessageTo(chatId,'Your daily ticket allowance is used up.',{reply_markup:telegramAiTicketLimitKeyboard(user)});
-    const allowed=new Set(telegramAiBetTypesForSport(plan.id,'football'));
-    const betTypes=settings.betTypes.filter(id=>allowed.has(id));
-    if(!betTypes.length)return sendTelegramAiMessageTo(chatId,'Select eligible football markets in Bet Types first.');
     try{
-      const p=await withPublicSportyRequest(()=>prepareBetBuilderPreview({...settings,betTypes,maxSelections:Math.min(settings.maxSelections,plan.maxSelections)}));
-      if(!p.builders.length)return sendTelegramAiMessageTo(chatId,p.attempts?'SportyBet returned no valid combination prices for the groups checked.':'No same-match groups met your settings. Select a result and a goals or BTTS market, or select match goals and team goals.');
+      const p=await withPublicSportyRequest(()=>prepareBetBuilderPreview({...settings,allowedBetTypes:plan.id==='elite'?null:telegramAiBetTypesForSport(plan.id,'football'),maxSelections:Math.min(settings.maxSelections,plan.maxSelections)}));
+      if(!p.builders.length)return sendTelegramAiMessageTo(chatId,p.attempts?'SportyBet returned no valid combination prices for the groups checked.':'No compatible football group met your probability floor and filters.');
       const builder=require('./lib/betBuilderPreview');
       const groups=p.builders.map(b=>b.bookingSelection);
       if(!builder.validBookingSelections(groups))return sendTelegramAiMessageTo(chatId,'SportyBet priced the groups but did not supply bookable market IDs.');

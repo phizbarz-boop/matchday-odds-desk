@@ -157,7 +157,8 @@
     <div class="auto-note">Every Auto Analyser request checks the current SportyBet board for your selected sports, bet types and match status. Football uses available SportyBet goal averages and H2H; complete offered prices supply labelled probability estimates when historical statistics are unavailable. Other sports use margin-adjusted market estimates. Live selections must be at least halfway through and currently winning against their actual market line. Quick Cash uses late-stage games. Missing progress or score data excludes a selection. Your probability and edge settings still apply, and live selections are checked again before code generation.</div>
     <div class="auto-market-box">
       <div class="settings-label">Bet Builder Multi · SportyBet quotes</div>
-      <p class="auto-note">Pairs eligible football markets in each match, such as match goals and team goals, then groups different matches into one preview. Uses your probability floor for each pick and up to eight matches. Only groups with a valid SportyBet quote are shown. Generate a booking code for the quoted groups below.</p>
+      <p class="auto-note">Scans supported football markets independently of the Bet Types checklist. Tries three or more picks per match when available and can return two if SportyBet rejects larger groups. Every pick must meet your probability floor.</p>
+      <label>Max picks per match <input id="same-match-max-picks" type="number" min="3" max="10" value="8"></label>
       <button type="button" class="secondary" id="same-match-preview">Price Bet Builder Multi</button>
       <div id="same-match-status" class="auto-status" role="status"></div>
       <div id="same-match-results"></div>
@@ -455,7 +456,7 @@ document.getElementById('same-match-preview').onclick=async event=>{
  button.disabled=true;status.textContent='Checking football markets…';out.textContent='';
  try{
   if(!settings.sports.includes('football')||settings.liveMode!=='prematch'||settings.weekly)throw Error('Select Football, Prematch only and Any available date or Today only.');
-  const {response,data}=await SportyAnalysis.request('/api/sportybet/bet-builder-preview',{...settings,leagues:autoLeagueFilter(),targetOdds:settings.target,minProbability:settings.minProb});
+  const {response,data}=await SportyAnalysis.request('/api/sportybet/bet-builder-preview',{...settings,leagues:autoLeagueFilter(),targetOdds:settings.target,minProbability:settings.minProb,maxPicks:Number(document.getElementById('same-match-max-picks').value)});
   if(!response.ok)throw Error(data.error||'Could not build the preview.');
   status.textContent=data.builders.length?data.builders.length+' same-match groups · '+data.combinedOdds.toFixed(2)+'x quoted'+(data.targetReached===false?' · below target':''):data.attempts?'SportyBet returned no valid combination prices for the groups checked.':'No groups met your settings. Select a result and a goals or BTTS market, or select match goals and team goals.';
   out.innerHTML=data.builders.map(b=>`<div class="codebox"><b>${esc(b.home)} vs ${esc(b.away)}</b><br>${b.selections.map(c=>`${esc(c.pick)} · ${c.modelProbability.toFixed(1)}% model`).join('<br>')}<br>Joint lower bound if model probabilities hold: ${b.modelLowerBound.toFixed(1)}%<br>SportyBet group odds: ${b.odds.toFixed(2)}x</div>`).join('');
