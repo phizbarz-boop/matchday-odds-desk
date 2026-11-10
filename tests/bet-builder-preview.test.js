@@ -41,15 +41,16 @@ test('allows match goals with team goals without requiring a match result',()=>{
 });
 test('shares one synthetic selection per match and requires exact lookup confirmation',async()=>{
  const {bookGroups}=require('../lib/betBuilderPreview');
- const groups=[1,2].map(id=>({eventId:'sr:match:'+id,marketId:'261110073951bb2352207'+id,outcomeId:'1'}));
+ const groups=[1,2].map(id=>({eventId:'sr:match:'+id,marketId:'261110073951bb2352207'+id,outcomeId:'1',children:[{marketId:'1',outcomeId:'1'},{marketId:'18',outcomeId:'12',specifier:'total=1.5'}]}));
+ const wire=groups.flatMap(({eventId,marketId,outcomeId,children})=>[...children.map(c=>({eventId,...c,parentBetBuilderMarketId:marketId})),{eventId,marketId,outcomeId}]);
  let calls=0;
- const bookBet=async rows=>{calls++;assert.deepEqual(rows,groups);return {shareCode:'TEST01'};};
+ const bookBet=async rows=>{calls++;assert.deepEqual(rows,wire);return {shareCode:'TEST01'};};
  const result=await bookGroups(groups,{bookBet,getBooking:async(code,options)=>{
   assert.equal(code,'TEST01');assert.equal(options.fresh,true);
-  return {ticket:{selections:groups}};
+  return {ticket:{selections:wire}};
  }});
  assert.equal(result.shareCode,'TEST01');
- await assert.rejects(bookGroups(groups,{bookBet,getBooking:async()=>({ticket:{selections:groups.slice(0,1)}})}),{code:'BET_BUILDER_UNCONFIRMED',bookingOutcomeUnknown:true});
+ await assert.rejects(bookGroups(groups,{bookBet,getBooking:async()=>({ticket:{selections:wire.slice(0,3)}})}),{code:'BET_BUILDER_UNCONFIRMED',bookingOutcomeUnknown:true});
  await assert.rejects(bookGroups([groups[0],groups[0]],{bookBet}),/valid SportyBet group quotes/);
  assert.equal(calls,2);
 });
