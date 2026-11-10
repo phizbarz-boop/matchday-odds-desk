@@ -25,3 +25,19 @@ test('weekly below-target fallback and regeneration still cover every date',()=>
  assert.ok(r.selections.includes(alternate));
  assert.equal(new Set(r.selections.map(x=>x.ticketDay)).size,7);
 });
+
+test('highest odds fills the selection limit with the best prices from different matches',()=>{
+ const rows=[{...legs[0],odds:4,probability:55},{...legs[0],odds:3.9,probability:56,outcomeId:'2'},{...legs[1],odds:3,probability:60},{...legs[2],odds:1.1,probability:95}];
+ const r=selectAutoBet(rows,{highestOdds:true,targetOdds:2,maxSelections:2});
+ assert.deepEqual(r.selections.map(x=>x.odds),[4,3]);
+ assert.equal(r.combinedOdds,12);
+});
+test('highest odds still covers every requested date and rejects previously used slips',()=>{
+ const stronger={...legs[0],eventId:'new',odds:3};
+ const settings={highestOdds:true,requiredDays:days,maxSelections:7,targetOdds:2,trials:50};
+ const first=selectAutoBet([...legs,stronger],settings);
+ assert.ok(first.selections.includes(stronger));
+ const next=selectAutoBet([...legs,stronger],{...settings,excludedTickets:new Set([ticketSignature(first.selections)])});
+ assert.equal(next.selections.length,7);
+ assert.ok(!next.selections.includes(stronger));
+});

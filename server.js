@@ -2294,6 +2294,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     if(body.winnerGapMaxTwo===true)return res.status(400).json({error:'The odds gap ≤2 option was removed. Select odds gap above 8.00 instead.'});
     if([body.winnerGapOnly,body.winnerGapMaxOne,body.winnerGapAboveEight].filter(v=>v===true).length>1)return res.status(400).json({error:'Choose only one winner odds gap filter'});
     const weekly=body.weekly===true;
+    const highestOdds=body.highestOdds===true;
     if(weekly&&(normalizeLiveMode(body.liveMode)!=='prematch'||body.todayOnly===true))return res.status(400).json({error:'Choose Prematch only for a 7-day ticket.'});
     if(weekly&&Number(body.maxSelections??8)<7)return res.status(400).json({error:'A 7-day ticket needs at least 7 selections. Increase Maximum selections.'});
     if(weekly&&Array.isArray(body.betTypes)&&body.betTypes.includes('multi'))return res.status(400).json({error:'Use Auto Pick with individual bet types for a 7-day ticket.'});
@@ -2346,11 +2347,11 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     const rawCandidatesCount = prepared.diagnostics.rawCandidates;
     const redFlagRejected = prepared.diagnostics.redFlagRejected;
     let excludedTickets;try{excludedTickets=require('./lib/ticketVariation').exclusions(body.excludedTicketSignatures);}catch(error){return res.status(400).json({error:error.message});}
-    const result = selectAutoBet(oddsFilteredCandidates, { targetOdds, maxSelections,excludedTickets,requireTarget:body.requireTarget===true,requiredDays,...(weekly?{trials:240}:{}) });
+    const result = selectAutoBet(oddsFilteredCandidates, { targetOdds, maxSelections,excludedTickets,requireTarget:!highestOdds&&body.requireTarget===true,highestOdds,requiredDays,...(weekly?{trials:240}:{}) });
     if(weekly&&result.selections.length)result.selections.sort((a,b)=>Date.parse(a.kickoffUtc)-Date.parse(b.kickoffUtc));
     if(weekly&&!result.selections.length)return res.status(404).json({error:'No different 7-day ticket met these settings.',code:'NO_WEEKLY_TICKET',requiredDays});
     if(!result.selections.length&&excludedTickets.size){
-      const error=require('./lib/autoPicker').explainEmptyTicket({result,excludedTickets,requireTarget:body.requireTarget===true,targetOdds,action:'Auto Pick'});
+      const error=require('./lib/autoPicker').explainEmptyTicket({result,excludedTickets,requireTarget:!highestOdds&&body.requireTarget===true,targetOdds,action:'Auto Pick'});
       return res.status(404).json({error,code:result.candidateCount?'NO_OTHER_VARIATION':'NO_ELIGIBLE_SELECTIONS',marketCoverage:prepared.diagnostics.marketCoverage,sourceErrors:prepared.diagnostics.sourceErrors,requestedBetTypes:betTypes});
     }
     if (!result.selections.length) {
@@ -2399,6 +2400,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     res.json({
       ...result,
       ...(weekly?{requiredDays}:{}),
+      highestOdds,
       sportScope,
       sports: selectedSports,
       minProbability,

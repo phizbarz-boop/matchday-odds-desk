@@ -53,3 +53,10 @@ test('SRL fallback finds a league fixture when the general board returns only re
  assert.deepEqual(rows.map(x=>x.eventId),[fixture.eventId]);
  assert.deepEqual(rows[0].odds,[1.5,4,6]);
 });
+
+test('highest odds only ranks selections that pass the probability floor and odds cap',()=>{
+ const rows=[{eventId:'a',marketId:'1',outcomeIds:['1','2','3'],odds:[1.4,5,8]},{eventId:'b',marketId:'1',outcomeIds:['1','2','3'],odds:[2.3,3,4]}];
+ const r=S.analyse(rows,{mode:'srl',highestOdds:true,targetOdds:1.1,maxSelections:1,minProbability:40,maxMatchOdds:2.5});
+ assert.equal(r.selections[0].odds,2.3);
+ assert.ok(r.selections[0].probability>=40);
+});
