@@ -117,3 +117,29 @@ test('player totals use the exact half-goal selection and explicit negative list
  assert.match(M.playerDiagnosticText(M.playerDiagnostics(list)),/Player A/);
  assert.equal(M.playerDiagnostics([]).marketInstances,0);
 });
+
+test('four new football options are scored and available to Telegram requests',()=>{
+ const F=require('../lib/footballExtraMarkets'),T=require('../lib/telegramAiBot'),M=require('../lib/offeredMarketModel');
+ const cases=[
+  ['68','1st Half - Over/Under','2.5','Under','first half under 2.5','first_half_goals_under25'],
+  ['90','2nd Half - Over/Under','0.5','Over','second half over 0.5','second_half_goals_over05'],
+  ['off','Total Offsides - Over/Under','0.5','Over','offside over 0.5','offsides_over05'],
+  ['book','Total Bookings - Over/Under','0.5','Over','booking over 0.5','bookings_over05']
+ ];
+ for(const [marketId,marketDesc,line,side,request,id] of cases){
+  const rows=['Over','Under'].map((outcomeDesc,i)=>({eventId:'test',marketId,marketDesc,marketOutcomeCount:2,sport:'Football',specifier:'total='+line,outcomeDesc,outcomeId:String(12+i),odds:1.9}));
+  assert.equal(F.betTypeFor(rows.find(c=>c.outcomeDesc===side)),id);
+  assert.ok(M.modelOfferedMarkets(rows).candidates.some(c=>c.betType===id));
+  assert.ok(T.ALL_BET_IDS.includes(id));
+  assert.deepEqual(T.parseNaturalRequest('build ticket '+request).betTypes,[id]);
+ }
+});
+test('retired markets are blocked by name or ID even when expanded markets are enabled',()=>{
+ const F=require('../lib/footballExtraMarkets'),S=require('../lib/streakGoalModel'),T=require('../lib/telegramAiBot');
+ for(const row of [{betType:'hockey_handicap_home'},{marketDesc:'Set Handicap',sport:'tennis'},{marketDesc:'Puck Line',sport:'hockey'},{sport:'basketball',marketId:'223'},{marketDesc:'1st Half Goal Kicks - Over/Under',outcomeDesc:'Under 8.5'},{betType:'streak_2_no'},{marketDesc:'Any Team To Score 2 or More Goals in a Row',outcomeDesc:'Yes'}]){
+  assert.equal(F.removedSelection(row),true);
+  assert.equal(S.expandedSelectionAllowed(row,null,true),false);
+ }
+ assert.equal(F.removedSelection({marketDesc:'Any Team To Score 3 or More Goals in a Row',betType:'streak_3_no'}),false);
+ assert.ok(T.ALL_BET_IDS.every(betType=>!F.removedSelection({betType})));
+});

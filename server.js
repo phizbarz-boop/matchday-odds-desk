@@ -979,15 +979,15 @@ app.get('/api/corners/diagnostics',async(req,res)=>{
 
 // Live-ish SportyBet price layer, scraped directly from SportyBet (no Parse.bot).
 // Session credentials never reach the browser.
-// Supported football values: 1x2, gg, dc, dnb, ou05, ou15, ou45, ah, oneup. O/U 2.5 is intentionally not used by the Auto Builder.
+// Supported football values: 1x2, gg, dc, dnb, ou05, ou15, ou45, oneup. O/U 2.5 is intentionally not used by the Auto Builder.
 app.get('/api/sportybet/leagues',async(req,res)=>{
  try{const catalog=await publicCache.read();const rows=Object.entries(catalog?.sports||{}).filter(([sport])=>['football','basketball'].includes(sport)).flatMap(([sport,data])=>[...(data.fixtures||[]),...(data.rows||[])].map(c=>({sport,name:String(c.tournament||c.league||'')}))).filter(c=>c.name);res.json({leagues:[...new Map(rows.map(c=>[c.sport+'|'+c.name,c])).values()].sort((a,b)=>a.name.localeCompare(b.name))});}catch(error){res.status(503).json({error:'League list temporarily unavailable'});}
 });
 app.get('/api/sportybet/odds', async (req, res) => {
   try {
     const kind = String(req.query.market || '1x2').toLowerCase();
-    if (!['football_multi','football_extra','dc_under45', 'shots_on_target', '1x2', 'gg', 'dc', 'dnb', 'ou05', 'home_ou05', 'away_ou05', 'home_ou45', 'away_ou45', 'ou15', 'ou45', 'ah', 'oneup', 'corners', 'first_half_team_corners'].includes(kind)) {
-      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou05, home_ou05, away_ou05, home_ou45, away_ou45, ou15, ou45, ah, oneup, corners, first_half_team_corners' });
+    if (!['football_multi','football_extra','dc_under45', 'shots_on_target', '1x2', 'gg', 'dc', 'dnb', 'ou05', 'home_ou05', 'away_ou05', 'home_ou45', 'away_ou45', 'ou15', 'ou45', 'oneup', 'corners', 'first_half_team_corners'].includes(kind)) {
+      return res.status(400).json({ error: 'market must be one of: 1x2, gg, dc, dnb, ou05, home_ou05, away_ou05, home_ou45, away_ou45, ou15, ou45, oneup, corners, first_half_team_corners' });
     }
     const isTeamGoal = ['home_ou05','away_ou05','home_ou45','away_ou45'].includes(kind);
     // Use the same saved fixture IDs as the Auto Builder and Telegram bot;
@@ -1150,6 +1150,7 @@ app.get('/api/handball/status', async (req,res)=>{
 app.get('/api/sportybet/sport/:sport', async (req, res) => {
   try {
     const sport = String(req.params.sport || '').toLowerCase();
+    if(String(req.query.market||'').toLowerCase()==='handicap')return res.status(400).json({error:'Handicap markets are disabled.'});
     if(sportyRequest()) {
       const cfg=SPORT_CONFIG[sport],kind=String(req.query.market||cfg?.defaultMarket||'winner').toLowerCase();
       if(!cfg?.markets[kind])return res.status(400).json({error:'Unsupported SportyBet sport or market'});
@@ -1216,7 +1217,9 @@ app.get('/api/sportybet/live/odds', async (req, res) => {
     const sport = String(req.query.sport || 'football').toLowerCase();
     const kind = String(req.query.market || 'all').toLowerCase();
     const maxPages = Math.max(1, Math.min(20, parseInt(req.query.maxPages || process.env.SPORTYBET_LIVE_MAX_PAGES || '5', 10)));
+    if(['ah','handicap'].includes(kind))return res.status(400).json({error:'Handicap markets are disabled.'});
     const payload = await getLiveSportMarket(sport, kind, { maxPages });
+    for(const key of ['rows','probabilityRows'])if(Array.isArray(payload[key]))payload[key]=payload[key].filter(c=>!require('./lib/footballExtraMarkets').removedSelection(c));
     res.set('Cache-Control', 'no-store');
     res.json(payload);
   } catch (err) {
@@ -1256,6 +1259,7 @@ app.post('/api/sportybet/live/book', express.json(), bookingRequests.wrap(async 
     }
 
     res.bookingStage?.('creating_code');
+    if(valid.some(c=>require('./lib/footballExtraMarkets').removedSelection(c)))return res.status(400).json({error:'This slip includes a disabled market. Remove it and try again.'});
     const result = await bookBet(valid, { preferFullMarket: true });
     res.json({
       ...result,
@@ -1395,12 +1399,12 @@ async function addLiveFootballModels(predictions, liveFootballPayloads, {buildCo
 }
 
 const AUTO_BET_TYPES_BY_SPORT = {
-  football: ['multi',...require('./lib/footballExtraMarkets').IDS,'oneup',...require('./lib/doubleChanceUnderMarkets').IDS,...require('./lib/shotsOnTargetMarkets').IDS,'throwins_highest_under','goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025','corners_over','corners_under','corners_under115','corners_under125','over25','under25'],
-  basketball: [...require('./lib/basketballPeriodMarkets').IDS,'basketball_rebounds_highest_under','basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
-  hockey: ['hockey_shots_highest_under','hockey_winner','hockey_over','hockey_under','hockey_handicap_home','hockey_handicap_away'],
-  handball: ['handball_winner','handball_over','handball_under','handball_handicap_home','handball_handicap_away'],
-  volleyball: ['volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under','volleyball_handicap_home','volleyball_handicap_away'],
-  tennis: ['tennis_winner','tennis_over','tennis_under','tennis_handicap_home','tennis_handicap_away'],
+  football: ['multi',...require('./lib/footballExtraMarkets').IDS,'oneup',...require('./lib/doubleChanceUnderMarkets').IDS,...require('./lib/shotsOnTargetMarkets').IDS,'throwins_highest_under','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','dc_1x','dc_x2','dnb','over05','over15','under45','gg_yes','ng_no','corners_over','corners_under','corners_under115','corners_under125','over25','under25'],
+  basketball: [...require('./lib/basketballPeriodMarkets').IDS,'basketball_rebounds_highest_under','basketball_winner','basketball_over','basketball_under',],
+  hockey: ['hockey_shots_highest_under','hockey_winner','hockey_over','hockey_under',],
+  handball: ['handball_winner','handball_over','handball_under',],
+  volleyball: ['volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under',],
+  tennis: ['tennis_winner','tennis_over','tennis_under',],
 };
 
 function normalizeAutoBetTypesForSports(sports, betTypes) {
@@ -1773,6 +1777,8 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
         eligibleLive:eligible.filter(c=>c.live).length};
       candidates.splice(0,candidates.length,...eligible.map(c=>c.live&&liveModeNorm==='quick_cash'?{...c,quickCash:true}:c));
     }
+    const disabledMarket=require('./lib/footballExtraMarkets').removedSelection;
+    for(let i=candidates.length-1;i>=0;i--)if(disabledMarket(candidates[i]))candidates.splice(i,1);
     // Preserve source diagnostics through the shared Website/Telegram pipeline.
     // No API credentials or raw bookmaker payloads are returned to the browser.
     candidates.teamGoalAvailability = teamGoalAvailability;
@@ -2520,13 +2526,14 @@ function isTelegramWinnerSelection(candidate) {
 
 // Supplemental markets for the morning SAFE ticket (85% minimum).
 const TELEGRAM_FALLBACK_BET_TYPES = [
+  ...require('./lib/footballExtraMarkets').NEW_TYPES.map(([id])=>id),
   'draw', 'dc_1x', 'dc_x2', 'dnb', 'over05', 'home_over05', 'away_over05', 'home_under45', 'away_under45', 'over15', 'under45',
-  'gg_yes', 'ng_no', 'ah_0', 'ah_plus025', 'ah_minus025',
+  'gg_yes', 'ng_no',   
   'corners_over', 'corners_under', 'corners_under115', 'corners_under125',
   'basketball_over', 'basketball_under', 'hockey_over', 'hockey_under',
   'handball_over', 'handball_under', 'volleyball_over', 'volleyball_under',
   'volleyball_sets_over', 'volleyball_sets_under',
-  'tennis_over', 'tennis_under', 'tennis_handicap_home', 'tennis_handicap_away',
+  'tennis_over', 'tennis_under',  
 ];
 const TELEGRAM_HIGH_ODDS_BET_TYPES = [...TELEGRAM_WINNER_BET_TYPES, ...TELEGRAM_FALLBACK_BET_TYPES];
 const TELEGRAM_HIGH_ODDS_BET_TYPE_SET = new Set(TELEGRAM_HIGH_ODDS_BET_TYPES);
@@ -2547,7 +2554,7 @@ async function loadTelegramPublicCandidates({marketHours=null,leagues=null,betTy
       error.diagnostics={sourceErrors,candidateCount:0};
       throw error;
     }
-    return candidates;
+    return candidates.filter(c=>!require('./lib/footballExtraMarkets').removedSelection(c));
   },{signal});
 }
 
@@ -2980,12 +2987,12 @@ function telegramAiTicketText(result, booking, request, plan, droppedLive = []) 
 function telegramAiBetTypesForSport(planId, sport) {
   const allowed = new Set(telegramAiAllowedBetIdsForPlan(planId));
   const bySport = {
-    football: ['multi',...require('./lib/footballExtraMarkets').IDS,'oneup',...require('./lib/doubleChanceUnderMarkets').IDS,...require('./lib/shotsOnTargetMarkets').IDS,'throwins_highest_under','goalkicks_under155','goalkicks_under165','first_half_goalkicks_under75','first_half_goalkicks_under85','streak_2_yes','streak_2_no','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','corners_over','corners_under','corners_under115','corners_under125','dc_1x','dc_x2','dnb','over05','over15','under45','over25','under25','gg_yes','ng_no','ah_0','ah_plus025','ah_minus025'],
-    basketball: [...require('./lib/basketballPeriodMarkets').IDS,'basketball_rebounds_highest_under','basketball_winner','basketball_over','basketball_under','basketball_handicap_home','basketball_handicap_away'],
-    hockey: ['hockey_shots_highest_under','hockey_winner','hockey_over','hockey_under','hockey_handicap_home','hockey_handicap_away'],
-    handball: ['handball_winner','handball_over','handball_under','handball_handicap_home','handball_handicap_away'],
-    volleyball: ['volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under','volleyball_handicap_home','volleyball_handicap_away'],
-    tennis: ['tennis_winner','tennis_over','tennis_under','tennis_handicap_home','tennis_handicap_away'],
+    football: ['multi',...require('./lib/footballExtraMarkets').IDS,'oneup',...require('./lib/doubleChanceUnderMarkets').IDS,...require('./lib/shotsOnTargetMarkets').IDS,'throwins_highest_under','streak_3_yes','streak_3_no','home_win','draw','away_win','home_over05','away_over05','home_under45','away_under45','corners_over','corners_under','corners_under115','corners_under125','dc_1x','dc_x2','dnb','over05','over15','under45','over25','under25','gg_yes','ng_no',],
+    basketball: [...require('./lib/basketballPeriodMarkets').IDS,'basketball_rebounds_highest_under','basketball_winner','basketball_over','basketball_under',],
+    hockey: ['hockey_shots_highest_under','hockey_winner','hockey_over','hockey_under',],
+    handball: ['handball_winner','handball_over','handball_under',],
+    volleyball: ['volleyball_winner','volleyball_over','volleyball_under','volleyball_sets_over','volleyball_sets_under',],
+    tennis: ['tennis_winner','tennis_over','tennis_under',],
   };
   if (sport === 'all') return [...allowed];
   return (bySport[sport] || []).filter(id => allowed.has(id));
@@ -3914,6 +3921,8 @@ app.post('/api/sportybet/book', express.json(), bookingRequests.wrap(async (req,
     }
     const simMode=req.body?.simMode;
     const requireAll=req.body?.requireAllSelections===true||simMode!==undefined;
+    const disabledMarket=require('./lib/footballExtraMarkets').removedSelection;
+    if([...selections,...(Array.isArray(req.body?.telegramContext)?req.body.telegramContext:[])].some(c=>c&&disabledMarket(c)))return res.status(400).json({error:'This slip includes a disabled market. Remove it and try again.'});
     if(simMode!==undefined){
       if(simMode!=='srl'&&simMode!=='virtual')return res.status(400).json({error:'Invalid simulated football product.'});
       res.bookingStage?.('checking_selections');
@@ -3975,6 +3984,7 @@ app.post('/api/sportybet/book', express.json(), bookingRequests.wrap(async (req,
       }
     }
     if(requireAll&&droppedLive.length)return res.status(409).json({error:'Some selections are no longer available. No ticket was booked.',droppedLive});
+    if(bookable.some(disabledMarket))return res.status(400).json({error:'This slip includes a disabled market. Remove it and try again.'});
     res.bookingStage?.('creating_code');
     const result = await bookBet(bookable, { preferFullMarket });
     if(requireAll&&(!result?.shareCode||result.unavailableOutcomes?.length))return res.status(409).json({error:'SportyBet did not confirm every selection. The complete ticket could not be verified. Review the selections before trying again.',bookingOutcomeUnknown:true});
