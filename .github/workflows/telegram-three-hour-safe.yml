@@ -1,4 +1,4 @@
-name: Plot207 Six-Hour 3 Odds Picks
+name: Plot207 Six-Hour Winners
 on:
   schedule:
     - cron: '0 5,11,17,23 * * *'
@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - name: Generate two six-hour variations
+      - name: Generate winners ticket
         env:
           TELEGRAM_JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
           MATCHDAY_BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}

@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),S=require('../lib/telegramThreeHourSafe'),F=require('../lib/telegramFloorPicks'),{ticketSignature}=require('../lib/telegramNext12h');
 const now=new Date('2026-10-28T08:00:00Z'),pool=()=>Array.from({length:16},(_,i)=>({eventId:'E'+i,sport:'Football',marketId:'1',outcomeId:'1',betType:'home_win',probability:95-i*.1,odds:1.2,kickoffUtc:new Date(+now+5*60000).toISOString()}));
-test('revised daily catalogue removes retired market plans',()=>{assert.equal(F.PLANS.length,16);for(const id of ['tennis70long','hockey70long','corners70long','shotsUnder70longgap','shotsOver70longgap','over0570gapshort','over1570gapshort','all70winnersgap'])assert.ok(!F.PLANS.some(p=>p.id===id));});
+test('revised daily catalogue removes retired market plans',()=>{assert.equal(F.PLANS.length,10);for(const id of ['tennis70long','hockey70long','corners70long','shotsUnder70longgap','shotsOver70longgap','over0570gapshort','over1570gapshort','all70winnersgap'])assert.ok(!F.PLANS.some(p=>p.id===id));});
 test('two unique three-odds variations keep 70 percent floor, six-to-ten games with a finish deadline',()=>{const plans=S.buildPack(pool(),{now}).plans;assert.equal(plans.length,2);assert.equal(new Set(plans.map(p=>ticketSignature(p.selections))).size,2);for(const p of plans){assert.ok(p.selections.length>=6&&p.selections.length<=10);assert.ok(p.selections.reduce((n,c)=>n*c.odds,1)>=3);assert.ok(p.selections.every(c=>c.probability>=70&&F.eligible(c,p,now,'2026-10-28',new Set())));}});
 test('six-hour picks accept a next-day finish but reject midnight or later in WAT',()=>{
  const p=S.PLANS[0],c=pool()[0],day='2026-10-28';
