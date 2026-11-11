@@ -1748,8 +1748,11 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
           scorerDiagnostics.samples.push(...player.samples.slice(0,Math.max(0,3-scorerDiagnostics.samples.length)));
           for(const k of Object.keys(streamed))streamed[k]+=modeled.coverage[k];
           const eligible=modeled.candidates.filter(allow);
-          if(boundedBuilderScan)eligible.sort((a,b)=>Number(b.probability)-Number(a.probability));
-          candidates.push(...(boundedBuilderScan?eligible.slice(0,120):eligible));
+          if(boundedBuilderScan){
+            const strongest=eligible.slice().sort((a,b)=>Number(b.probability)-Number(a.probability)).slice(0,60);
+            const highest=eligible.sort((a,b)=>Number(b.odds)-Number(a.odds)).slice(0,60);
+            candidates.push(...new Set([...strongest,...highest]));
+          }else candidates.push(...eligible);
         }:null;
         const scan=await require('./lib/expandedMarketScan').scanExpandedMarkets([...fixtures,...discovery.flatMap(r=>r.status==='fulfilled'?r.value.fixtures:[]),...(requestedFixtures||[])],{sports:selectedSports,leagues,...expandedPolicy,...(boundedBuilderScan?{maxEventsOverride:48,concurrencyOverride:2,budgetMs:15000,checkMemory:betBuilderMemoryLow}:{}),halfScan,todayOnly,onFixtureRows,allowUnknownKickoff:Array.isArray(requestedFixtures)});
         if(missingSports.length){
@@ -2309,18 +2312,20 @@ async function prepareBetBuilderPreview(settings={}){
 async function runBetBuilderPreview(settings={}){
 
  const builder=require('./lib/betBuilderPreview');
- const types=Array.isArray(settings.allowedBetTypes)?settings.allowedBetTypes.filter(t=>t!=='multi'):null;
+ const available=new Set(AUTO_BET_TYPES_BY_SPORT.football.filter(t=>t!=='multi'));
+ const types=Array.isArray(settings.allowedBetTypes)?[...new Set(settings.allowedBetTypes.filter(t=>available.has(t)))]:null;
+ if(types?.length===0)return {builders:[],candidateMatches:0};
  const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:types,includeAllMarkets:types===null,boundedBuilderScan:true,marketMaxPages:3,
    leagues:Array.isArray(settings.leagues)?settings.leagues.map(String):null,
    minProbability:settings.minProbability,minEdge:settings.minEdge,
    maxMatchOdds:settings.maxMatchOdds,minMatchOdds:settings.minMatchOdds,todayOnly:settings.todayOnly===true,
    winnerGapOnly:settings.winnerGapOnly===true,winnerGapMaxOne:settings.winnerGapMaxOne===true,
    winnerGapAboveEight:settings.winnerGapAboveEight===true,liveMode:'prematch'});
- return builder.quotePreview(prepared.candidates.filter(c=>!require('./lib/simFootball').product(c)),{
-   minProbability:settings.minProbability,maxMatches:settings.maxSelections,maxPicks:settings.maxPicks,targetOdds:settings.targetOdds},require('./lib/sportybetDirect').quoteBetBuilder);
+ return builder.quotePreview(prepared.candidates.filter(c=>!require('./lib/simFootball').product(c)&&(!types||types.includes(c.betType))),{
+   highestOdds:settings.highestOdds===true,minProbability:settings.minProbability,maxMatches:settings.maxSelections,maxPicks:settings.maxPicks,targetOdds:settings.targetOdds},require('./lib/sportybetDirect').quoteBetBuilder);
 }
 app.post('/api/sportybet/bet-builder-preview',express.json({limit:'32kb'}),analysisJobs.wrap(async(req,res)=>{
- try{return res.json(await prepareBetBuilderPreview({...req.body,allowedBetTypes:null}));}
+ try{return res.json(await prepareBetBuilderPreview({...req.body,allowedBetTypes:req.body?.allBuilderMarkets===true?null:req.body?.betTypes}));}
  catch(error){return res.status(error.code==='BET_BUILDER_BUSY'?503:502).json({error:error.code==='BET_BUILDER_BUSY'?error.message:'Could not load the current football markets for Bet Builder.'});}
 }));
 
@@ -2334,7 +2339,6 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     const weekly=body.weekly===true;
     const highestOdds=body.highestOdds===true;
     if(weekly&&(normalizeLiveMode(body.liveMode)!=='prematch'||body.todayOnly===true))return res.status(400).json({error:'Choose Prematch only for a 7-day ticket.'});
-    if(weekly&&Number(body.maxSelections??8)<7)return res.status(400).json({error:'A 7-day ticket needs at least 7 selections. Increase Maximum selections.'});
     if(weekly&&Array.isArray(body.betTypes)&&body.betTypes.includes('multi'))return res.status(400).json({error:'Use Auto Pick with individual bet types for a 7-day ticket.'});
     if(Array.isArray(body.betTypes)&&body.betTypes.includes('multi')){
       const multi=require('./lib/multiPick');let excluded;try{excluded=require('./lib/ticketVariation').exclusions(body.excludedTicketSignatures);}catch(error){return res.status(400).json({error:error.message});}
@@ -2368,7 +2372,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     const requiredDays=weekly?Array.from({length:7},(_,i)=>fixtureDateKeyInTimeZone(weekStart+i*86400000)):null;
     const allowedDays=weekly?new Set(requiredDays):null;
     const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly, liveMode,marketHours:weekly?168:null,marketMaxPages:weekly?20:null,halfScan,includeAllMarkets:body.includeAllMarkets===true,winnerGapOnly:body.winnerGapOnly===true,winnerGapMaxOne:body.winnerGapMaxOne===true,winnerGapAboveEight:body.winnerGapAboveEight===true });
-    const regularCandidates=prepared.candidates.filter(c=>!require('./lib/simFootball').product(c));
+    const regularCandidates=prepared.candidates.filter(c=>!require('./lib/simFootball').product(c)&&(!weekly||betTypes.includes(c.betType)));
     const dayByKickoff=new Map();
     const oddsFilteredCandidates = weekly?regularCandidates.flatMap(c=>{
       if(c.live||!c.eventId||Date.parse(c.kickoffUtc)<=Date.now())return [];
@@ -2376,16 +2380,14 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
       const ticketDay=dayByKickoff.get(c.kickoffUtc);
       return allowedDays.has(ticketDay)&&Number(c.odds)>1&&Number(c.probability)>0?[{...c,ticketDay}]:[];
     }):regularCandidates;
-    if(weekly){
-      const available=new Set(oddsFilteredCandidates.map(c=>c.ticketDay));
-      const missingDays=requiredDays.filter(d=>!available.has(d));
-      if(missingDays.length)return res.status(404).json({error:'No qualifying SportyBet selections found for '+missingDays.join(', ')+' (WAT). A 7-day ticket needs a different match on every date. Try broader sports or markets, or check again later.',code:'WEEK_DAYS_MISSING',missingDays,requiredDays});
-    }
+    const coveredDays=weekly?requiredDays.filter(day=>oddsFilteredCandidates.some(c=>c.ticketDay===day&&Number.isFinite(c.odds)&&c.qualityScore>=0)).slice(0,maxSelections):null;
+    const missingDays=weekly?requiredDays.filter(day=>!coveredDays.includes(day)):null;
+    if(weekly&&!coveredDays.length)return res.status(404).json({error:'No matches in the next seven days meet your selected bet types and filters.',code:'WEEK_DAYS_MISSING',missingDays,requiredDays});
     const redFlagSafeCandidatesCount = prepared.diagnostics.afterRedFlag;
     const rawCandidatesCount = prepared.diagnostics.rawCandidates;
     const redFlagRejected = prepared.diagnostics.redFlagRejected;
     let excludedTickets;try{excludedTickets=require('./lib/ticketVariation').exclusions(body.excludedTicketSignatures);}catch(error){return res.status(400).json({error:error.message});}
-    const result = selectAutoBet(oddsFilteredCandidates, { targetOdds, maxSelections,excludedTickets,requireTarget:!highestOdds&&body.requireTarget===true,highestOdds,requiredDays,...(weekly?{trials:240}:{}) });
+    const result = selectAutoBet(oddsFilteredCandidates, { targetOdds, maxSelections,excludedTickets,requireTarget:!highestOdds&&body.requireTarget===true,highestOdds,requiredDays:coveredDays,...(weekly?{trials:240}:{}) });
     if(weekly&&result.selections.length)result.selections.sort((a,b)=>Date.parse(a.kickoffUtc)-Date.parse(b.kickoffUtc));
     if(weekly&&!result.selections.length)return res.status(404).json({error:'No different 7-day ticket met these settings.',code:'NO_WEEKLY_TICKET',requiredDays});
     if(!result.selections.length&&excludedTickets.size){
@@ -2437,7 +2439,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
 
     res.json({
       ...result,
-      ...(weekly?{requiredDays}:{}),
+      ...(weekly?{requiredDays,coveredDays,missingDays}:{}),
       highestOdds,
       sportScope,
       sports: selectedSports,
@@ -3412,7 +3414,7 @@ async function handleTelegramAiUpdate(update) {
     if(plan.id==='free')return sendTelegramAiMessageTo(chatId,telegramAiUpgradeText(plan,'same-match Bet Builder markets'),{reply_markup:telegramAiPlanKeyboard()});
     if(!telegramAiHasTicketCredit(user))return sendTelegramAiMessageTo(chatId,'Your daily ticket allowance is used up.',{reply_markup:telegramAiTicketLimitKeyboard(user)});
     try{
-      const p=await withPublicSportyRequest(()=>prepareBetBuilderPreview({...settings,allowedBetTypes:plan.id==='elite'?null:telegramAiBetTypesForSport(plan.id,'football'),maxSelections:Math.min(settings.maxSelections,plan.maxSelections)}));
+      const p=await withPublicSportyRequest(()=>prepareBetBuilderPreview({...settings,highestOdds:true,allowedBetTypes:(settings.betTypes||[]).filter(t=>telegramAiBetTypesForSport(plan.id,'football').includes(t)),maxSelections:Math.min(settings.maxSelections,plan.maxSelections)}));
       if(!p.builders.length)return sendTelegramAiMessageTo(chatId,p.attempts?'SportyBet returned no valid combination prices for the groups checked.':'No compatible football group met your probability floor and filters.');
       const builder=require('./lib/betBuilderPreview');
       const groups=p.builders.map(b=>b.bookingSelection);

@@ -70,3 +70,16 @@ test('grows a group across market families, skips rejected legs and preserves th
  assert.equal(p.builders[0].bookingSelection.children.length,6);
  assert.ok(p.builders[0].selections.some(c=>c.betType==='offered:24'));
 });
+test('highest odds explores longer eligible prices, rejects below-floor picks and fills past target',async()=>{
+ const {quotePreview}=require('../lib/betBuilderPreview');
+ const rows=[1,2].flatMap(n=>[
+  {...base,odds:1.2},{...goals,odds:4,probability:35},{...goals,marketId:'19',odds:10,probability:29},
+ ].map(c=>({...c,eventId:'sr:match:'+n})));
+ const result=await quotePreview(rows,{now,minProbability:30,highestOdds:true,targetOdds:2,maxMatches:2},async request=>{
+  assert.equal(request.selections[0].odds,'4');
+  assert.ok(request.selections.every(s=>Number(s.probability)>=.30));
+  return {data:{valid:true,odds:'3',marketId:request.eventId.endsWith('1')?'123bb1':'123bb2',outcomeId:'1'}};
+ });
+ assert.equal(result.failures,0);
+ assert.equal(result.combinedOdds,9);
+});
