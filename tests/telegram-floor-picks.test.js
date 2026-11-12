@@ -125,3 +125,20 @@ test('late daily high odds can use tomorrow without admitting games that finish 
  assert.equal(pick.capacity.sourceRows,11);
  assert.equal(highOddsCapacity(rows,PLANS.find(p=>p.id==='today10k1'),options).fixtures,0);
 });
+
+test('early mixed 5x books only the kickoff prefix, after regular tickets, and does not repeat',async()=>{
+ const r=redis(),booked=[],sent=[];
+ const mixed=PLANS.find(p=>p.id==='mixedWinners70');
+ const football=PLANS.find(p=>p.id==='footballWinnersHalf70');
+ const rows=[2,2,1.3,4].map((odds,i)=>({eventId:'T'+i,sport:'tennis',betType:'tennis_winner',marketId:'1',outcomeId:'1',probability:75,odds,kickoffUtc:new Date(+now+(i+1)*3600000).toISOString()}));
+ const deps={earlyMixedFive:true,plans:[mixed,football],now:()=>now,loadPool:async()=>[...rows,pool()[0]],validate:async x=>x,book:async x=>{booked.push(x.map(c=>c.eventId));return{shareCode:'CODE'+booked.length};},saveCode:async()=>{},track:async()=>{},updateTrack:async()=>{},send:async t=>sent.push(t)};
+ const ctx={redis:r,dateKey:'2026-10-13',slotKey:'bonus',slotTime:'07:00'};
+ assert.equal((await runFloorPicks(deps,ctx)).ticketsSent,3);
+ assert.deepEqual(booked[0],['T3','T0','T1','T2']);
+ assert.deepEqual(booked[2],['T0','T1','T2']);
+ assert.match(sent[2],/5\.20 odds/);
+ assert.equal((await runFloorPicks(deps,ctx)).ticketsSent,0);
+ assert.equal(booked.length,3);
+ const withoutEarliest={...deps,validate:async x=>x[0]?.eventId==='T0'?x.slice(1):x};
+ assert.equal((await runFloorPicks(withoutEarliest,{...ctx,slotKey:'missing',manualTest:true})).ticketsSent,2);
+});

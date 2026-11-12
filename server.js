@@ -539,6 +539,7 @@ function filterUpcomingSportyPayload(payload, { nowMs = Date.now(), kickoffBuffe
   const cutoff = nowMs + Math.max(0, Number(kickoffBufferSeconds) || 0) * 1000;
   let validKickoff = 0, missingOrInvalidKickoff = 0, pastOrStarted = 0;
   const rows = payload.rows.filter(row => {
+    if (require('./lib/isSimFixture').product(row)) return false;
     const kickoffMs = Date.parse(row?.kickoffUtc || '');
     // Important: the managed SportyBet market endpoint often omits kickoff time.
     // Missing/invalid kickoff must NOT cause a valid current selection to be discarded.
@@ -2290,15 +2291,6 @@ async function autoCornerDiagnostics(betTypes,liveMode='prematch') {
   }
 }
 
-app.post('/api/sportybet/sim-preview', express.json({limit:'32kb'}), analysisJobs.wrap(async(req,res)=>{
-  const sim=require('./lib/simFootball'),body=req.body||{},mode=body.mode;
-  if(mode!=='srl'&&mode!=='virtual')return res.status(400).json({error:'Choose SRL or Virtual Football.'});
-  let rows;const diagnostics={};
-  try{rows=await sim.loadFixtures(mode,{diagnostics});}catch{return res.status(502).json({error:'SportyBet '+sim.names[mode]+' feed could not be read. Try again shortly.'});}
-  if(!rows.length){console.info('[Sim football scan]',mode,diagnostics);return res.status(404).json({error:'No open '+sim.names[mode]+' 1X2 prices were found in the feeds checked. Try again shortly.',diagnostics});}
-  return res.json({...sim.analyse(rows,body),source:'SportyBet prematch feed'});
-}));
-
 function betBuilderMemoryLow(){
  const state=require('./lib/runtimeMemory').snapshot();
  return (state.availableMiB!=null&&state.availableMiB<96)||state.heapUsedMiB>=state.heapLimitMiB*.75;
@@ -2321,7 +2313,7 @@ async function runBetBuilderPreview(settings={}){
    maxMatchOdds:settings.maxMatchOdds,minMatchOdds:settings.minMatchOdds,todayOnly:settings.todayOnly===true,
    winnerGapOnly:settings.winnerGapOnly===true,winnerGapMaxOne:settings.winnerGapMaxOne===true,
    winnerGapAboveEight:settings.winnerGapAboveEight===true,liveMode:'prematch'});
- return builder.quotePreview(prepared.candidates.filter(c=>!require('./lib/simFootball').product(c)&&(!types||types.includes(c.betType))),{
+ return builder.quotePreview(prepared.candidates.filter(c=>!require('./lib/isSimFixture').product(c)&&(!types||types.includes(c.betType))),{
    highestOdds:settings.highestOdds===true,minProbability:settings.minProbability,maxMatches:settings.maxSelections,maxPicks:settings.maxPicks,targetOdds:settings.targetOdds},require('./lib/sportybetDirect').quoteBetBuilder);
 }
 app.post('/api/sportybet/bet-builder-preview',express.json({limit:'32kb'}),analysisJobs.wrap(async(req,res)=>{
@@ -2345,7 +2337,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
       const leagues=Array.isArray(body.leagues)?body.leagues.map(String):null;
       const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:['multi'],minProbability:0,minEdge:-25,leagues,todayOnly:body.todayOnly===true,liveMode:'prematch',includeAllMarkets:true,halfScan});
       const multiMaxSelections=Math.max(1,Math.min(50,parseInt(body.maxSelections,10)||20));
-      const result=multi.ticket(prepared.candidates.filter(c=>!require('./lib/simFootball').product(c)),{maxSelections:multiMaxSelections,excludedTickets:excluded});
+      const result=multi.ticket(prepared.candidates.filter(c=>!require('./lib/isSimFixture').product(c)),{maxSelections:multiMaxSelections,excludedTickets:excluded});
       if(!result.selections.length)return res.status(404).json({error:excluded.size?'No other Multi ticket variation is available under these rules.':'No available games matched the Multi market and odds-gap rules.',code:excluded.size?'NO_OTHER_VARIATION':'NO_MULTI_GAMES'});
       return res.json({...result,sportScope:'football',sports:['football'],betTypes:['multi'],minProbability:0,minEdge:0,maxSelections:multiMaxSelections,liveMode:'prematch',dataFetchedAt:prepared.diagnostics.dataFetchedAt,marketCoverage:prepared.diagnostics.marketCoverage,h2hCoverage:prepared.diagnostics.h2hCoverage,multi:true});
     }
@@ -2372,7 +2364,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     const requiredDays=weekly?Array.from({length:7},(_,i)=>fixtureDateKeyInTimeZone(weekStart+i*86400000)):null;
     const allowedDays=weekly?new Set(requiredDays):null;
     const prepared = await prepareAutoCandidatePool({ sportScope: selectedSports, minProbability, minEdge, leagues, betTypes, maxMatchOdds, todayOnly, liveMode,marketHours:weekly?168:null,marketMaxPages:weekly?20:null,halfScan,includeAllMarkets:body.includeAllMarkets===true,winnerGapOnly:body.winnerGapOnly===true,winnerGapMaxOne:body.winnerGapMaxOne===true,winnerGapAboveEight:body.winnerGapAboveEight===true });
-    const regularCandidates=prepared.candidates.filter(c=>!require('./lib/simFootball').product(c)&&(!weekly||betTypes.includes(c.betType)));
+    const regularCandidates=prepared.candidates.filter(c=>!require('./lib/isSimFixture').product(c)&&(!weekly||betTypes.includes(c.betType)));
     const dayByKickoff=new Map();
     const oddsFilteredCandidates = weekly?regularCandidates.flatMap(c=>{
       if(c.live||!c.eventId||Date.parse(c.kickoffUtc)<=Date.now())return [];
@@ -3810,7 +3802,7 @@ const floorDeps={
  },book:selections=>bookBet(selections),send:sendTelegramMessage,
  saveCode:(redis,dateKey,code)=>saveTelegramDailyCodes(redis,dateKey,{codes:[code]}),track:trackTelegramSlip,updateTrack:updateTrackedTicket
 };
-const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>runFloorPicks(floorDeps,ctx)});
+const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>runFloorPicks({...floorDeps,earlyMixedFive:true},ctx)});
 
 const floorScheduler=createWatScheduler({name:'Telegram probability floors',times:['07:00','18:00'],runJob:floorJob,
  enabled:String(process.env.TELEGRAM_FLOOR_PICKS_ENABLED||'true')!=='false',configured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),catchupMinutes:120});
@@ -3983,19 +3975,10 @@ app.post('/api/sportybet/book', express.json(), bookingRequests.wrap(async (req,
       res.bookingStage?.('creating_code');
       return res.json(await builder.bookGroups(selections,{bookBet,getBooking}));
     }
-    const simMode=req.body?.simMode;
-    const requireAll=req.body?.requireAllSelections===true||simMode!==undefined;
+    if(req.body?.simMode!==undefined)return res.status(400).json({error:'This booking mode is no longer supported.'});
+    const requireAll=req.body?.requireAllSelections===true;
     const disabledMarket=require('./lib/footballExtraMarkets').removedSelection;
     if([...selections,...(Array.isArray(req.body?.telegramContext)?req.body.telegramContext:[])].some(c=>c&&disabledMarket(c)))return res.status(400).json({error:'This slip includes a disabled market. Remove it and try again.'});
-    if(simMode!==undefined){
-      if(simMode!=='srl'&&simMode!=='virtual')return res.status(400).json({error:'Invalid simulated football product.'});
-      res.bookingStage?.('checking_selections');
-      const sim=require('./lib/simFootball');
-      let rows;
-      try{rows=await withPublicSportyRequest(()=>sim.loadFixtures(simMode));}
-      catch{return res.status(503).json({error:'Could not refresh SportyBet prices. No code was requested.'});}
-      if(!sim.validateTicket(rows,selections))return res.status(409).json({error:'A match or price changed. Scan again to build a fresh sim ticket.'});
-    }
     if(requireAll){
       const seen=new Set();
       for(const leg of selections){
