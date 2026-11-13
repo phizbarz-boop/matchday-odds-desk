@@ -3825,6 +3825,19 @@ app.post('/api/telegram/probability-picks',express.json(),floorRequests.wrap(asy
  const result=await floorJob({...slot,shouldAbort:()=>false});return res.status(result.statusCode).json(result.body);
 }));
 app.get('/api/telegram/probability-picks/run-status/:runId',floorRequests.status);
+const dailyFiveTestNamespace='telegram:daily-five-test';
+const dailyFiveTestJob=createWatSlotJob({namespace:dailyFiveTestNamespace,getRedis,run:ctx=>runFloorPicks({
+ ...floorDeps,plans:require('./lib/telegramFloorPicks').DAILY_FIVE_PLANS,namespace:dailyFiveTestNamespace
+},ctx)});
+const dailyFiveTestRequests=createTelegramRunRequests({name:'daily-five-test',authorize:authorizeTelegramJob,getRedis});
+app.post('/api/telegram/daily-five-test',express.json(),dailyFiveTestRequests.wrap(async(req,res)=>{
+ let slot;try{slot=resolveFloorSlot(req.headers);}catch(e){return res.status(400).json({error:e.message});}
+ if(!slot?.manualTest)return res.status(400).json({error:'Manual workflow dispatch required'});
+ await res.jobStage?.('building_independent_daily_five_test');
+ const result=await dailyFiveTestJob(slot);
+ return res.status(result.statusCode).json(result.body);
+}));
+app.get('/api/telegram/daily-five-test/run-status/:runId',dailyFiveTestRequests.status);
 const todayTestPlans=FLOOR_PLANS.filter(p=>p.todayLongShot&&!p.dailyHighOdds);
 // The manual test uses the published catalogue, rather than repeating the
 // full production scan for unrelated hockey, streak and Multi plans.
