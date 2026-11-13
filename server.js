@@ -2992,7 +2992,7 @@ function telegramAiAccountText(user) {
 
 function telegramAiTicketText(result, booking, request, plan, droppedLive = []) {
   const liveCount = result.selections.filter(x => x.live === true).length;
-  const modeLabel = request.liveMode === 'quick_cash' ? 'QUICK CASH · LATE LIVE' : request.liveMode === 'live' ? '🔴 LIVE ONLY' : request.liveMode === 'both' ? 'PREMATCH + 🔴 LIVE' : 'PREMATCH';
+  const modeLabel = isLateGameMode(request.liveMode) ? require('./lib/telegramAiBot').BUILDER_LIVE_MODES[request.liveMode] : request.liveMode === 'quick_cash' ? 'QUICK CASH · LATE LIVE' : request.liveMode === 'live' ? '🔴 LIVE ONLY' : request.liveMode === 'both' ? 'PREMATCH + 🔴 LIVE' : 'PREMATCH';
   const lines = [
     `🤖 MATCHDAY AI — ${request.safe ? 'SAFE' : `${Number(request.targetOdds).toFixed(request.targetOdds < 2 ? 2 : 0)}x`} TICKET`,
     `${result.reachedTarget ? '✅ TARGET REACHED' : '🟡 CLOSEST AVAILABLE'} | ${String(request.sport || 'all').toUpperCase()} | ${modeLabel}`,
@@ -3082,6 +3082,7 @@ async function buildTelegramAiTicket(user, request) {
     'handball_winner','handball_over','handball_under',
     'basketball_winner','basketball_over','basketball_under'
   ];
+  const liveMode = normalizeLiveMode(merged.liveMode);
   const allowedBetTypes = new Set(merged.safe ? safeBetTypes : telegramAiAllowedBetIdsForPlan(plan.id));
   const sportBetTypes = new Set(merged.safe ? safeBetTypes : sports.flatMap(sp=>telegramAiBetTypesForSport(plan.id,sp)));
   let requestedBetTypes = merged.safe ? safeBetTypes : (Array.isArray(merged.betTypes)&&merged.betTypes.length?merged.betTypes.map(String):[...sportBetTypes]);
@@ -3089,16 +3090,17 @@ async function buildTelegramAiTicket(user, request) {
   // Basketball/Hockey only have three supported families. Old saved preferences could
   // contain a partial/corrupted list even though the Builder displayed “(3)”.
   // When all selected IDs are sport-compatible, normalize them to the canonical IDs.
-  if (sports.length===1 && sport === 'basketball' && betTypes.length && betTypes.every(id => id.startsWith('basketball_'))&&!betTypes.some(id=>require('./lib/basketballPeriodMarkets').IDS.includes(id))) {
+  if (!isLateGameMode(liveMode) && sports.length===1 && sport === 'basketball' && betTypes.length && betTypes.every(id => id.startsWith('basketball_'))&&!betTypes.some(id=>require('./lib/basketballPeriodMarkets').IDS.includes(id))) {
     betTypes = telegramAiBetTypesForSport(plan.id, 'basketball');
   }
-  if (sports.length===1 && sport === 'hockey' && betTypes.length && betTypes.every(id => id.startsWith('hockey_'))) {
+  if (!isLateGameMode(liveMode) && sports.length===1 && sport === 'hockey' && betTypes.length && betTypes.every(id => id.startsWith('hockey_'))) {
     betTypes = telegramAiBetTypesForSport(plan.id, 'hockey');
   }
+  if(liveMode==='late_game')betTypes=betTypes.filter(id=>id!=='multi');
+  if(liveMode==='late_game_winners')betTypes=[...sportBetTypes].filter(id=>allowedBetTypes.has(id)&&require('./lib/liveModel').MATCH_WINNERS.has(id));
   if (!betTypes.length) {
     return { error: `None of the selected bet types are compatible with ${sport === 'hockey' ? 'Ice Hockey' : sport}. Choose a compatible market or ask for the sport without specifying a bet type.` };
   }
-  const liveMode = normalizeLiveMode(merged.liveMode);
   const prepared = await prepareAutoCandidatePool({
     sportScope: sports,
     minProbability,
@@ -3154,9 +3156,10 @@ async function buildTelegramAiTicket(user, request) {
     try {
       const check = await validateLiveSelections(liveLegs.map(x => ({
         eventId: x.eventId, marketId: x.marketId, outcomeId: x.outcomeId,
-        specifier: x.specifier || null, sport: x.sport, quickCash:!!x.quickCash,betType:x.betType,
+        specifier: x.specifier || null, sport: x.sport, quickCash:!!x.quickCash,lateGame:x.lateGame===true,betType:x.betType,
       })));
       droppedLive = check.dropped;
+      if(isLateGameMode(liveMode)&&droppedLive.length)return {error:'A selection no longer qualifies for Late Game. Build a fresh ticket; no code was generated.',droppedLive};
       const current=new Map(check.valid.map(v=>[[String(v.eventId),String(v.marketId),String(v.outcomeId),String(v.specifier || '')].join('|'),v]));
       result.selections=result.selections.map(x=>x.live && current.has([String(x.eventId),String(x.marketId),String(x.outcomeId),String(x.specifier || '')].join('|'))?{...x,odds:current.get([String(x.eventId),String(x.marketId),String(x.outcomeId),String(x.specifier || '')].join('|')).odds}:x);
       result.combinedOdds=result.selections.reduce((n,x)=>n*Number(x.odds||1),1);
@@ -3325,7 +3328,7 @@ Current builder settings: ${JSON.stringify(b)}.
 Valid action values: chat, ticket, builder, plans, account, analyze.
 For ticket actions, only set fields the user clearly requested; the app merges them with current settings.
 Sport values: football, basketball, hockey, all. Do not bypass subscription restrictions. minMatchOdds is a lower bound for each selection; do not convert maximum-odds requests into a minimum. For 100,000x or higher, set targetOdds to 100000 when the user requests the 100,000x+ preset.
-liveMode: set 'quick_cash' for Quick Cash/late-stage leader requests; set 'live' only when the user clearly asks for live/in-play/ongoing matches, 'both' when they ask for live plus prematch together; otherwise null (keep the user's current setting).
+liveMode: set 'late_game_winners' for Late Game Winners Only, 'late_game' for Late Game with selected bet types, 'quick_cash' for Quick Cash; set 'live' only when the user clearly asks for live/in-play/ongoing matches, 'both' when they ask for live plus prematch together; otherwise null (keep the user's current setting).
 Basketball first-half total points IDs: basketball_first_half_over, basketball_first_half_under. Basketball first-quarter total points IDs: basketball_first_quarter_over, basketball_first_quarter_under. Use these exact period IDs when requested.
 Bet IDs: ${require('./lib/footballExtraMarkets').SPECIAL_TYPES.map(([id])=>id).join(', ')}, home_away_under45, dc_under45, home_win, draw, away_win, oneup, corners_over, corners_under, first_half_home_team_corners, first_half_away_team_corners, dc_1x, dc_x2, dnb, over05, home_over05, away_over05, home_under45, away_under45, over15, under45, over25, under25, gg_yes, ng_no, ah_0, ah_plus025, ah_minus025, basketball_winner, basketball_over, basketball_under, basketball_handicap_home, basketball_handicap_away, hockey_winner, hockey_over, hockey_under, hockey_handicap_home, hockey_handicap_away.
 If the user asks to build/rebuild/replace/remove selections but the requested transformation cannot be safely represented by these parameters, explain what can be changed and ask one concise question instead of pretending it was done.
@@ -3358,7 +3361,7 @@ If discussing betting, do not promise wins or guaranteed profit.`;
           maxSelections:{type:['integer','null']},
           safe:{type:['boolean','null']},
           todayOnly:{type:['boolean','null']},
-          liveMode:{type:['string','null'],enum:['prematch','live','both','quick_cash',null]},
+          liveMode:{type:['string','null'],enum:['prematch','live','both','quick_cash','late_game','late_game_winners',null]},
           betTypes:{type:['array','null'],items:{type:'string'}},
           bookingCode:{type:['string','null']}
         },
@@ -3445,17 +3448,14 @@ async function handleTelegramAiUpdate(update) {
     else if(d==='builder:gap'){user.preferences.builder.winnerGapOnly=!user.preferences.builder.winnerGapOnly;if(user.preferences.builder.winnerGapOnly){user.preferences.builder.winnerGapMaxOne=false;user.preferences.builder.winnerGapAboveEight=false;}await saveTelegramAiUser(redis,user);return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)});}
     else if (d === 'builder:today') { user.preferences.builder.todayOnly=!user.preferences.builder.todayOnly; await saveTelegramAiUser(redis,user); return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)}); }
     else if (d === 'builder:live') {
-      const order=['prematch','live','both','quick_cash'];
-      const cur=normalizeLiveMode(user.preferences.builder.liveMode);
-      user.preferences.builder.liveMode=order[(order.indexOf(cur)+1)%order.length];
+      return sendTelegramAiMessageTo(chatId,'Choose match status:',{reply_markup:require('./lib/telegramAiBot').builderLiveKeyboard(user)});
+    }
+    else if (d.startsWith('set:live:')) {
+      const mode=d.slice('set:live:'.length);
+      if(!Object.hasOwn(require('./lib/telegramAiBot').BUILDER_LIVE_MODES,mode))return;
+      user.preferences.builder.liveMode=mode;
       await saveTelegramAiUser(redis,user);
-      const mode=user.preferences.builder.liveMode;
-      const note=mode==='quick_cash'?'💵 QUICK CASH: late live matches, at least halfway through, with selections currently winning under the offered SportyBet bet type. Your probability settings apply. Your current probability setting applies.':mode==='live'
-        ?'🔴 LIVE ONLY: matches must be at least halfway through and the selected market must currently be winning. Progress, scores and live odds are re-checked before code generation.'
-        :mode==='both'
-          ?'🔴+🟢 LIVE + PREMATCH: upcoming games can be mixed with live selections that are at least halfway through and currently winning. Live legs are re-checked before booking.'
-          :'🟢 PREMATCH ONLY: tickets read current upcoming SportyBet fixtures when you request a build.';
-      return sendTelegramAiMessageTo(chatId,`${note}\n\n${telegramAiBuilderSummary(user)}`,{reply_markup:telegramAiBuilderKeyboard(user)});
+      return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)});
     }
     else if(d==='builder:extra'){if(getTelegramAiPlan(user).id!=='elite')return sendTelegramAiMessageTo(chatId,'Additional markets require Elite.',{reply_markup:telegramAiPlanKeyboard()});user.preferences.builder.includeAllMarkets=user.preferences.builder.includeAllMarkets===false;await saveTelegramAiUser(redis,user);return sendTelegramAiMessageTo(chatId,telegramAiBuilderSummary(user),{reply_markup:telegramAiBuilderKeyboard(user)});}
     else if (d === 'builder:markets') return sendTelegramAiMessageTo(chatId, '🎲 Select the exact bet types the Auto Builder may use. Tap a market to toggle it:', { reply_markup: telegramAiMarketsKeyboard(user) });
@@ -3676,10 +3676,10 @@ async function handleTelegramAiUpdate(update) {
     const plan=getTelegramAiPlan(user);
     if(!telegramAiHasTicketCredit(user))return sendTelegramAiMessageTo(chatId,`⛔ You have used today's ${plan.dailyTickets} AI tickets and have no extra tickets left. Your daily allowance resets tomorrow, or you can buy an extra pack now.`,{reply_markup:telegramAiTicketLimitKeyboard(user)});
     let req={...(user.preferences.builder||{})};
-    if(!Array.isArray(req.betTypes)||!req.betTypes.length)return sendTelegramAiMessageTo(chatId,'⚠️ Select at least one Bet Type before building.',{reply_markup:telegramAiBuilderKeyboard(user)});
+    if(normalizeLiveMode(req.liveMode)!=='late_game_winners'&&(!Array.isArray(req.betTypes)||!req.betTypes.length))return sendTelegramAiMessageTo(chatId,'⚠️ Select at least one Bet Type before building.',{reply_markup:telegramAiBuilderKeyboard(user)});
     if(callbackAction==='safe'||callbackAction==='safer'){req.safe=true;req.targetOdds=5.00;req.minProbability=Math.max(90,Number(req.minProbability||0));req.minMatchOdds=null;}
     if(callbackAction==='rebuild'&&user.lastBuilderRequest)req={...user.lastBuilderRequest,regenerate:true};
-    await sendTelegramAiMessageTo(chatId,`⏳ Scanning current SportyBet fixtures and applying your settings…\n${req.sport||'all'} · target ${req.safe?'SAFE 1.30–5.00':req.targetOdds+'x'} · ≥${req.minProbability}% · min odds/match ${req.minMatchOdds||'off'} · ${normalizeLiveMode(req.liveMode)==='quick_cash'?'Quick Cash':normalizeLiveMode(req.liveMode)==='live'?'🔴 live only':normalizeLiveMode(req.liveMode)==='both'?'prematch + 🔴 live':'prematch only'}`);
+    await sendTelegramAiMessageTo(chatId,`⏳ Scanning current SportyBet fixtures and applying your settings…\n${req.sport||'all'} · target ${req.safe?'SAFE 1.30–5.00':req.targetOdds+'x'} · ≥${req.minProbability}% · min odds/match ${req.minMatchOdds||'off'} · ${isLateGameMode(normalizeLiveMode(req.liveMode))?require('./lib/telegramAiBot').BUILDER_LIVE_MODES[normalizeLiveMode(req.liveMode)]:normalizeLiveMode(req.liveMode)==='quick_cash'?'Quick Cash':normalizeLiveMode(req.liveMode)==='live'?'🔴 live only':normalizeLiveMode(req.liveMode)==='both'?'prematch + 🔴 live':'prematch only'}`);
     const built=await buildTelegramAiTicket(user,req).catch(e=>({error:e.message}));
     if(built.locked)return sendTelegramAiMessageTo(chatId,built.message,{reply_markup:telegramAiPlanKeyboard()});
     if(built.error)return sendTelegramAiMessageTo(chatId,`⚠️ ${built.error}`,{reply_markup:telegramAiBuilderKeyboard(user)});
