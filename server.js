@@ -1353,6 +1353,7 @@ function normalizeSportScope(value) {
 // predictions; other sports no-vig market probability).
 function normalizeLiveMode(value) {
   const v = String(value || 'prematch').toLowerCase().replace(/[\s_-]+/g, '');
+  if (v==='lategame') return 'late_game';
   if (['quickcash'].includes(v)) return 'quick_cash';
   if (['live', 'liveonly', 'inplay'].includes(v)) return 'live';
   if (['both', 'liveprematch', 'prematchlive', 'all'].includes(v)) return 'both';
@@ -1429,7 +1430,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     if([winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight].filter(Boolean).length>1)throw Error('Choose only one winner odds gap filter');
     const gapFilterOn=winnerGapOnly||winnerGapMaxOne||winnerGapAboveEight;
     const liveModeNorm = normalizeLiveMode(liveMode);
-    const wantsPrematch = !['live','quick_cash'].includes(liveModeNorm);
+    const wantsPrematch = !['live','quick_cash','late_game'].includes(liveModeNorm);
     const wantsLive = liveModeNorm !== 'prematch';
     const selectedSports = normalizeSportScopes(Array.isArray(sports) && sports.length ? sports : sportScope);
     const selectedSet = new Set(selectedSports);
@@ -1442,7 +1443,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
 
     // Fetch only the market families actually requested. Previously, even a one-market
     // Analyzer request could fan out to every football/basketball/hockey market.
-    const effectiveBetTypes = normalizeAutoBetTypesForSports(selectedSports, betTypes);
+    const effectiveBetTypes = normalizeAutoBetTypesForSports(selectedSports, liveModeNorm==='late_game'?[...require('./lib/liveModel').MATCH_WINNERS]:betTypes);
     if(!halfScan&&effectiveBetTypes.length&&effectiveBetTypes.every(id=>require('./lib/doubleChanceUnderMarkets').IDS.includes(id))&&['prematch','both'].includes(liveModeNorm)){return (await require('./lib/doubleChanceUnderMarkets').collect({hours:marketHours||168,leagues,signal:sportyRequest()?.signal,minProbability,minEdge,betTypes:effectiveBetTypes,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight})).rows;}
     const expandedPolicy=require('./lib/expandedScanPolicy').expandedScanPolicy(betTypes,marketHours);
     const requestedBetTypes = effectiveBetTypes.length ? new Set(effectiveBetTypes) : null;
@@ -1588,7 +1589,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     let liveDiagnostics = null;
     if (wantsLive) {
       const liveMaxPages = Math.max(1, Math.min(20, parseInt(process.env.SPORTYBET_LIVE_MAX_PAGES || '5', 10)));
-      const liveOnly = ['live','quick_cash'].includes(liveModeNorm);
+      const liveOnly = ['live','quick_cash','late_game'].includes(liveModeNorm);
       liveDiagnostics = { mode: liveModeNorm, rows: {}, errors: {}, totalRows: 0, footballModels: null, feeds:{} };
       const mergeLiveRows = (payload, liveRows) => {
         const base = liveOnly ? [] : (Array.isArray(payload?.rows) ? payload.rows : []);
@@ -1599,7 +1600,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
         return { ...(payload || {}), ...(probabilityRows?{probabilityRows}:{}), rows, totalReturned: rows.length, live: true, liveRows: liveRows.length };
       };
       const liveFetch = async (sport, kind, enabled) => {
-        if (!enabled) return [];
+        if (!enabled || liveModeNorm==='late_game'&&!['1x2','winner'].includes(kind)) return [];
         const key = `${sport}/${kind}`;
         try {
           const payload = await getLiveSportMarket(sport, kind, { maxPages: liveMaxPages });
@@ -1714,6 +1715,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
       leagues,
       sportScope: 'all',
       betTypes: effectiveBetTypes,
+      lateGame:liveModeNorm==='late_game',
     }).filter(c => {
       const sportName = String(c?.sport || '').toLowerCase();
       if (sportName.includes('football') || sportName.includes('soccer')) return selectedSet.has('football');
@@ -1728,7 +1730,7 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
     if(wantsPrematch&&wantsFootball&&wantsAny(require('./lib/shotsOnTargetMarkets').IDS)){
       try{const shots=await require('./lib/shotsOnTargetMarkets').collectShotsOnTargetCandidates({hours:marketHours||168,leagues,signal:sportyRequest()?.signal,minProbability,minEdge,betTypes:effectiveBetTypes,winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight});const known=new Set(candidates.map(sportySelectionKey));for(const c of shots)if(!known.has(sportySelectionKey(c))){candidates.push(c);known.add(sportySelectionKey(c));}}catch(e){sourceErrors['shots on target']=String(e.message).slice(0,160);}
     }
-    if((halfScan||includeAllMarkets===true||includeAllMarkets==null&&betTypes==null||[...require('./lib/footballExtraMarkets').IDS,...require('./lib/doubleChanceUnderMarkets').IDS,...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS,...require('./lib/highestUnderMarkets').IDS].some(id=>betTypes?.includes(id)))&&(halfScan||!['false','0','off'].includes(String(process.env.SPORTYBET_EXPANDED_MARKETS_ENABLED||'true').toLowerCase()))&&liveModeNorm!=='live'&&liveModeNorm!=='quick_cash'){
+    if((halfScan||includeAllMarkets===true||includeAllMarkets==null&&betTypes==null||[...require('./lib/footballExtraMarkets').IDS,...require('./lib/doubleChanceUnderMarkets').IDS,...require('./lib/streakGoalModel').IDS,...require('./lib/goalKickMarkets').IDS,...require('./lib/highestUnderMarkets').IDS].some(id=>betTypes?.includes(id)))&&(halfScan||!['false','0','off'].includes(String(process.env.SPORTYBET_EXPANDED_MARKETS_ENABLED||'true').toLowerCase()))&&wantsPrematch){
       try{
         const fixtures=[f1x2,fgg,fdc,fdnb,fou05,fhomeou05,fawayou05,fhomeou45,fawayou45,fou15,fou45,fou25,fcs,fah,fcorners,basketballWinner,basketballTotals,basketballHandicap,hockeyWinner,hockeyTotals,hockeyHandicap,handballWinner,handballTotals,handballHandicap,volleyballWinner,volleyballTotals,volleyballSets,volleyballHandicap,tennisWinner,tennisTotals,tennisHandicap].flatMap(p=>p?.rows||[]);
         const discovery=halfScan?await Promise.allSettled(selectedSports.map(sport=>require('./lib/sportybet').listPrematchFixtures(sport))):[];
@@ -1777,12 +1779,12 @@ async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbab
         if(c.live&&format)c.liveState={...c.liveState,bestOf:format};
       }
       const liveBefore=candidates.filter(c=>c.live);
-      const eligible=candidates.filter(c=>!c.live||liveSelectionEligible(c,{quickCash:liveModeNorm==='quick_cash'}));
-      liveDiagnostics.selectionRules={minimumProgress:'halfway',currentlyWinningRequired:true,
+      const eligible=candidates.filter(c=>!c.live||liveSelectionEligible(c,{quickCash:liveModeNorm==='quick_cash',lateGame:liveModeNorm==='late_game'}));
+      liveDiagnostics.selectionRules={minimumProgress:liveModeNorm==='late_game'?'late_game':'halfway',currentlyWinningRequired:true,
         liveBefore:liveBefore.length,halfwayRejected:liveBefore.filter(c=>!halfwayPlayed(c)).length,
         notWinningRejected:liveBefore.filter(c=>halfwayPlayed(c)&&!selectionWinningNow(c)).length,
         eligibleLive:eligible.filter(c=>c.live).length};
-      candidates.splice(0,candidates.length,...eligible.map(c=>c.live&&liveModeNorm==='quick_cash'?{...c,quickCash:true}:c));
+      candidates.splice(0,candidates.length,...eligible.map(c=>c.live&&liveModeNorm==='late_game'?{...c,lateGame:true}:c.live&&liveModeNorm==='quick_cash'?{...c,quickCash:true}:c));
     }
     const disabledMarket=require('./lib/footballExtraMarkets').removedSelection;
     for(let i=candidates.length-1;i>=0;i--)if(disabledMarket(candidates[i]))candidates.splice(i,1);
@@ -2272,7 +2274,7 @@ async function autoCornerDiagnostics(betTypes,liveMode='prematch') {
   const wantsCorners=Array.isArray(betTypes) && betTypes.some(x=>String(x).includes('corner'));
   if(!wantsCorners) return null;
   try{
-    const live=['live','quick_cash'].includes(liveMode);
+    const live=['live','quick_cash','late_game'].includes(liveMode);
     const c=await (live?getLiveSportMarket('football','corners'):loadSportyBetMarket('corners'));
     const pred=live?{matches:[]}:await currentFootballPredictions([c]);
     const playable=buildCandidates({predictions:live?{matches:[]}:pred,footballMarkets:{corners:c},sportScope:'football',betTypes:['corners_over','corners_under','corners_under115','corners_under125'],minProbability:0,minEdge:0});
@@ -2325,14 +2327,14 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
   try {
     const body = req.body || {};
     const halfScan=body.halfScan===true||body.fullScan===true;
-    if(halfScan&&['live','quick_cash'].includes(normalizeLiveMode(body.liveMode)))return res.status(400).json({error:'Half Scan checks upcoming fixtures. Choose Prematch or Both.'});
+    if(halfScan&&['live','quick_cash','late_game'].includes(normalizeLiveMode(body.liveMode)))return res.status(400).json({error:'Half Scan checks upcoming fixtures. Choose Prematch or Both.'});
     if(body.winnerGapMaxTwo===true)return res.status(400).json({error:'The odds gap ≤2 option was removed. Select odds gap above 8.00 instead.'});
     if([body.winnerGapOnly,body.winnerGapMaxOne,body.winnerGapAboveEight].filter(v=>v===true).length>1)return res.status(400).json({error:'Choose only one winner odds gap filter'});
     const weekly=body.weekly===true;
     const highestOdds=body.highestOdds===true;
     if(weekly&&(normalizeLiveMode(body.liveMode)!=='prematch'||body.todayOnly===true))return res.status(400).json({error:'Choose Prematch only for a 7-day ticket.'});
     if(weekly&&Array.isArray(body.betTypes)&&body.betTypes.includes('multi'))return res.status(400).json({error:'Use Auto Pick with individual bet types for a 7-day ticket.'});
-    if(Array.isArray(body.betTypes)&&body.betTypes.includes('multi')){
+    if(normalizeLiveMode(body.liveMode)!=='late_game'&&Array.isArray(body.betTypes)&&body.betTypes.includes('multi')){
       const multi=require('./lib/multiPick');let excluded;try{excluded=require('./lib/ticketVariation').exclusions(body.excludedTicketSignatures);}catch(error){return res.status(400).json({error:error.message});}
       const leagues=Array.isArray(body.leagues)?body.leagues.map(String):null;
       const prepared=await prepareAutoCandidatePool({sportScope:['football'],betTypes:['multi'],minProbability:0,minEdge:-25,leagues,todayOnly:body.todayOnly===true,liveMode:'prematch',includeAllMarkets:true,halfScan});
@@ -2356,7 +2358,7 @@ app.post('/api/sportybet/auto-pick', express.json({limit:'256kb'}), analysisJobs
     const leagues = Array.isArray(body.leagues) ? body.leagues.map(String) : null;
     const selectedSports = normalizeSportScopes(Array.isArray(body.sports) && body.sports.length ? body.sports : body.sportScope);
     const sportScope = selectedSports.length === 6 ? 'all' : (selectedSports.length === 1 ? selectedSports[0] : 'multi');
-    const betTypes = normalizeAutoBetTypesForSports(selectedSports, Array.isArray(body.betTypes) ? body.betTypes.map(String) : null);
+    const betTypes = normalizeAutoBetTypesForSports(selectedSports, normalizeLiveMode(body.liveMode)==='late_game'?[...require('./lib/liveModel').MATCH_WINNERS]:Array.isArray(body.betTypes) ? body.betTypes.map(String) : null);
     const todayOnly = body.todayOnly === true || String(body.todayOnly || '').toLowerCase() === 'true';
     const liveMode = normalizeLiveMode(body.liveMode);
 
@@ -3989,7 +3991,7 @@ app.post('/api/sportybet/book', express.json(), bookingRequests.wrap(async (req,
       return res.json(await builder.bookGroups(selections,{bookBet,getBooking}));
     }
     if(req.body?.simMode!==undefined)return res.status(400).json({error:'This booking mode is no longer supported.'});
-    const requireAll=req.body?.requireAllSelections===true;
+    const requireAll=req.body?.requireAllSelections===true||selections.some(s=>s?.lateGame===true);
     const disabledMarket=require('./lib/footballExtraMarkets').removedSelection;
     if([...selections,...(Array.isArray(req.body?.telegramContext)?req.body.telegramContext:[])].some(c=>c&&disabledMarket(c)))return res.status(400).json({error:'This slip includes a disabled market. Remove it and try again.'});
     if(requireAll){
@@ -4009,16 +4011,16 @@ app.post('/api/sportybet/book', express.json(), bookingRequests.wrap(async (req,
     // Live legs move fast: re-validate them against the CURRENT live board
     // (fresh, uncached) right before booking. Suspended/settled legs are dropped
     // and reported; prematch legs are left untouched.
-    const liveLegs = selections.filter(s => s && s.live === true);
+    const liveLegs = selections.filter(s => s && (s.live === true || s.lateGame === true));
     let bookable = selections;
     let droppedLive = [];
     if (liveLegs.length) {
       res.bookingStage?.('checking_selections');
-      const prematchLegs = selections.filter(s => !(s && s.live === true));
+      const prematchLegs = selections.filter(s => !(s && (s.live === true || s.lateGame === true)));
       try {
         const check = await validateLiveSelections(liveLegs.map(s => ({
           eventId: s.eventId, marketId: s.marketId, outcomeId: s.outcomeId,
-          specifier: s.specifier || null, sport: s.sport || 'football', quickCash:!!s.quickCash,betType:s.betType,
+          specifier: s.specifier || null, sport: s.sport || 'football', quickCash:!!s.quickCash,lateGame:s.lateGame===true,betType:s.betType,
         })));
         droppedLive = check.dropped;
         bookable = [...prematchLegs, ...check.valid];

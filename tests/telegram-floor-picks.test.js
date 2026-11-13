@@ -78,19 +78,26 @@ test('retired daily tickets are gone; football accepts first-half match unders a
  assert.ok(!PLANS.some(p=>/streak3no|footballMulti|footballU45/.test(p.id)));
 });
 test('daily high-odds tiers book one unique slip each within their game cap',async()=>{
- const {DAILY_HIGH_ODDS}=require('../lib/telegramFloorPicks');
+ const {PLANS}=require('../lib/telegramFloorPicks');
+ const tiers=PLANS.filter(p=>p.id==='today10k1'||p.dailyHighOdds);
  const sig=require('../lib/telegramNext12h').ticketSignature;
  const rows=Array.from({length:30},(_,i)=>({eventId:'high'+i,marketId:'1',outcomeId:'1',betType:'home_win',sport:'football',
    probability:86-i*.7,qualityScore:80,edge:0,odds:i%3===0?2.25:2,kickoffUtc:new Date(+now+(90+i*6)*60000).toISOString()}));
+ rows.push(...rows.slice().flatMap(c=>[
+  {...c,betType:'away_win',outcomeId:'3'},
+  ...['under45','gg_yes','dc_1x'].map((betType,i)=>({...c,marketId:['18','29','10'][i],betType,odds:c.odds-.01}))
+ ]));
  const booked=[],messages=[];
- const deps={plans:DAILY_HIGH_ODDS,now:()=>now,loadPool:async()=>rows,validate:async x=>x,book:async x=>{booked.push(x);return{shareCode:'H'+booked.length}},saveCode:async()=>{},track:async()=>{},updateTrack:async()=>{},send:async x=>messages.push(x)};
+ const deps={plans:tiers,now:()=>now,loadPool:async()=>rows,validate:async x=>x,book:async x=>{booked.push(x);return{shareCode:'H'+booked.length}},saveCode:async()=>{},track:async()=>{},updateTrack:async()=>{},send:async x=>messages.push(x)};
  const result=await runFloorPicks(deps,{redis:redis(),dateKey:'2026-10-13',slotKey:'high-test',slotTime:'07:00'});
- assert.equal(result.ticketsSent,3);
- assert.equal(new Set(booked.map(sig)).size,3);
- for(const [i,p] of DAILY_HIGH_ODDS.entries()){
+ assert.equal(result.ticketsSent,4);
+ assert.equal(new Set(booked.map(sig)).size,4);
+ assert.equal(new Set(booked.flat().map(c=>c.eventId+'|'+c.marketId)).size,booked.flat().length);
+ assert.ok(new Set(booked.flat().map(c=>c.eventId)).size<booked.flat().length);
+ for(const [i,p] of tiers.entries()){
   assert.ok(booked[i].length<=p.maxGames);
   assert.ok(booked[i].every((c,j,a)=>!j||a[j-1].kickoffUtc<=c.kickoffUtc));
-  assert.ok(result.results[i].combinedOdds>=p.targetOdds);
+  assert.ok(result.results[i].combinedOdds>=p.minimumOdds);
   assert.match(messages[i],/per-game floor 70%/);
   assert.match(messages[i],/Est. win chance: .* · Est. ticket EV:/);
   assert.doesNotMatch(messages[i],/Kickoff order/);

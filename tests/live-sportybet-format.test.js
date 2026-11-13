@@ -96,3 +96,37 @@ test('concurrent live market families share one current SportyBet board read',as
     assert.equal(calls,1,'selecting many bet types must not send duplicate concurrent board requests');
   }finally{direct.setFetchForTesting(null);}
 });
+
+test('Late Game needs a verified late-stage lead in every sport',()=>{
+ const {lateGameEligible}=require('../lib/liveModel');
+ const row=(sport,betType,extra)=>({...event('test'),sport,betType,marketDesc:'Winner',outcomeDesc:'Home',...extra});
+ for(const [sport,betType,pass,fail] of [
+  ['Football','home_win',{playedSeconds:'80:00'},{playedSeconds:'79:59'}],
+  ['Basketball','basketball_winner',{matchStatus:'Q4',playedSeconds:'42:40',remainingTimeInPeriod:'05:20'},{playedSeconds:'42:39',remainingTimeInPeriod:'05:21'}],
+  ['Basketball','basketball_winner',{matchStatus:'Q4',playedSeconds:'35:34',remainingTimeInPeriod:'04:26'},{playedSeconds:'35:33',remainingTimeInPeriod:'04:27'}],
+  ['Ice Hockey','hockey_winner',{matchStatus:'P3',playedSeconds:'53:20',remainingTimeInPeriod:'06:40'},{remainingTimeInPeriod:'06:41'}],
+  ['Handball','handball_winner',{playedSeconds:'53:20'},{playedSeconds:'53:19'}],
+  ['Tennis','tennis_winner',{matchStatus:'S2',bestOf:3,setScore:'1:0',gameScore:['6:2','5:3']},{gameScore:['6:2','4:3']}],
+  ['Volleyball','volleyball_winner',{matchStatus:'S4',bestOf:5,setScore:'2:1',pointScore:['25:20','20:25','25:20','23:20']},{pointScore:['25:20','20:25','25:20','22:20']}]
+ ]){
+  assert.equal(lateGameEligible(row(sport,betType,pass)),true,sport);
+  assert.equal(lateGameEligible(row(sport,betType,{...pass,...fail})),false,sport);
+  assert.equal(lateGameEligible(row(sport,betType,{...pass,outcomeDesc:'Away'})),false,sport);
+  assert.equal(lateGameEligible(row(sport,betType,{...pass,marketDesc:'1st period - Winner'})),false,sport);
+ }
+});
+
+test('Late Game booking rejects a lost lead and a closed winner price',async()=>{
+ const fixture=boards();
+ const late=fixture.football.data[1].events[0];
+ direct.setFetchForTesting(async()=>response(fixture.football));
+ try{
+  const legs=[{eventId:late.eventId,marketId:'1',outcomeId:'1',sport:'Football',betType:'home_win',lateGame:true}];
+  assert.equal((await validateLiveSelections(legs)).valid.length,1);
+  late.setScore='2:2';
+  assert.equal((await validateLiveSelections(legs)).valid.length,0);
+  late.setScore='2:1';
+  late.markets[0].outcomes[0].isActive=0;
+  assert.equal((await validateLiveSelections(legs)).valid.length,0);
+ }finally{direct.setFetchForTesting(null);}
+});

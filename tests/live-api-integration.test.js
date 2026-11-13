@@ -52,6 +52,18 @@ test('Auto Analyser HTTP flow builds live and Quick Cash slips from the website 
     assert.equal(basketball.body.selections[0].eventId,'sr:match:live-format-q4');
     assert.equal(basketball.body.selections[0].marketId,'219');
   });
+  await t.test('Late Game uses winner markets and preserves its booking policy',async()=>{
+    const picked=await pick({liveMode:'late_game',betTypes:['corners_over']});
+    assert.equal(picked.status,200,JSON.stringify(picked.body));
+    assert.equal(picked.body.selections[0].eventId,'sr:match:live-format-late');
+    assert.equal(picked.body.selections[0].lateGame,true);
+    assert.equal(picked.body.selections[0].betType,'home_win');
+    const early={...picked.body.selections[0],eventId:'sr:match:live-format-1'};
+    const rejected=await post('/api/sportybet/book',{selections:[...picked.body.selections,early]});
+    assert.equal(rejected.status,409,JSON.stringify(rejected.body));
+    const booked=await post('/api/sportybet/book',{selections:picked.body.selections});
+    assert.equal(booked.body.shareCode,'TEST-LIVE-CODE');
+  });
   await t.test('offered live corners work without a historical corner model',async()=>{
     const picked=await pick({betTypes:['corners_over'],minProbability:75,targetOdds:1.2});
     assert.equal(picked.status,200,JSON.stringify(picked.body));
