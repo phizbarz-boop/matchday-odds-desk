@@ -8,6 +8,7 @@ const {createBookingRequests}=require('./lib/sportyBookingRequests');
 const {createTelegramRunRequests}=require('./lib/telegramRunRequests');
 
 const app = express();
+app.use('/api/sportybet/ticket', require('./lib/publicTicketLookup').createPublicTicketRouter({ getBooking }));
 app.set('trust proxy', 1); // Render forwards the real client IP.
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
