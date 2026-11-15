@@ -38,12 +38,19 @@ test('scheduled Roll Over waits for a confirmed score, then rolls the win and re
  assert.equal(observed.startedObservedAt,new Date(now).toISOString());
  const old=id;
  now+=20000;id='sr:match:99902';kickoff=now+120000;mode='NS';
- assert.equal((await run('settled:CODE1','CODE1')).ticketsSent,1);
+ assert.equal((await run('settled:CODE1','CODE1')).ticketsSent,0);
  const advanced=await roll.stateOf(redis);
  assert.equal(advanced.balance,300000);
- assert.equal(advanced.pending.stake,300000);
- assert.equal(advanced.last.timings[old].finishedObservedAt,new Date(now).toISOString());
- assert.match(messages.at(-2),/WON/);
+ assert.equal(advanced.pending,null);
+ assert.match(messages.at(-1),/WON/);
+ assert.equal((await run('same-slot')).reason,'settled_waiting_for_next_slot');
+ assert.equal(books,1);
+ now=advanced.nextBookingAt;kickoff=now+120000;
+ assert.equal((await run('next-slot')).ticketsSent,1);
+ assert.equal((await roll.stateOf(redis)).pending.stake,300000);
+ assert.match(messages.at(-1),/Model estimate: [0-9.]+%/);
+ assert.equal(advanced.last.timings[old].finishedObservedAt,new Date(observed.startedObservedAt ? Date.parse(observed.startedObservedAt)+20000 : 0).toISOString());
+
  assert.equal((await run('settled:CODE1','CODE1')).reason,'pending_changed');
  assert.equal(books,2);
  mode='FT';score='3:2';now=kickoff+600000;

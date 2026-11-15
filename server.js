@@ -4175,8 +4175,7 @@ const rolloverScheduler=createWatScheduler({name:'Virtual Roll Over',times:virtu
   enabled:process.env.VIRTUAL_ROLLOVER_ENABLED==='true',
   configured:Boolean(process.env.REDIS_URL&&process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),
   catchupMinutes:3,maxRunMilliseconds:120000});
-// The half-hour scheduler still starts new chains; this watcher advances
-// an existing ticket as soon as the provider confirms all its results.
+// Check results between slots. Only the half-hour scheduler books tickets.
 let rolloverResultTimer=null,rolloverResultCheckBusy=false;
 function startRolloverResultWatcher(){
   if(!rolloverScheduler.status().running||rolloverResultTimer)return;
@@ -4193,10 +4192,9 @@ function startRolloverResultWatcher(){
         redis,pendingCode:pending.code,slotKey:'settled:'+pending.code,dateKey,signal,
         shouldAbort:()=>!rolloverScheduler.status().running
       },{
-        book:legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true}),
         send:text=>sendTelegramMessage(text,{}, {signal})
       }),{signal});
-      if(result.ticketsSent)console.log('[Virtual Roll Over] Continued after settling',pending.code);
+      if(result.reason==='settled_waiting_for_next_slot')console.log('[Virtual Roll Over] Settled; next ticket waits for the next slot:',pending.code);
     }catch(error){console.warn('[Virtual Roll Over result check]',error.message);}
     finally{rolloverResultCheckBusy=false;}
   },20000);
