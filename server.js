@@ -4170,12 +4170,16 @@ app.post('/api/refresh', express.json(), (req, res) => {
 
 const virtualRollOver=require('./lib/virtualRollOver');
 const rolloverJob=createWatSlotJob({namespace:'virtual-rollover:schedule',getRedis,
-  run:ctx=>withPublicSportyRequest(()=>virtualRollOver.run(ctx,{book:legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true}),send:text=>sendTelegramMessage(text,{}, {signal:ctx.signal})}),{signal:ctx.signal})});
+  run:async ctx=>{
+    const result=await withPublicSportyRequest(()=>virtualRollOver.run(ctx,{book:legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true}),send:text=>sendTelegramMessage(text,{}, {signal:ctx.signal})}),{signal:ctx.signal});
+    console.log('[Virtual Roll Over ticket]',ctx.slotKey,result.reason??'sent','tickets='+result.ticketsSent);
+    return result;
+  }});
 const rolloverScheduler=createWatScheduler({name:'Virtual Roll Over',times:virtualRollOver.TIMES,runJob:rolloverJob,
   enabled:process.env.VIRTUAL_ROLLOVER_ENABLED==='true',
   configured:Boolean(process.env.REDIS_URL&&process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),
   catchupMinutes:3,maxRunMilliseconds:120000});
-// Check results between slots. Only the half-hour scheduler books tickets.
+// Advance the chain after a confirmed result; the scheduler can start or resume it.
 let rolloverResultTimer=null,rolloverResultCheckBusy=false;
 function startRolloverResultWatcher(){
   if(!rolloverScheduler.status().running||rolloverResultTimer)return;
@@ -4192,9 +4196,10 @@ function startRolloverResultWatcher(){
         redis,pendingCode:pending.code,slotKey:'settled:'+pending.code,dateKey,signal,
         shouldAbort:()=>!rolloverScheduler.status().running
       },{
+        book:legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true}),
         send:text=>sendTelegramMessage(text,{}, {signal})
       }),{signal});
-      if(result.reason==='settled_waiting_for_next_slot')console.log('[Virtual Roll Over] Settled; next ticket waits for the next slot:',pending.code);
+      if(!['awaiting_settlement','pending_changed','rollover_busy'].includes(result.reason))console.log('[Virtual Roll Over ticket]',pending.code,result.reason??'sent','tickets='+result.ticketsSent);
     }catch(error){console.warn('[Virtual Roll Over result check]',error.message);}
     finally{rolloverResultCheckBusy=false;}
   },20000);
