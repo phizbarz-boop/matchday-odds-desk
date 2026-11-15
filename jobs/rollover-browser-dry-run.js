@@ -19,7 +19,33 @@ async function request(code){
  if(!r.ok)throw Error('App returned HTTP '+r.status);
  return r.json();
 }
-async function inspect(code){
+function verifySlip(text,quote,now=Date.now()){
+ const normalized=value=>String(value).normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();
+ const slip=normalized(text);
+ const block=slip.match(/\bremove all\b(.*?)\btype\s+no\./)?.[1];
+ const displayed=slip.match(/\bodds\s+(\d+\.\d+)\s+total stake\b/)?.[1];
+ if(!block||!displayed)return 'browser_slip_not_confirmed';
+ if(/\blive\b/.test(block))return 'browser_slip_has_live_games';
+ if(!Array.isArray(quote.legs)||quote.legs.length<1||quote.legs.length>4||
+    !quote.legs.every(leg=>Date.parse(leg.kickoffUtc)>now+20000))return 'browser_slip_closed_or_near_kickoff';
+ const rows=[...block.matchAll(/\b(over|under)\s+(\d+\.\d+)\b(.*?)\bo\s*\/\s*u\b/g)].map(m=>({
+  pick:m[1]+' '+m[2],match:normalized(m[3]).replace(/\s+(?:vs?\.?|–|—)\s+/g,' v ')
+ }));
+ if(rows.length!==quote.legs.length)return 'browser_slip_selection_mismatch';
+ for(const leg of quote.legs){
+  const pick=normalized(leg.pick).replace(/ goals$/,'');
+  const match=normalized(leg.home)+' v '+normalized(leg.away);
+  const i=rows.findIndex(row=>row.pick===pick&&(' '+row.match+' ').includes(' '+match+' '));
+  if(i<0)return 'browser_slip_selection_mismatch';
+  rows.splice(i,1);
+ }
+ const scale=10**displayed.split('.')[1].length;
+ const odds=Number(displayed)*scale;
+ if(!Number.isFinite(quote.odds)||![Math.round(quote.odds*scale),Math.floor(quote.odds*scale+1e-8)].some(n=>Math.abs(n-odds)<1e-8))
+  return 'browser_slip_odds_changed';
+ return 'browser_slip_verified';
+}
+async function inspect(code,quote){
  browser??=await chromium.launch({headless:true});
  const ctx=await browser.newContext();
  try{
@@ -29,7 +55,24 @@ async function inspect(code){
   const response=await page.goto(link.href,{waitUntil:'domcontentloaded',timeout:20000});
   const host=new URL(page.url()).hostname;
   if(!response?.ok()||!['www.sportybet.com','sportybet.com'].includes(host))return 'browser_page_unavailable';
-  return 'browser_page_loaded_slip_not_confirmed';
+  const totals=page.getByText('Total Stake',{exact:true});
+  for(let i=0;i<8;i++){
+   const slip=await totals.evaluateAll(labels=>{
+    for(const label of labels){
+     if(!label.getClientRects().length)continue;
+     for(let el=label.parentElement;el&&el!==document.body;el=el.parentElement){
+      const text=el.innerText;
+      if(text?.length>3500)break;
+      if(/Remove All/i.test(text)&&/Potential Win/i.test(text))return text;
+     }
+    }
+    return '';
+   });
+   const status=verifySlip(slip,quote);
+   if(status!=='browser_slip_not_confirmed')return status;
+   await delay(750);
+  }
+  return 'browser_slip_not_confirmed';
  }finally{await ctx.close();}
 }
 async function tick(){
@@ -43,7 +86,7 @@ async function tick(){
  if(quote.status!=='quote_matches'){
   console.log('DRY RUN: skipped',ticket.code,quote.status);last=ticket.code;return;
  }
- const status=await inspect(ticket.code);
+ const status=await inspect(ticket.code,quote);
  console.log('DRY RUN:',ticket.code,quote.odds+'x','₦'+(ticket.stakeKobo/100).toFixed(2),status);
  last=ticket.code;
 }
