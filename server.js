@@ -4189,6 +4189,33 @@ app.get('/api/sportybet/virtual-rollover',async(_req,res)=>{
   catch{res.status(503).json({error:'Roll Over status is temporarily unavailable.'});}
 });
 
+let rolloverPreviewCache=null,rolloverPreviewInFlight=null;
+const runRolloverTest=async(createCode)=>{
+  const redis=await getRedis();
+  if(!redis)throw Error('Roll Over storage unavailable');
+  const signal=AbortSignal.timeout(20000);
+  return withPublicSportyRequest(()=>virtualRollOver.preview(redis,{signal,book:createCode?bookBet:null}),{signal});
+};
+app.get('/api/sportybet/virtual-rollover/preview',async(_req,res)=>{
+  res.set('Cache-Control','no-store');
+  try{
+    if(!rolloverPreviewCache||Date.now()-rolloverPreviewCache.at>=30000){
+      if(!rolloverPreviewInFlight)rolloverPreviewInFlight=runRolloverTest(false)
+        .then(data=>{rolloverPreviewCache={at:Date.now(),data};return data;})
+        .catch(err=>{console.warn('[Roll Over preview]',err.message);rolloverPreviewCache={at:Date.now(),data:{error:'Roll Over preview is temporarily unavailable.'}};})
+        .finally(()=>{rolloverPreviewInFlight=null;});
+      await rolloverPreviewInFlight;
+    }
+    const data=rolloverPreviewCache.data;
+    res.status(data.error?503:200).json(data);
+  }catch{res.status(503).json({error:'Roll Over preview is temporarily unavailable.'});}
+});
+app.post('/api/telegram/virtual-rollover-test',express.json(),async(req,res)=>{
+  if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});
+  try{res.json(await runRolloverTest(req.body?.createCode===true));}
+  catch(err){console.warn('[Roll Over test]',err.message);res.status(502).json({error:'Roll Over test did not complete. Check Render logs.'});}
+});
+
 const httpServer=app.listen(PORT, () => {
   console.log(`Matchday site listening on :${PORT}`);
   publicCacheScheduler.start();floorScheduler.start();threeSafeScheduler.start();rolloverScheduler.start();

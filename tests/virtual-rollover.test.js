@@ -21,6 +21,13 @@ test('scheduled Roll Over waits for a confirmed score, then rolls the win and re
  const run=slotKey=>roll.run({redis,slotKey,dateKey:'2026-11-15'},{client,clock:()=>now,book:async legs=>{
   assert.equal(legs.length,1);assert.equal(legs[0].specifier,'total=4.5');books++;return {shareCode:'CODE'+books};
  },send:async x=>messages.push(x)});
+ const saved=await redis.get('virtual-rollover:v1');
+ const preview=await roll.preview(redis,{client,clock:()=>now});
+ assert.equal(preview.status,'preview');assert.equal(preview.odds,1.2);
+ const code=await roll.preview(redis,{client,clock:()=>now,book:async()=>({shareCode:'TEST13'})});
+ assert.equal(code.status,'booked');assert.equal(code.code,'TEST13');
+ assert.equal(await redis.get('virtual-rollover:v1'),saved);
+ assert.equal(messages.length,0);
  assert.equal((await run('00:00')).ticketsSent,1);
  assert.equal((await run('00:30')).reason,'awaiting_settlement');
  assert.equal(books,1);

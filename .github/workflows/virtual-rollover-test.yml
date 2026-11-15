@@ -1,0 +1,31 @@
+name: Test Virtual Roll Over
+on:
+  workflow_dispatch:
+    inputs:
+      create_code:
+        description: Create a SportyBet share code if a ticket qualifies
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: virtual-rollover-test
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Test current virtual fixtures
+        env:
+          BASE_URL: ${{ vars.MATCHDAY_BASE_URL || 'https://matchday-odds-desk.onrender.com' }}
+          JOB_SECRET: ${{ secrets.TELEGRAM_JOB_SECRET }}
+          CREATE_CODE: ${{ inputs.create_code }}
+        run: |
+          set -eu
+          test -n "$JOB_SECRET" || { echo 'Set the TELEGRAM_JOB_SECRET repository secret.'; exit 1; }
+          case "$BASE_URL" in https://*) ;; *) echo 'MATCHDAY_BASE_URL must use HTTPS.'; exit 1;; esac
+          curl --fail-with-body --silent --show-error --max-time 90 \
+            -H "x-telegram-job-secret: $JOB_SECRET" -H 'Content-Type: application/json' \
+            --data "{\"createCode\":$CREATE_CODE}" \
+            "${BASE_URL%/}/api/telegram/virtual-rollover-test"
