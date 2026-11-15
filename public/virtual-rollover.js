@@ -20,7 +20,7 @@ rolloverPreviewButton.addEventListener('click',async()=>{
   const res=await fetch('/api/sportybet/virtual-rollover/preview',{cache:'no-store'});
   const data=await res.json();
   if(!res.ok)throw Error(data.error||'Roll Over preview is temporarily unavailable.');
-  const stats=`Fixtures: ${data.fixtures} · Open selections: ${data.offeredSelections} · Verified results: ${data.verifiedResults}`;
+  const stats=`Fixtures: ${data.fixtures} · Open selections: ${data.offeredSelections} · Verified results: ${data.verifiedResults} · Match Stats panels used: ${data.statsFixtures??0}`;
   out.textContent=data.status==='preview'?
    [`Test preview · ${data.odds.toFixed(3)}x · Model estimate ${(data.modelProbability*100).toFixed(1)}% (assuming independent legs)`,
     ...data.selections.map(x=>`${x.home} vs ${x.away} — ${x.pick} @ ${x.odds}`),stats].join('\n'):

@@ -46,3 +46,19 @@ test('no model ticket without verified form, and void legs preserve the applicab
  assert.equal(roll.select([{fixture:{eventId:'sr:match:9',kickoffUtc:new Date(Date.now()+60000).toISOString()},rows:[]}],[],Date.now()),null);
  assert.deepEqual(roll.settle({stake:250000,step:2,legs:[{odds:1.2,field:'u45'}]},[{void:true}]),{status:'Void',returned:250000,nextBalance:250000,nextStep:2});
 });
+
+test('captured virtual Stats response maps scores to the correct teams',async()=>{
+ const {collect}=require('../lib/virtualRollOverForm');
+ const fixture={eventId:'sr:match:200026111521022',home:'BHA',away:'FUL'};
+ const payload={"bizCode":10000,"innerMsg":"success","message":"success","data":{"homeTeam":{"teamName":"BHA","teamId":"191128112403tmp000000016","recentMatches":[{"homeTeamId":"191128112403tmp000000019","awayTeamId":"191128112403tmp000000016","homeTeamName":"LIV","awayTeamName":"BHA","homeScore":0,"awayScore":2},{"homeTeamId":"191128112403tmp000000016","awayTeamId":"191128112403tmp000000015","homeTeamName":"BHA","awayTeamName":"TOT","homeScore":2,"awayScore":0},{"homeTeamId":"191128112403tmp000000016","awayTeamId":"260810160028tmp000000002","homeTeamName":"BHA","awayTeamName":"HUL","homeScore":0,"awayScore":1},{"homeTeamId":"191128112403tmp000000016","awayTeamId":"191128112403tmp000000001","homeTeamName":"BHA","awayTeamName":"ARS","homeScore":2,"awayScore":2},{"homeTeamId":"191128112403tmp000000016","awayTeamId":"191128112403tmp000000009","homeTeamName":"BHA","awayTeamName":"CHE","homeScore":2,"awayScore":1}]},"awayTeam":{"teamName":"FUL","teamId":"191128112403tmp000000022","recentMatches":[{"homeTeamId":"191128112403tmp000000022","awayTeamId":"191128112403tmp000000007","homeTeamName":"FUL","awayTeamName":"CRY","homeScore":2,"awayScore":2},{"homeTeamId":"191128112403tmp000000022","awayTeamId":"191128112403tmp000000011","homeTeamName":"FUL","awayTeamName":"MCI","homeScore":1,"awayScore":2},{"homeTeamId":"191128112403tmp000000022","awayTeamId":"191128112403tmp000000002","homeTeamName":"FUL","awayTeamName":"AST","homeScore":2,"awayScore":1},{"homeTeamId":"191128112403tmp000000022","awayTeamId":"260810160028tmp000000001","homeTeamName":"FUL","awayTeamName":"COV","homeScore":0,"awayScore":4},{"homeTeamId":"191128112403tmp000000022","awayTeamId":"191128112403tmp000000021","homeTeamName":"FUL","awayTeamName":"LEE","homeScore":0,"awayScore":0}]}}};
+ const request=async(path,opts)=>{
+  assert.equal(path,'/scheduledVirtual/api/v1/stats/team_stats');
+  assert.equal(opts.params.eventId,fixture.eventId);
+  assert.equal(opts.publicRead,true);
+  return payload;
+ };
+ assert.deepEqual(await collect(fixture,{request}),{home:[[2,0],[2,0],[0,1],[2,2],[2,1]],away:[[2,2],[1,2],[2,1],[0,4],[0,0]]});
+ assert.equal(await collect({...fixture,away:'OTHER'},{request}),null);
+ payload.data.homeTeam.recentMatches[0].homeScore=null;
+ assert.equal(await collect(fixture,{request}),null);
+});
