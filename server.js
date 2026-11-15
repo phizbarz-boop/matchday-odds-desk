@@ -3437,6 +3437,10 @@ async function handleTelegramAiUpdate(update) {
     const d = String(callback.data || '');
 
     if (d === 'action:home') text = '/start';
+    else if (d === 'action:rollover') {
+      const status=await virtualRollOverStatus().catch(()=> 'Roll Over status is temporarily unavailable.');
+      return sendTelegramAiMessageTo(chatId,status,{reply_markup:telegramAiMainKeyboard(user)});
+    }
     else if (d === 'action:builder') {
       return sendTelegramAiMessageTo(chatId, telegramAiBuilderSummary(user), { reply_markup: telegramAiBuilderKeyboard(user) });
     }
@@ -4164,12 +4168,33 @@ app.post('/api/refresh', express.json(), (req, res) => {
     message: 'Public SportyBet refresh started; check /api/sportybet/public-cache/status for completion.' });
 });
 
+const virtualRollOver=require('./lib/virtualRollOver');
+const rolloverJob=createWatSlotJob({namespace:'virtual-rollover:schedule',getRedis,
+  run:ctx=>withPublicSportyRequest(()=>virtualRollOver.run(ctx,{send:text=>sendTelegramMessage(text,{}, {signal:ctx.signal})}),{signal:ctx.signal})});
+const rolloverScheduler=createWatScheduler({name:'Virtual Roll Over',times:virtualRollOver.TIMES,runJob:rolloverJob,
+  enabled:process.env.VIRTUAL_ROLLOVER_ENABLED==='true',
+  configured:Boolean(process.env.REDIS_URL&&process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),
+  catchupMinutes:3,maxRunMilliseconds:120000});
+async function virtualRollOverStatus(){
+  const schedule=rolloverScheduler.status();
+  if(!schedule.enabled||!schedule.configured)return 'ROLL OVER · VIRTUAL FOOTBALL\nScheduled picks are not active.';
+  const redis=await getRedis();
+  if(!redis)throw Error('Roll Over storage unavailable');
+  const state=await virtualRollOver.stateOf(redis);
+  return virtualRollOver.summary({...state,count:state.day===watParts().date?state.count:0});
+}
+app.get('/api/sportybet/virtual-rollover',async(_req,res)=>{
+  res.set('Cache-Control','no-store');
+  try{res.json({summary:await virtualRollOverStatus()});}
+  catch{res.status(503).json({error:'Roll Over status is temporarily unavailable.'});}
+});
+
 const httpServer=app.listen(PORT, () => {
   console.log(`Matchday site listening on :${PORT}`);
-  publicCacheScheduler.start();floorScheduler.start();threeSafeScheduler.start();
+  publicCacheScheduler.start();floorScheduler.start();threeSafeScheduler.start();rolloverScheduler.start();
   console.log(`[SportyBet access] Public data reads; booking mode=${sportyDirect.sessionStatus().bookingMode}`);
 });
-const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();threeSafeScheduler.stop();};
+const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();threeSafeScheduler.stop();rolloverScheduler.stop();};
 httpServer.once('close',stopSchedulers);
 process.once('SIGTERM',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});
 process.once('SIGINT',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});
