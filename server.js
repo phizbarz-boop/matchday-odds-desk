@@ -4170,7 +4170,7 @@ app.post('/api/refresh', express.json(), (req, res) => {
 
 const virtualRollOver=require('./lib/virtualRollOver');
 const rolloverJob=createWatSlotJob({namespace:'virtual-rollover:schedule',getRedis,
-  run:ctx=>withPublicSportyRequest(()=>virtualRollOver.run(ctx,{send:text=>sendTelegramMessage(text,{}, {signal:ctx.signal})}),{signal:ctx.signal})});
+  run:ctx=>withPublicSportyRequest(()=>virtualRollOver.run(ctx,{book:legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true}),send:text=>sendTelegramMessage(text,{}, {signal:ctx.signal})}),{signal:ctx.signal})});
 const rolloverScheduler=createWatScheduler({name:'Virtual Roll Over',times:virtualRollOver.TIMES,runJob:rolloverJob,
   enabled:process.env.VIRTUAL_ROLLOVER_ENABLED==='true',
   configured:Boolean(process.env.REDIS_URL&&process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),
@@ -4194,7 +4194,7 @@ const runRolloverTest=async(createCode)=>{
   const redis=await getRedis();
   if(!redis)throw Error('Roll Over storage unavailable');
   const signal=AbortSignal.timeout(20000);
-  return withPublicSportyRequest(()=>virtualRollOver.preview(redis,{signal,book:createCode?bookBet:null}),{signal});
+  return withPublicSportyRequest(()=>virtualRollOver.preview(redis,{signal,book:createCode?(legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true})):null}),{signal});
 };
 app.get('/api/sportybet/virtual-rollover/preview',async(_req,res)=>{
   res.set('Cache-Control','no-store');
