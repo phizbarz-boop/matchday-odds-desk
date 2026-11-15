@@ -73,3 +73,14 @@ test('captured virtual Stats response maps scores to the correct teams',async()=
  payload.data.homeTeam.recentMatches[0].homeScore=null;
  assert.equal(await collect(fixture,{request}),null);
 });
+
+test('scheduled virtual End status uses the final setScore and verifies event identity',async()=>{
+ const f={eventId:'sr:match:200026111521033',home:'BHA',away:'LEE'};
+ const event={...f,matchStatus:'End',eventStatus:3,setScore:'0:4',gameScore:['0:2','0:2'],score:'0:2'};
+ const read=e=>roll.resultFor({fetchEventDetail:async()=>({data:{event:e}})},f);
+ const result=await read(event);
+ assert.deepEqual(result,{h:0,a:4});
+ assert.equal(roll.settle({stake:250000,step:0,legs:[{field:'u45',odds:1.13}]},[result]).returned,282500);
+ assert.equal(await read({...event,matchStatus:'Live'}),null);
+ assert.equal(await read({...event,eventId:'sr:match:other'}),null);
+});
