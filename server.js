@@ -4169,42 +4169,50 @@ app.post('/api/refresh', express.json(), (req, res) => {
 });
 
 const virtualRollOver=require('./lib/virtualRollOver');
-const rolloverJob=createWatSlotJob({namespace:'virtual-rollover:schedule',getRedis,
-  run:async ctx=>{
-    const result=await withPublicSportyRequest(()=>virtualRollOver.run(ctx,{book:legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true}),send:text=>sendTelegramMessage(text,{}, {signal:ctx.signal})}),{signal:ctx.signal});
-    console.log('[Virtual Roll Over ticket]',ctx.slotKey,result.reason??'sent','tickets='+result.ticketsSent);
+const rolloverBook=legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true});
+const rolloverTelegram=(text,signal)=>sendTelegramMessage(text,{}, {signal});
+const rolloverRdpLog=text=>console.log('[RDP Virtual Roll Over]',text.split('\n')[0]);
+function createRolloverChain({name,namespace,lane,enabled,configured,notify}){
+  const run=(ctx)=>withPublicSportyRequest(()=>virtualRollOver.run(ctx,{
+    lane,book:rolloverBook,send:text=>notify(text,ctx.signal)
+  }),{signal:ctx.signal});
+  const runJob=createWatSlotJob({namespace,getRedis,run:async ctx=>{
+    const result=await run(ctx);
+    console.log('['+name+' ticket]',ctx.slotKey,result.reason??'booked','tickets='+result.ticketsSent);
     return result;
   }});
-const rolloverScheduler=createWatScheduler({name:'Virtual Roll Over',times:virtualRollOver.TIMES,runJob:rolloverJob,
+  const scheduler=createWatScheduler({name,times:virtualRollOver.TIMES,runJob,enabled,configured,
+    catchupMinutes:3,maxRunMilliseconds:120000});
+  let timer,busy=false;
+  return {status:()=>scheduler.status(),start(){
+    scheduler.start();
+    if(!scheduler.status().running||timer)return;
+    timer=setInterval(async()=>{
+      if(busy||!scheduler.status().running)return;
+      busy=true;
+      try{
+        const redis=await getRedis();
+        if(!redis)return;
+        const {pending}=await virtualRollOver.stateOf(redis,lane);
+        if(!pending?.legs.some(leg=>Date.parse(leg.kickoffUtc)<=Date.now()))return;
+        const result=await run({redis,pendingCode:pending.code,slotKey:'settled:'+pending.code,
+          dateKey:watParts().date,signal:AbortSignal.timeout(60000),shouldAbort:()=>!scheduler.status().running});
+        if(!['awaiting_settlement','pending_changed','rollover_busy'].includes(result.reason))
+          console.log('['+name+' ticket]',pending.code,result.reason??'booked','tickets='+result.ticketsSent);
+      }catch(error){console.warn('['+name+' result check]',error.message);}
+      finally{busy=false;}
+    },20000);
+    timer.unref?.();
+  },stop(){scheduler.stop();clearInterval(timer);timer=null;}};
+}
+const rolloverScheduler=createRolloverChain({name:'Virtual Roll Over',namespace:'virtual-rollover:schedule',
   enabled:process.env.VIRTUAL_ROLLOVER_ENABLED==='true',
   configured:Boolean(process.env.REDIS_URL&&process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),
-  catchupMinutes:3,maxRunMilliseconds:120000});
-// Advance the chain after a confirmed result; the scheduler can start or resume it.
-let rolloverResultTimer=null,rolloverResultCheckBusy=false;
-function startRolloverResultWatcher(){
-  if(!rolloverScheduler.status().running||rolloverResultTimer)return;
-  rolloverResultTimer=setInterval(async()=>{
-    if(rolloverResultCheckBusy||!rolloverScheduler.status().running)return;
-    rolloverResultCheckBusy=true;
-    try{
-      const redis=await getRedis();
-      if(!redis)return;
-      const {pending}=await virtualRollOver.stateOf(redis);
-      if(!pending?.legs.some(leg=>Date.parse(leg.kickoffUtc)<=Date.now()))return;
-      const signal=AbortSignal.timeout(60000),{date:dateKey}=watParts();
-      const result=await withPublicSportyRequest(()=>virtualRollOver.run({
-        redis,pendingCode:pending.code,slotKey:'settled:'+pending.code,dateKey,signal,
-        shouldAbort:()=>!rolloverScheduler.status().running
-      },{
-        book:legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true}),
-        send:text=>sendTelegramMessage(text,{}, {signal})
-      }),{signal});
-      if(!['awaiting_settlement','pending_changed','rollover_busy'].includes(result.reason))console.log('[Virtual Roll Over ticket]',pending.code,result.reason??'sent','tickets='+result.ticketsSent);
-    }catch(error){console.warn('[Virtual Roll Over result check]',error.message);}
-    finally{rolloverResultCheckBusy=false;}
-  },20000);
-  rolloverResultTimer.unref?.();
-}
+  notify:rolloverTelegram});
+const rolloverRdpScheduler=createRolloverChain({name:'RDP Virtual Roll Over',namespace:'virtual-rollover:rdp:schedule',
+  lane:virtualRollOver.RDP,enabled:process.env.VIRTUAL_ROLLOVER_RDP_ENABLED==='true',
+  configured:Boolean(process.env.REDIS_URL&&process.env.ROLLOVER_WORKER_TOKEN?.length>=32),
+  notify:rolloverRdpLog});
 async function virtualRollOverStatus(){
   const schedule=rolloverScheduler.status();
   if(!schedule.enabled||!schedule.configured)return 'ROLL OVER · VIRTUAL FOOTBALL\nScheduled picks are not active.';
@@ -4213,6 +4221,33 @@ async function virtualRollOverStatus(){
   const state=await virtualRollOver.stateOf(redis);
   return virtualRollOver.summary({...state,count:state.day===watParts().date?state.count:0});
 }
+// Read-only input for the private cloud dry-run worker.
+app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
+  res.set('Cache-Control','no-store');
+  const worker=require('./lib/rolloverWorkerQuote');
+  if(!worker.authorized(req.get('authorization'),process.env.ROLLOVER_WORKER_TOKEN))return res.status(401).json({error:'unauthorized'});
+  try{
+    if(!rolloverRdpScheduler.status().running)return res.json({status:'rdp_rollover_disabled'});
+    const lane=virtualRollOver.RDP;
+    const redis=await getRedis();
+    if(!redis)return res.status(503).json({error:'storage unavailable'});
+    const {pending}=await virtualRollOver.stateOf(redis,lane);
+    if(!pending)return res.json({status:'no_pending_ticket'});
+    const {code,stake,legs}=pending;
+    if(!/^[A-Z0-9]{4,32}$/i.test(code)||!Number.isSafeInteger(stake)||stake<=0||!Array.isArray(legs)||legs.length<1||legs.length>lane.maxLegs)
+      return res.json({status:'invalid_pending_ticket'});
+    const info={code,stakeKobo:stake,legs:legs.map(({home,away,pick,kickoffUtc})=>({home,away,pick,kickoffUtc}))};
+    if(req.query.quote!==code)return res.json({status:'pending',...info});
+    if(legs.some(x=>!(Date.parse(x.kickoffUtc)>Date.now()+20000)))return res.json({status:'closed_or_near_kickoff',...info});
+    const decoded=await withPublicSportyRequest(async()=>extractBookingOutcomes(await getBooking(code,{fresh:true})).map(normalizeBookingLeg),{signal:AbortSignal.timeout(12000)});
+    if((await virtualRollOver.stateOf(redis,lane)).pending?.code!==code)return res.json({status:'ticket_changed'});
+    return res.json({...info,...worker.compare(pending,decoded,analyzerSpecifier,Date.now(),lane)});
+  }catch(err){
+    console.warn('[Roll Over worker] Read failed:',err.code??err.name);
+    return res.status(502).json({error:'Roll Over quote unavailable'});
+  }
+});
+
 app.get('/api/sportybet/virtual-rollover',async(_req,res)=>{
   res.set('Cache-Control','no-store');
   try{res.json({summary:await virtualRollOverStatus()});}
@@ -4248,10 +4283,10 @@ app.post('/api/telegram/virtual-rollover-test',express.json(),async(req,res)=>{
 
 const httpServer=app.listen(PORT, () => {
   console.log(`Matchday site listening on :${PORT}`);
-  publicCacheScheduler.start();floorScheduler.start();threeSafeScheduler.start();rolloverScheduler.start();startRolloverResultWatcher();
+  publicCacheScheduler.start();floorScheduler.start();threeSafeScheduler.start();rolloverScheduler.start();rolloverRdpScheduler.start();
   console.log(`[SportyBet access] Public data reads; booking mode=${sportyDirect.sessionStatus().bookingMode}`);
 });
-const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();threeSafeScheduler.stop();rolloverScheduler.stop();clearInterval(rolloverResultTimer);};
+const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();threeSafeScheduler.stop();rolloverScheduler.stop();rolloverRdpScheduler.stop();};
 httpServer.once('close',stopSchedulers);
 process.once('SIGTERM',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});
 process.once('SIGINT',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});
