@@ -4175,6 +4175,33 @@ const rolloverScheduler=createWatScheduler({name:'Virtual Roll Over',times:virtu
   enabled:process.env.VIRTUAL_ROLLOVER_ENABLED==='true',
   configured:Boolean(process.env.REDIS_URL&&process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID),
   catchupMinutes:3,maxRunMilliseconds:120000});
+// The half-hour scheduler still starts new chains; this watcher advances
+// an existing ticket as soon as the provider confirms all its results.
+let rolloverResultTimer=null,rolloverResultCheckBusy=false;
+function startRolloverResultWatcher(){
+  if(!rolloverScheduler.status().running||rolloverResultTimer)return;
+  rolloverResultTimer=setInterval(async()=>{
+    if(rolloverResultCheckBusy||!rolloverScheduler.status().running)return;
+    rolloverResultCheckBusy=true;
+    try{
+      const redis=await getRedis();
+      if(!redis)return;
+      const {pending}=await virtualRollOver.stateOf(redis);
+      if(!pending?.legs.some(leg=>Date.parse(leg.kickoffUtc)<=Date.now()))return;
+      const signal=AbortSignal.timeout(60000),{date:dateKey}=watParts();
+      const result=await withPublicSportyRequest(()=>virtualRollOver.run({
+        redis,pendingCode:pending.code,slotKey:'settled:'+pending.code,dateKey,signal,
+        shouldAbort:()=>!rolloverScheduler.status().running
+      },{
+        book:legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true}),
+        send:text=>sendTelegramMessage(text,{}, {signal})
+      }),{signal});
+      if(result.ticketsSent)console.log('[Virtual Roll Over] Continued after settling',pending.code);
+    }catch(error){console.warn('[Virtual Roll Over result check]',error.message);}
+    finally{rolloverResultCheckBusy=false;}
+  },20000);
+  rolloverResultTimer.unref?.();
+}
 async function virtualRollOverStatus(){
   const schedule=rolloverScheduler.status();
   if(!schedule.enabled||!schedule.configured)return 'ROLL OVER · VIRTUAL FOOTBALL\nScheduled picks are not active.';
@@ -4218,10 +4245,10 @@ app.post('/api/telegram/virtual-rollover-test',express.json(),async(req,res)=>{
 
 const httpServer=app.listen(PORT, () => {
   console.log(`Matchday site listening on :${PORT}`);
-  publicCacheScheduler.start();floorScheduler.start();threeSafeScheduler.start();rolloverScheduler.start();
+  publicCacheScheduler.start();floorScheduler.start();threeSafeScheduler.start();rolloverScheduler.start();startRolloverResultWatcher();
   console.log(`[SportyBet access] Public data reads; booking mode=${sportyDirect.sessionStatus().bookingMode}`);
 });
-const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();threeSafeScheduler.stop();rolloverScheduler.stop();};
+const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();threeSafeScheduler.stop();rolloverScheduler.stop();clearInterval(rolloverResultTimer);};
 httpServer.once('close',stopSchedulers);
 process.once('SIGTERM',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});
 process.once('SIGINT',()=>{stopSchedulers();httpServer.close(()=>process.exit(0));});

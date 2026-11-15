@@ -13,12 +13,12 @@ test('scheduled Roll Over waits for a confirmed score, then rolls the win and re
     {id:'18',specifier:'total=4.5',status:0,outcomes:[{id:'13',desc:'Under 4.5',odds:1.2,isActive:1}]},
     {id:'1',status:0,outcomes:[{id:'1',desc:'Home',odds:1.22,isActive:1}]}
   ]}]}};},
-  fetchEventDetail:async eventId=>({data:{...active(),eventId}})
+  fetchEventDetail:async eventId=>({data:{...active(),eventId,...(eventId!==id?{matchStatus:'FT',score:'1:0'}:{})}})
  };
  const state=roll.freshState();
  for(let i=0;i<5;i++)state.history.push({eventId:'sr:match:'+(500+i),league:'777',home:'V A',away:'V B',h:1,a:1,verifiedAt:now-3600000-i});
  await redis.set('virtual-rollover:v1',JSON.stringify(state));
- const run=slotKey=>roll.run({redis,slotKey,dateKey:'2026-11-15'},{client,clock:()=>now,book:async legs=>{
+ const run=(slotKey,pendingCode)=>roll.run({redis,slotKey,pendingCode,dateKey:'2026-11-15'},{client,clock:()=>now,book:async legs=>{
   assert.equal(legs.length,1);assert.equal(legs[0].specifier,'total=4.5');books++;return {shareCode:'CODE'+books};
  },send:async x=>messages.push(x)});
  const saved=await redis.get('virtual-rollover:v1');
@@ -31,12 +31,21 @@ test('scheduled Roll Over waits for a confirmed score, then rolls the win and re
  assert.equal((await run('00:00')).ticketsSent,1);
  assert.equal((await run('00:30')).reason,'awaiting_settlement');
  assert.equal(books,1);
- mode='FT';score='1:0';now=kickoff+600000;
- await run('01:00');
- assert.equal((await roll.stateOf(redis)).balance,300000);
- assert.match(messages.at(-1),/WON/);
- id='sr:match:99902';kickoff=now+120000;mode='NS';
- assert.equal((await run('01:30')).ticketsSent,1);
+ mode='live';now=kickoff+20000;
+ assert.equal((await run('settled:CODE1','CODE1')).reason,'awaiting_settlement');
+ const observed=(await roll.stateOf(redis)).pending.timings[id];
+ assert.equal(observed.kickoffUtc,new Date(kickoff).toISOString());
+ assert.equal(observed.startedObservedAt,new Date(now).toISOString());
+ const old=id;
+ now+=20000;id='sr:match:99902';kickoff=now+120000;mode='NS';
+ assert.equal((await run('settled:CODE1','CODE1')).ticketsSent,1);
+ const advanced=await roll.stateOf(redis);
+ assert.equal(advanced.balance,300000);
+ assert.equal(advanced.pending.stake,300000);
+ assert.equal(advanced.last.timings[old].finishedObservedAt,new Date(now).toISOString());
+ assert.match(messages.at(-2),/WON/);
+ assert.equal((await run('settled:CODE1','CODE1')).reason,'pending_changed');
+ assert.equal(books,2);
  mode='FT';score='3:2';now=kickoff+600000;
  await run('02:00');
  assert.equal((await roll.stateOf(redis)).balance,250000);
