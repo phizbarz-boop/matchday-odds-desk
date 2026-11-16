@@ -167,18 +167,26 @@ async function clearSavedBetslip(page){
  const heading=page.getByText(/^Betslip(?:\s*\d+)?$/i).filter({visible:true});
  await heading.first().waitFor({state:'visible',timeout:5000});
  const remove=page.getByText('Remove All',{exact:true}).filter({visible:true});
+ const loading=page.locator('.m-betslips-loading:visible');
  let clicked=false,emptyReads=0;
- for(let i=0;i<12;i++){
+ const deadline=Date.now()+15000;
+ while(Date.now()<deadline){
   if(stopped)return false;
+  if(await loading.count()){
+   emptyReads=0;
+   await delay(500);
+   continue;
+  }
   const count=await remove.count();
   if(count>1)return false;
-  // A saved slip must disappear. If a confirmation or unfamiliar layout
-  // leaves it in place, stop instead of guessing at another control.
   if(count===1&&!clicked){
-   await remove.click({timeout:2000});
+   // The overlay can reappear between the check and click. Let Playwright
+   // wait for a normal, actionable click; never force it through.
+   try{await remove.click({timeout:Math.max(1,deadline-Date.now())});}
+   catch(error){if(error.name==='TimeoutError')return false;throw error;}
    clicked=true;
    emptyReads=0;
-  }else if(count===0&&!(await readSlip(page))){
+  }else if(count===0&&!(await readSlip(page))&&!(await loading.count())){
    if(++emptyReads===4)return true;
   }else emptyReads=0;
   await delay(500);
