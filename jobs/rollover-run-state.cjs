@@ -2,8 +2,8 @@
 
 // State transitions only. The caller must persist state and supply verified
 // SportyBet receipts and actual credited payouts, never estimated returns.
-const RULES=Object.freeze({openingStakeKobo:500000,targetTicketWins:20,maxDailyResets:3,minOdds:1.50,maxOdds:1.55,maxLegOdds:1.28,maxLegs:4,
- markets:Object.freeze(['Over 0.5','Over 1.5','Under 4.5','Under 5.5']),timeZone:'Africa/Lagos'});
+const RULES=Object.freeze({openingStakeKobo:250000,targetTicketWins:20,maxDailyResets:3,minOdds:1.50,maxOdds:1.55,maxLegOdds:1.29,maxLegs:4,
+ markets:Object.freeze(['Over 0.5','Under 4.5','Under 5.5']),timeZone:'Africa/Lagos'});
 const dateFormat=new Intl.DateTimeFormat('en-CA',{timeZone:RULES.timeZone,year:'numeric',month:'2-digit',day:'2-digit'});
 const dayOf=now=>dateFormat.format(new Date(now));
 const money=value=>Number.isSafeInteger(value)&&value>=0;

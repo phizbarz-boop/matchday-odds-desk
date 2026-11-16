@@ -525,12 +525,13 @@ async function autoLoop(){
  try{ledger=JSON.parse(await readFile(ledgerPath,'utf8'));}
  catch(error){if(error.code!=='ENOENT')throw error;ledger={state:rules.initial(),attempt:null,lastCode:null,usedCodes:[]};}
  if(!ledger.attempt&&!ledger.state.pending&&!ledger.state.awaitingReset&&
-    ledger.state.wins===0&&ledger.state.runOpeningStakeKobo==null&&ledger.state.stakeKobo===200000){
+    ledger.state.wins===0&&((ledger.state.runOpeningStakeKobo==null&&ledger.state.stakeKobo===200000)||
+    (ledger.state.runOpeningStakeKobo===500000&&ledger.state.stakeKobo===500000))){
   ledger.state.stakeKobo=RULES.openingStakeKobo;
   ledger.state.runOpeningStakeKobo=RULES.openingStakeKobo;
   await saveLedger(ledger);
  }
- console.log('Automatic rollover armed · ₦5,000 start · 20 ticket wins · four total WAT runs. Real wagers enabled.');
+ console.log('Automatic rollover armed · ₦2,500 start · 20 ticket wins · four total WAT runs. Real wagers enabled.');
  while(!stopped){
   try{
   ledger.state=rules.refresh(ledger.state);
