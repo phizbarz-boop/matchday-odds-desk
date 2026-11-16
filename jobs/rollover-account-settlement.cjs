@@ -30,14 +30,22 @@ function decodeAccountSettlement(body,pending,finalResults=[]){
  if(order.isSettled!==1||!Array.isArray(order.selections)||!order.selections.length||
     !order.selections.every(row=>row?.isSettled===1))
   return result('unverified','account_settlement_flags_unverified');
- if(order.isUseGift!==false||order.paymentType!==0||order.longTaxAmount!==0||
-    decimalKobo(order.taxAmount)!==0||!Array.isArray(order.cashOutHistorys)||order.cashOutHistorys.length)
-  return result('unverified','gift_tax_or_cashout_requires_reconciliation');
  const payoutKobo=orderAmountKobo(order.winnings);
  const combo=Array.isArray(order.combinations)&&order.combinations.length===1?order.combinations[0]:null;
  if(!combo||decimalKobo(combo.stake)!==pending.stakeKobo||
     payoutKobo===null||decimalKobo(combo.winnings)!==payoutKobo)
   return result('unverified','account_payout_mismatch');
+ // Some zero-return tickets omit optional tax and cash-out fields.
+ // Keep the strict checks for paid returns and reject explicit adjustments.
+ const optionalZero=(value,isZero)=>value==null||isZero(value);
+ const zeroReturnAdjustmentsOk=(order.isUseGift==null||order.isUseGift===false)&&order.paymentType===0&&
+  optionalZero(order.longTaxAmount,v=>v===0||v==='0')&&
+  optionalZero(order.taxAmount,v=>v===0||v==='0'||decimalKobo(v)===0)&&
+  optionalZero(order.cashOutHistorys,v=>Array.isArray(v)&&v.length===0);
+ if(payoutKobo===0?!zeroReturnAdjustmentsOk:
+    (order.isUseGift!==false||order.paymentType!==0||order.longTaxAmount!==0||
+     decimalKobo(order.taxAmount)!==0||!Array.isArray(order.cashOutHistorys)||order.cashOutHistorys.length))
+  return result('unverified','gift_tax_or_cashout_requires_reconciliation');
  if(payoutKobo===0){
   // Independent official results, keyed by event ID. A conflicting or
   // duplicate result is not evidence. Never infer a loss from odds alone.
