@@ -160,12 +160,38 @@ async function attemptLive(page,code,quote){
   throw Error('Submission outcome unknown. Check SportyBet Bet History. Do not retry.');
  }
 }
+async function clearSavedBetslip(page){
+ const response=await page.goto(sportyHome,{waitUntil:'domcontentloaded',timeout:20000});
+ const url=new URL(page.url());
+ if(!response?.ok()||url.protocol!=='https:'||!['www.sportybet.com','sportybet.com'].includes(url.hostname))return false;
+ const heading=page.getByText(/^Betslip(?:\s*\d+)?$/i).filter({visible:true});
+ await heading.first().waitFor({state:'visible',timeout:5000});
+ const remove=page.getByText('Remove All',{exact:true}).filter({visible:true});
+ let clicked=false,emptyReads=0;
+ for(let i=0;i<12;i++){
+  if(stopped)return false;
+  const count=await remove.count();
+  if(count>1)return false;
+  // A saved slip must disappear. If a confirmation or unfamiliar layout
+  // leaves it in place, stop instead of guessing at another control.
+  if(count===1&&!clicked){
+   await remove.click({timeout:2000});
+   clicked=true;
+   emptyReads=0;
+  }else if(count===0&&!(await readSlip(page))){
+   if(++emptyReads===4)return true;
+  }else emptyReads=0;
+  await delay(500);
+ }
+ return false;
+}
 async function inspect(code,quote){
  if(!review)browser??=await chromium.launch({headless:true});
  const ctx=review?profileContext:await browser.newContext();
  let page;
  try{
   page=await ctx.newPage();
+  if(review&&!await clearSavedBetslip(page))return 'browser_cart_not_empty_or_unverified';
   const link=new URL(sportyHome);
   link.searchParams.set('shareCode',code);
   const response=await page.goto(link.href,{waitUntil:'domcontentloaded',timeout:20000});
