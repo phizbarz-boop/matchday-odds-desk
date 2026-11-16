@@ -2,21 +2,21 @@
 
 // State transitions only. The caller must persist state and supply verified
 // SportyBet receipts and actual credited payouts, never estimated returns.
-const RULES=Object.freeze({openingStakeKobo:200000,targetTicketWins:20,maxDailyResets:5,
- markets:Object.freeze(['Over 0.5','Under 4.5']),timeZone:'Africa/Lagos'});
+const RULES=Object.freeze({openingStakeKobo:500000,targetTicketWins:20,maxDailyResets:3,minOdds:1.50,maxOdds:1.55,maxLegs:4,
+ markets:Object.freeze(['Over 0.5','Over 1.5','Under 4.5','Under 5.5']),timeZone:'Africa/Lagos'});
 const dateFormat=new Intl.DateTimeFormat('en-CA',{timeZone:RULES.timeZone,year:'numeric',month:'2-digit',day:'2-digit'});
 const dayOf=now=>dateFormat.format(new Date(now));
 const money=value=>Number.isSafeInteger(value)&&value>=0;
 function initial(now=Date.now()){
  return {day:dayOf(now),resets:0,wins:0,stakeKobo:RULES.openingStakeKobo,netKobo:0,
-  run:1,awaitingReset:false,pending:null,lastSettled:null};
+  run:1,runOpeningStakeKobo:RULES.openingStakeKobo,awaitingReset:false,pending:null,lastSettled:null};
 }
 function refresh(state,now=Date.now()){
  const day=dayOf(now);
  const next={...state};
  if(next.day!==day)Object.assign(next,{day,resets:0,netKobo:0});
  if(next.awaitingReset&&day!==state.day)Object.assign(next,{awaitingReset:false,
-  wins:0,stakeKobo:RULES.openingStakeKobo,run:next.run+1});
+  wins:0,stakeKobo:RULES.openingStakeKobo,runOpeningStakeKobo:RULES.openingStakeKobo,run:next.run+1});
  return next;
 }
 function acceptReceipt(state,ticket,now=Date.now()){
@@ -41,11 +41,11 @@ function settle(state,result,now=Date.now()){
  const completed=next.wins===RULES.targetTicketWins;
  const runEnded=completed||status==='lost';
  next.lastSettled={id:result.id,status,stakeKobo,payoutKobo,profitKobo,ticketWins:next.wins,run:next.run,
-  runNetKobo:runEnded?payoutKobo-RULES.openingStakeKobo:null,endReason:completed?'target_reached':status==='lost'?'lost':null};
+  runNetKobo:runEnded?payoutKobo-(next.runOpeningStakeKobo??200000):null,endReason:completed?'target_reached':status==='lost'?'lost':null};
  next.stakeKobo=payoutKobo;
  if(runEnded){
   if(next.resets>=RULES.maxDailyResets)next.awaitingReset=true;
-  else Object.assign(next,{resets:next.resets+1,wins:0,run:next.run+1,stakeKobo:RULES.openingStakeKobo});
+  else Object.assign(next,{resets:next.resets+1,wins:0,run:next.run+1,stakeKobo:RULES.openingStakeKobo,runOpeningStakeKobo:RULES.openingStakeKobo});
  }
  return next;
 }

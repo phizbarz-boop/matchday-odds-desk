@@ -1,6 +1,8 @@
 'use strict';
 // Default and profile review modes never submit. The explicitly armed test attempts one wager.
 const {chromium}=require('playwright');
+const {RULES}=require('./rollover-run-state.cjs');
+const validRolloverOdds=odds=>Number.isFinite(odds)&&odds>=RULES.minOdds-1e-9&&odds<=RULES.maxOdds+1e-9;
 const {homedir}=require('node:os');
 const {join}=require('node:path');
 const {mkdir,open,access,readFile,rename,stat}=require('node:fs/promises');
@@ -139,7 +141,7 @@ function verifySlip(text,quote,now=Date.now()){
  const block=slip.match(/\bremove all\b(.*?)\btype\s+no\./)?.[1];
  const displayed=slip.match(/\bodds\s+(\d+\.\d+)\s+total stake\b/)?.[1];
  if(!block||!displayed)return 'browser_slip_not_confirmed';
- if(!Array.isArray(quote.legs)||quote.legs.length<1||quote.legs.length>4||
+ if(!Array.isArray(quote.legs)||quote.legs.length<1||quote.legs.length>RULES.maxLegs||
     !quote.legs.every(leg=>Date.parse(leg.kickoffUtc)>now+20000))return 'browser_slip_closed_or_near_kickoff';
  const rows=[...block.matchAll(/\b(over|under)\s+(\d+\.\d+)\b(.*?)\bo\s*\/\s*u\b/g)].map(m=>({
   pick:m[1]+' '+m[2],match:normalized(m[3]).replace(/\s+(?:vs?\.?|–|—)\s+/g,' v ')
@@ -147,6 +149,7 @@ function verifySlip(text,quote,now=Date.now()){
  if(rows.length!==quote.legs.length)return 'browser_slip_selection_mismatch';
  for(const leg of quote.legs){
   const pick=normalized(leg.pick).replace(/ goals$/,'');
+  if(!RULES.markets.some(m=>normalized(m)===pick))return 'browser_rollover_market_not_allowed';
   const match=normalized(leg.home)+' v '+normalized(leg.away);
   const i=rows.findIndex(row=>row.pick===pick&&(' '+row.match+' ').includes(' '+match+' '));
   if(i<0)return 'browser_slip_selection_mismatch';
@@ -405,7 +408,7 @@ async function inspect(code,quote,kobo,beforeClick){
 async function tick(){
  if(externalCode){
   const quote=await request(externalCode);
-  if(quote.status!=='quote_matches'||quote.code!==externalCode||!(quote.odds>=1.30&&quote.odds<=1.50)){
+  if(quote.status!=='quote_matches'||quote.code!==externalCode||!validRolloverOdds(quote.odds)){
    console.log('No submission attempted:',externalCode,quote.status);return;
   }
   const status=await inspect(externalCode,quote);
@@ -423,7 +426,7 @@ async function tick(){
  if(quote.status!=='quote_matches'){
   console.log('DRY RUN: skipped',ticket.code,quote.status);last=ticket.code;return;
  }
- if(liveTest&&(quote.code!==ticket.code||!(quote.odds>=1.30&&quote.odds<=1.50)))throw Error('No submission attempted: invalid RDP quote');
+ if(liveTest&&(quote.code!==ticket.code||!validRolloverOdds(quote.odds)))throw Error('No submission attempted: invalid RDP quote');
  const status=await inspect(ticket.code,quote);
  if(liveTest){console.log('ONE-SHOT:',ticket.code,quote.odds+'x','₦1,000',status);return;}
  console.log('DRY RUN:',ticket.code,quote.odds+'x','₦'+(ticket.stakeKobo/100).toFixed(2),status);
@@ -521,7 +524,13 @@ async function autoLoop(){
  let ledger;
  try{ledger=JSON.parse(await readFile(ledgerPath,'utf8'));}
  catch(error){if(error.code!=='ENOENT')throw error;ledger={state:rules.initial(),attempt:null,lastCode:null,usedCodes:[]};}
- console.log('Automatic rollover armed · ₦2,000 start · 20 ticket wins · five WAT resets. Real wagers enabled.');
+ if(!ledger.attempt&&!ledger.state.pending&&!ledger.state.awaitingReset&&
+    ledger.state.wins===0&&ledger.state.runOpeningStakeKobo==null&&ledger.state.stakeKobo===200000){
+  ledger.state.stakeKobo=RULES.openingStakeKobo;
+  ledger.state.runOpeningStakeKobo=RULES.openingStakeKobo;
+  await saveLedger(ledger);
+ }
+ console.log('Automatic rollover armed · ₦5,000 start · 20 ticket wins · four total WAT runs. Real wagers enabled.');
  while(!stopped){
   try{
   ledger.state=rules.refresh(ledger.state);
@@ -542,15 +551,16 @@ async function autoLoop(){
     ledger.attempt=null;
     await saveLedger(ledger);
     console.log(result.settlement.status.toUpperCase(),'return ₦'+decimal(result.settlement.payoutKobo),
-      'next ₦'+decimal(ledger.state.stakeKobo),ledger.state.wins+'/20 wins',ledger.state.resets+'/5 resets');
+      'next ₦'+decimal(ledger.state.stakeKobo),ledger.state.wins+'/20 wins',(ledger.state.resets+1)+'/4 runs');
+    if(!stopped&&!ledger.state.awaitingReset)continue;
    }else if(result.state!=='pending'){
     console.error('AUTO: waiting for verified account settlement:',result.reason);
    }
-  }else if(!ledger.state.awaitingReset){
+  }else if(!ledger.state.awaitingReset&&ledger.state.resets<=RULES.maxDailyResets){
    const ticket=await request();
    if(ticket.status==='pending'&&/^[A-Z0-9]{4,32}$/i.test(ticket.code)&&!(ledger.usedCodes||[]).includes(ticket.code)&&ticket.code!==last){
     const quote=await request(ticket.code);
-    if(quote.status==='quote_matches'&&quote.code===ticket.code&&quote.odds>=1.30&&quote.odds<=1.50&&
+    if(quote.status==='quote_matches'&&quote.code===ticket.code&&validRolloverOdds(quote.odds)&&
        quote.legs.every(leg=>typeof leg.eventId==='string'&&leg.marketId==='18'&&typeof leg.specifier==='string')){
      const kobo=ledger.state.stakeKobo;
      let receipt;

@@ -72,7 +72,9 @@ function hasVerifiedLosingSelection(selections,finalResults){
   if(!Number.isSafeInteger(total))return false;
   const key=leg.specifier+':'+leg.outcomeId;
   if(key==='total=0.5:12')return total===0;
+  if(key==='total=1.5:12')return total<=1;
   if(key==='total=4.5:13')return total>=5;
+  if(key==='total=5.5:13')return total>=6;
   return false;
  });
 }

@@ -4234,7 +4234,7 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
       if(!/^[A-Z0-9]{4,32}$/.test(code))return res.status(400).json({status:'invalid_external_code'});
       const rows=await withPublicSportyRequest(async()=>extractBookingOutcomes(await getBooking(code,{fresh:true})).map(normalizeBookingLeg),{signal:AbortSignal.timeout(12000)});
       if(rows.length<1||rows.length>lane.maxLegs)return res.json({code,status:'selection_count_out_of_range'});
-      const markets={'12:total=0.5':'Over 0.5 Goals','13:total=4.5':'Under 4.5 Goals'};
+      const markets={'12:total=0.5':'Over 0.5 Goals','12:total=1.5':'Over 1.5 Goals','13:total=4.5':'Under 4.5 Goals','13:total=5.5':'Under 5.5 Goals'};
       const seen=new Set();
       for(const r of rows){
         if(!/^(vfootball|virtual\s*football)$/i.test(r.sport.trim())||!/^sr:match:\d+$/.test(r.eventId)||seen.has(r.eventId)||
