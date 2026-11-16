@@ -96,9 +96,36 @@ async function attemptLive(page,code,quote){
  const slip=await readSlip(page,true);
  if(verifySlip(slip,quote)!=='browser_slip_verified')stop('slip could not be verified');
  const scope=page.locator('[data-matchday-test-slip="yes"]');
- const stake=scope.locator('input:visible:not([readonly]):not([disabled]):is(:not([type]),[type="text"],[type="number"],[type="tel"])');
- const submit=scope.getByRole('button',{name:'Place Bet',exact:true});
- if(await stake.count()!==1||await submit.count()!==1)stop('stake input or Place Bet button is missing or ambiguous');
+ const fieldStatus=await scope.evaluate(el=>{
+  const visible=node=>node.getClientRects().length>0&&getComputedStyle(node).visibility==='visible';
+  const fields=root=>[...root.querySelectorAll('input')].filter(input=>
+   visible(input)&&!input.readOnly&&!input.matches(':disabled')&&['text','number','tel','search'].includes(input.type));
+  const inputs=fields(el);
+  const headers=[...el.querySelectorAll('*')].filter(node=>visible(node)&&
+   /^stake\s*\(\s*ngn\s*\)$/i.test(node.innerText?.trim())&&
+   ![...node.children].some(child=>/^stake\s*\(\s*ngn\s*\)$/i.test(child.innerText?.trim())));
+  const candidates=new Set();
+  for(const header of headers){
+   for(let parent=header.parentElement;parent&&parent!==el;parent=parent.parentElement){
+    const found=fields(parent);
+    if(!found.length)continue;
+    if(found.length===1)candidates.add(found[0]);
+    break;
+   }
+  }
+  for(const input of inputs)input.removeAttribute('data-matchday-stake');
+  if(candidates.size===1)[...candidates][0].setAttribute('data-matchday-stake','yes');
+  else if(!candidates.size&&inputs.length===1)inputs[0].setAttribute('data-matchday-stake','yes');
+  return {inputs:inputs.length,headerMatches:headers.length};
+ },undefined,{timeout:2000});
+ const stake=scope.locator('input[data-matchday-stake="yes"]:visible');
+ const roleButton=scope.getByRole('button',{name:'Place Bet',exact:true}).filter({visible:true});
+ const textButton=scope.getByText('Place Bet',{exact:true}).filter({visible:true});
+ const roleCount=await roleButton.count();
+ const submit=roleCount===0?textButton:roleButton;
+ const submitCount=await submit.count();
+ if(await stake.count()!==1||submitCount!==1)
+  stop('could not resolve controls (editable inputs: '+fieldStatus.inputs+', stake headers: '+fieldStatus.headerMatches+', Place Bet matches: '+submitCount+')');
  await stake.fill('1000',{timeout:2000});
  await stake.press('Tab',{timeout:2000});
  await submit.click({trial:true,timeout:2000});
