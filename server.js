@@ -4261,6 +4261,22 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
     return res.status(502).json({error:'Roll Over quote unavailable'});
   }
 });
+// The authenticated RDP worker acknowledges a verified account loss once.
+app.post('/api/sportybet/virtual-rollover/worker/loss-reset',express.json({limit:'2kb'}),async(req,res)=>{
+  res.set('Cache-Control','no-store');
+  const worker=require('./lib/rolloverWorkerQuote');
+  if(!worker.authorized(req.get('authorization'),process.env.ROLLOVER_WORKER_TOKEN))return res.status(401).json({error:'unauthorized'});
+  const {orderId,dateKey}=req.body||{};
+  if(typeof orderId!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(orderId)||typeof dateKey!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(dateKey))
+    return res.status(400).json({status:'invalid_loss_reset'});
+  if(dateKey!==watParts().date)return res.json({status:'different_day'});
+  try{
+    const redis=await getRedis();
+    if(!redis)return res.status(503).json({error:'storage unavailable'});
+    const result=await virtualRollOver.resetRdpCodeCount(redis,{orderId,dateKey});
+    return res.status(result.status==='busy'?503:200).json(result);
+  }catch{return res.status(503).json({status:'loss_reset_unavailable'});}
+});
 // Independent final scores for an already placed RDP ticket.
 app.post('/api/sportybet/virtual-rollover/worker/scores',express.json({limit:'8kb'}),async(req,res)=>{
   res.set('Cache-Control','no-store');

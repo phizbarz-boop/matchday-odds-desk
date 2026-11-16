@@ -105,16 +105,17 @@ const url=new URL('/api/sportybet/virtual-rollover/worker',base);
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 let stopped=false,browser,profileContext,last=null;
 for(const sig of ['SIGINT','SIGTERM'])process.once(sig,()=>{stopped=true;});
-async function request(code,results=false){
- const readStep=results?'final-score lookup':externalCode?'external-code verification':code?'latest-code quote verification':'latest-code lookup';
+async function request(code,results=false,lossReset=false){
+ const readStep=lossReset?'loss code allowance reset':results?'final-score lookup':externalCode?'external-code verification':code?'latest-code quote verification':'latest-code lookup';
  const u=new URL(url);
- if(results)u.pathname+='/scores';
+ if(lossReset)u.pathname+='/loss-reset';
+ else if(results)u.pathname+='/scores';
  else if(externalCode)u.searchParams.set('external',externalCode);
  else if(code)u.searchParams.set('quote',code);
  const signal=AbortSignal.timeout(20000);
  try{
-  const r=await fetch(u,{...(results?{method:'POST',body:JSON.stringify({legs:code})}:{}),
-   headers:{Authorization:'Bearer '+token,...(results?{'Content-Type':'application/json'}:{})},redirect:'error',signal});
+  const r=await fetch(u,{...(results||lossReset?{method:'POST',body:JSON.stringify(lossReset?code:{legs:code})}:{}),
+   headers:{Authorization:'Bearer '+token,...(results||lossReset?{'Content-Type':'application/json'}:{})},redirect:'error',signal});
   if(r.status===401)throw Object.assign(Error('Worker token rejected'),{fatal:true});
   if(!r.ok){
    let source='';
@@ -539,6 +540,14 @@ async function autoLoop(){
   const previousDay=ledger.state.day;
   ledger.state=rules.refresh(ledger.state);
   if(ledger.state.day!==previousDay){await saveLedger(ledger);lastWait='';}
+  if(ledger.codeAllowanceReset){
+   const acknowledgement=await request(ledger.codeAllowanceReset,false,true);
+   if(!['reset','already_reset','different_day'].includes(acknowledgement?.status))
+    throw Error('Server did not acknowledge the loss code allowance reset.');
+   delete ledger.codeAllowanceReset;
+   await saveLedger(ledger);
+   if(acknowledgement.status!=='different_day')console.log('AUTO: 30-code allowance reset after verified loss.');
+  }
   if(ledger.attempt&&!ledger.state.pending){
    let recovered=false;
    try{recovered=await recoverFromBetHistory(ledger,rules);}
@@ -553,6 +562,8 @@ async function autoLoop(){
    }
    if(result.state==='settled'){
     ledger.state=result.stateAfter;
+    if(result.settlement.status==='lost')
+     ledger.codeAllowanceReset={orderId:result.settlement.id,dateKey:ledger.state.day};
     ledger.attempt=null;
     lastWait='';
     await saveLedger(ledger);
