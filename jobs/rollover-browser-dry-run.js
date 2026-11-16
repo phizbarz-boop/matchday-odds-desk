@@ -6,10 +6,10 @@ const {join}=require('node:path');
 const {mkdir,open,access}=require('node:fs/promises');
 const args=process.argv.slice(2);
 const login=args.length===1&&args[0]==='--login';
-const externalCode=args.length===2&&args[0]==='--submit-one-ngn1000'&&/^[A-Z0-9]{4,32}$/i.test(args[1])?args[1].toUpperCase():null;
-const liveTest=!!externalCode||args.length===1&&args[0]==='--submit-one-ngn1000';
-const review=liveTest||args.length===1&&args[0]==='--review-profile';
-if(args.length&&!login&&!review)throw Error('Use --login, --review-profile, --submit-one-ngn1000, or no option for signed-out dry run');
+const externalCode=args.length===2&&['--submit-one-ngn1000','--review-code'].includes(args[0])&&/^[A-Z0-9]{4,32}$/i.test(args[1])?args[1].toUpperCase():null;
+const liveTest=args[0]==='--submit-one-ngn1000'&&(args.length===1||!!externalCode);
+const review=liveTest||!!externalCode||args.length===1&&args[0]==='--review-profile';
+if(args.length&&!login&&!review)throw Error('Use --login, --review-profile, --review-code CODE, --submit-one-ngn1000 [CODE], or no option');
 const profile=join(process.platform==='win32'&&process.env.LOCALAPPDATA||homedir(),'MatchdayOddsDesk','SportyBetReview');
 const sportyHome='https://www.sportybet.com/ng/';
 async function openProfile(){
@@ -31,7 +31,7 @@ const base=new URL(!login&&process.env.ROLLOVER_APP_URL||'https://matchday-odds-
 if(base.protocol!=='https:'||base.username||base.password)throw Error('Set ROLLOVER_APP_URL to your HTTPS application URL');
 if(!login&&(!token||token.length<32))throw Error('Set the same private ROLLOVER_WORKER_TOKEN on Render and the worker');
 const max=Number(process.env.ROLLOVER_MAX_STAKE_KOBO);
-if(!login&&!liveTest&&(!Number.isSafeInteger(max)||max<=0))throw Error('Set ROLLOVER_MAX_STAKE_KOBO to your test stake ceiling in kobo');
+if(!login&&!liveTest&&!externalCode&&(!Number.isSafeInteger(max)||max<=0))throw Error('Set ROLLOVER_MAX_STAKE_KOBO to your test stake ceiling in kobo');
 const url=new URL('/api/sportybet/virtual-rollover/worker',base);
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 let stopped=false,browser,profileContext,last=null;
@@ -51,7 +51,6 @@ function verifySlip(text,quote,now=Date.now()){
  const block=slip.match(/\bremove all\b(.*?)\btype\s+no\./)?.[1];
  const displayed=slip.match(/\bodds\s+(\d+\.\d+)\s+total stake\b/)?.[1];
  if(!block||!displayed)return 'browser_slip_not_confirmed';
- if(/\blive\b/.test(block))return 'browser_slip_has_live_games';
  if(!Array.isArray(quote.legs)||quote.legs.length<1||quote.legs.length>4||
     !quote.legs.every(leg=>Date.parse(leg.kickoffUtc)>now+20000))return 'browser_slip_closed_or_near_kickoff';
  const rows=[...block.matchAll(/\b(over|under)\s+(\d+\.\d+)\b(.*?)\bo\s*\/\s*u\b/g)].map(m=>({
@@ -63,6 +62,8 @@ function verifySlip(text,quote,now=Date.now()){
   const match=normalized(leg.home)+' v '+normalized(leg.away);
   const i=rows.findIndex(row=>row.pick===pick&&(' '+row.match+' ').includes(' '+match+' '));
   if(i<0)return 'browser_slip_selection_mismatch';
+  const row=rows[i];
+  if(row.match==='live '+match||row.match===match+' live')return 'browser_selection_displays_live_label';
   rows.splice(i,1);
  }
  const scale=10**displayed.split('.')[1].length;
@@ -186,7 +187,9 @@ async function tick(){
    console.log('No submission attempted:',externalCode,quote.status);return;
   }
   const status=await inspect(externalCode,quote);
-  console.log('ONE-SHOT:',externalCode,quote.odds+'x','₦1,000',status);return;
+  if(liveTest)console.log('ONE-SHOT:',externalCode,quote.odds+'x','₦1,000',status);
+  else console.log('REVIEW:',externalCode,quote.odds+'x',status);
+  return;
  }
  const ticket=await request();
  if(ticket.status!=='pending'||ticket.code===last){if(liveTest)console.log('No current pending ticket; nothing submitted.');return;}
@@ -215,7 +218,7 @@ async function tick(){
    profileContext=await openProfile();
    profileContext.once('close',()=>{stopped=true;});
   }
-  if(liveTest){await tick();return;}
+  if(liveTest||externalCode){await tick();return;}
   console.log(review?'Roll Over profile review started. No wagers can be submitted.':'Roll Over dry run started. No wagers can be submitted.');
   while(!stopped){
    try{await tick();}catch(err){if(err.fatal)throw err;console.error('DRY RUN:',err.message);}
