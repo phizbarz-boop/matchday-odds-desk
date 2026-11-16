@@ -365,6 +365,12 @@ async function accountOrder(id){
   return hit?await hit.json():null;
  }finally{await page.close();}
 }
+function historyStakeKobo(value){
+ if(typeof value!=='string'||!/^\d+(?:\.\d{1,2})?$/.test(value))return null;
+ const [whole,fraction='']=value.split('.');
+ const kobo=Number(whole+fraction.padEnd(2,'0'));
+ return Number.isSafeInteger(kobo)?kobo:null;
+}
 function matchHistoryOrder(body,attempt,time){
  if(body?.bizCode!==10000||!Array.isArray(body.data?.entityList)||
     !Number.isFinite(time)||!Array.isArray(attempt?.legs)||!attempt.legs.length||
@@ -375,7 +381,7 @@ function matchHistoryOrder(body,attempt,time){
   if(typeof row?.orderId!=='string'||!/^\d+ord\d+$/i.test(row.orderId)||
      row.currency!=='NGN'||row.paymentType!==0||row.isPaymentInProgress!==false||
      !Number.isSafeInteger(row.createTime)||row.createTime<time-30000||row.createTime>time+120000||
-     Number(row.totalStake)*100!==attempt.stakeKobo||!Array.isArray(row.selections))return false;
+     historyStakeKobo(row.totalStake)!==attempt.stakeKobo||!Array.isArray(row.selections))return false;
   if(Number.isFinite(attempt.odds)){
    const actualOdds=row.selections.reduce((n,leg)=>n*Number(leg.odds),1);
    if(!Number.isFinite(actualOdds)||Math.abs(actualOdds-attempt.odds)>0.005)return false;
@@ -427,12 +433,15 @@ async function autoLoop(){
  let ledger;
  try{ledger=JSON.parse(await readFile(ledgerPath,'utf8'));}
  catch(error){if(error.code!=='ENOENT')throw error;ledger={state:rules.initial(),attempt:null,lastCode:null,usedCodes:[]};}
- if(ledger.attempt&&!ledger.state.pending&&!await recoverFromBetHistory(ledger,rules))
-  throw Error('No unique Bet History match for the previous submission. Automatic rollover remains paused; do not clear state.');
  console.log('Automatic rollover armed · ₦2,000 start · 20 ticket wins · five WAT resets. Real wagers enabled.');
  while(!stopped){
   ledger.state=rules.refresh(ledger.state);
-  if(ledger.state.pending){
+  if(ledger.attempt&&!ledger.state.pending){
+   let recovered=false;
+   try{recovered=await recoverFromBetHistory(ledger,rules);}
+   catch(error){if(ledger.state.pending)throw error;}
+   if(!recovered)console.log('AUTO: waiting for the existing order to appear in Bet History; new bets paused.');
+  }else if(ledger.state.pending){
    const detail=await accountOrder(ledger.state.pending.id);
    let result=reconcileAccount(ledger.state,detail,[]);
    if(result.reason==='zero_payout_without_verified_losing_selection'){
@@ -465,7 +474,8 @@ async function autoLoop(){
       });
      }catch(error){
       if(ledger.attempt){
-       if(!await recoverFromBetHistory(ledger,rules))throw error;
+       console.log('AUTO: submission needs Bet History verification; new bets paused.');
+       if(!stopped)await delay(10000);
        continue;
       }
       console.log('AUTO: skipped before submission:',error.message.split('\n')[0]);
