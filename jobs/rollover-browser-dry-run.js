@@ -104,6 +104,7 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
 let stopped=false,browser,profileContext,last=null;
 for(const sig of ['SIGINT','SIGTERM'])process.once(sig,()=>{stopped=true;});
 async function request(code,results=false){
+ const readStep=results?'final-score lookup':externalCode?'external-code verification':code?'latest-code quote verification':'latest-code lookup';
  const u=new URL(url);
  if(results)u.pathname+='/scores';
  else if(externalCode)u.searchParams.set('external',externalCode);
@@ -113,11 +114,22 @@ async function request(code,results=false){
   const r=await fetch(u,{...(results?{method:'POST',body:JSON.stringify({legs:code})}:{}),
    headers:{Authorization:'Bearer '+token,...(results?{'Content-Type':'application/json'}:{})},redirect:'error',signal});
   if(r.status===401)throw Object.assign(Error('Worker token rejected'),{fatal:true});
-  if(!r.ok)throw Object.assign(Error('App returned HTTP '+r.status),{rolloverReadStatus:r.status});
+  if(!r.ok){
+   let source='';
+   if([502,503,504].includes(r.status)){
+    if(r.headers.get('content-type')?.includes('application/json')){
+     const body=await r.json().catch(()=>null);
+     if(body?.error==='Roll Over quote unavailable')source='; server could not complete the rollover lookup';
+     else if(body?.status==='results_unavailable')source='; server could not retrieve final scores';
+     else if(body?.error==='storage unavailable')source='; server reported storage unavailable';
+    }else if(r.headers.get('content-type')?.includes('text/html'))source='; gateway returned an HTML error page';
+   }
+   throw Object.assign(Error('App returned HTTP '+r.status+source),{rolloverReadStatus:r.status,rolloverReadStep:readStep});
+  }
   return await r.json();
  }catch(error){
   if(signal.aborted&&signal.reason?.name==='TimeoutError')
-   throw Object.assign(Error('App read timed out after 20 seconds'),{rolloverReadTimeout:true,cause:error});
+   throw Object.assign(Error('App read timed out after 20 seconds'),{rolloverReadTimeout:true,rolloverReadStep:readStep,cause:error});
   throw error;
  }
 }
@@ -579,7 +591,7 @@ async function autoLoop(){
   }
   }catch(error){
    if(!retryableAppRead(error))throw error;
-   console.warn('AUTO: '+error.message+' during a server read; waiting for the next check.');
+   console.warn('AUTO: '+(error.rolloverReadStep??'server read')+' failed: '+error.message+'; waiting for the next check.');
   }
   if(!stopped)await delay(10000);
  }
