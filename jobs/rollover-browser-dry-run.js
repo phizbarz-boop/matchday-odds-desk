@@ -160,6 +160,29 @@ async function attemptLive(page,code,quote){
   throw Error('Submission outcome unknown. Check SportyBet Bet History. Do not retry.');
  }
 }
+async function confirmRemoveBetslip(page,deadline){
+ const title=page.getByText('Remove Betslip',{exact:true}).filter({visible:true});
+ const count=await title.count();
+ if(!count)return 'absent';
+ if(count!==1)return 'unverified';
+ const matched=await title.evaluate(heading=>{
+  document.querySelectorAll('[data-matchday-remove-dialog]').forEach(el=>el.removeAttribute('data-matchday-remove-dialog'));
+  for(let el=heading.parentElement;el&&el!==document.body;el=el.parentElement){
+   const text=el.innerText?.replace(/\s+/g,' ').trim();
+   if(text?.length>180)break;
+   if(/^Remove Betslip\s+Are you sure to remove all items\?\s+Later\s+OK$/i.test(text)){
+    el.setAttribute('data-matchday-remove-dialog','yes');
+    return true;
+   }
+  }
+  return false;
+ },undefined,{timeout:Math.max(1,deadline-Date.now())});
+ if(!matched)return 'unverified';
+ const ok=page.locator('[data-matchday-remove-dialog="yes"]').getByText('OK',{exact:true}).filter({visible:true});
+ if(await ok.count()!==1||stopped)return 'unverified';
+ await ok.click({timeout:Math.max(1,deadline-Date.now())});
+ return 'confirmed';
+}
 async function clearSavedBetslip(page){
  const response=await page.goto(sportyHome,{waitUntil:'domcontentloaded',timeout:20000});
  const url=new URL(page.url());
@@ -168,10 +191,17 @@ async function clearSavedBetslip(page){
  await heading.first().waitFor({state:'visible',timeout:5000});
  const remove=page.getByText('Remove All',{exact:true}).filter({visible:true});
  const loading=page.locator('.m-betslips-loading:visible');
- let clicked=false,emptyReads=0;
+ let clicked=false,confirmed=false,emptyReads=0;
  const deadline=Date.now()+15000;
  while(Date.now()<deadline){
   if(stopped)return false;
+  if(clicked&&!confirmed){
+   try{
+    const result=await confirmRemoveBetslip(page,deadline);
+    if(result==='unverified')return false;
+    if(result==='confirmed'){confirmed=true;emptyReads=0;await delay(500);continue;}
+   }catch(error){if(error.name==='TimeoutError')return false;throw error;}
+  }
   if(await loading.count()){
    emptyReads=0;
    await delay(500);
