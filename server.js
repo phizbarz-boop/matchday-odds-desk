@@ -1430,7 +1430,11 @@ function normalizeAutoBetTypesForSports(sports, betTypes) {
   return [...compatible].filter(id=>id!=='multi');
 }
 
-async function loadAutoCandidates({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, ignoreEdge = false, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch', includeAllMarkets = null, boundedBuilderScan = false, halfScan = false, todayOnly = false, winnerGapOnly = false, winnerGapMaxOne = false, winnerGapAboveEight = false } = {}) {
+const marketWork=require('./lib/runtimeMemory').createHeavyWorkGuard();
+async function loadAutoCandidates(options){
+ return marketWork.run('market analysis',()=>loadAutoCandidatesImpl(options));
+}
+async function loadAutoCandidatesImpl({ sportScope = 'all', sports = null, minProbability = 55, minEdge = 0, ignoreEdge = false, leagues = null, betTypes = null, marketHours = null, marketMaxPages = null, requestedFixtures = null, liveMode = 'prematch', includeAllMarkets = null, boundedBuilderScan = false, halfScan = false, todayOnly = false, winnerGapOnly = false, winnerGapMaxOne = false, winnerGapAboveEight = false } = {}) {
   return withFreshSportyRequest(async()=>{
     // Discover and model public SportyBet data independently of booking login.
     if([winnerGapOnly,winnerGapMaxOne,winnerGapAboveEight].filter(Boolean).length>1)throw Error('Choose only one winner odds gap filter');
@@ -3789,7 +3793,9 @@ app.post('/api/telegram/bot/setup', express.json(), async (req, res) => {
   } catch(err){ res.status(502).json({error:'Telegram AI setup failed',detail:process.env.NODE_ENV==='production'?undefined:err.message}); }
 });
 
-const publicCache=createPublicCache({getRedis});
+const publicCache=createPublicCache({getRedis,
+ runRefresh:fn=>marketWork.run('public catalogue refresh',fn),
+ checkMemory:()=>marketWork.check('public catalogue refresh')});
 const publicCacheJob=createWatSlotJob({namespace:'sportybet:public-refresh',getRedis,run:async({signal})=>{
   const result=await publicCache.refresh({signal});
   return {ok:!result.skipped,retryable:Boolean(result.skipped),reason:result.reason||null,source:'SportyBet public website feeds',loginRequired:false};
