@@ -42,11 +42,18 @@ async function request(code,results=false){
  if(results)u.pathname+='/scores';
  else if(externalCode)u.searchParams.set('external',externalCode);
  else if(code)u.searchParams.set('quote',code);
- const r=await fetch(u,{...(results?{method:'POST',body:JSON.stringify({legs:code})}:{}),
-  headers:{Authorization:'Bearer '+token,...(results?{'Content-Type':'application/json'}:{})},redirect:'error',signal:AbortSignal.timeout(20000)});
- if(r.status===401)throw Object.assign(Error('Worker token rejected'),{fatal:true});
- if(!r.ok)throw Object.assign(Error('App returned HTTP '+r.status),{rolloverReadStatus:r.status});
- return r.json();
+ const signal=AbortSignal.timeout(20000);
+ try{
+  const r=await fetch(u,{...(results?{method:'POST',body:JSON.stringify({legs:code})}:{}),
+   headers:{Authorization:'Bearer '+token,...(results?{'Content-Type':'application/json'}:{})},redirect:'error',signal});
+  if(r.status===401)throw Object.assign(Error('Worker token rejected'),{fatal:true});
+  if(!r.ok)throw Object.assign(Error('App returned HTTP '+r.status),{rolloverReadStatus:r.status});
+  return await r.json();
+ }catch(error){
+  if(signal.aborted&&signal.reason?.name==='TimeoutError')
+   throw Object.assign(Error('App read timed out after 20 seconds'),{rolloverReadTimeout:true,cause:error});
+  throw error;
+ }
 }
 function verifySlip(text,quote,now=Date.now()){
  const normalized=value=>String(value).normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();
@@ -427,6 +434,7 @@ async function recoverFromBetHistory(ledger,rules){
   return true;
  }finally{await page.close();}
 }
+const retryableAppRead=error=>error?.rolloverReadTimeout===true||[502,503,504].includes(error?.rolloverReadStatus);
 async function autoLoop(){
  const rules=require('./rollover-run-state.cjs');
  const {reconcileAccount}=require('./rollover-reconcile-account.cjs');
@@ -479,7 +487,7 @@ async function autoLoop(){
        if(!stopped)await delay(10000);
        continue;
       }
-      if([502,503,504].includes(error?.rolloverReadStatus))throw error;
+      if(retryableAppRead(error))throw error;
       console.log('AUTO: skipped before submission:',error.message.split('\n')[0]);
      }
      if(receipt&&typeof receipt==='object'){
@@ -502,7 +510,7 @@ async function autoLoop(){
    }
   }
   }catch(error){
-   if(![502,503,504].includes(error?.rolloverReadStatus))throw error;
+   if(!retryableAppRead(error))throw error;
    console.warn('AUTO: '+error.message+' during a server read; waiting for the next check.');
   }
   if(!stopped)await delay(10000);
