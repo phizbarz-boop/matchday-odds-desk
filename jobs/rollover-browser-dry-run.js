@@ -3,13 +3,14 @@
 const {chromium}=require('playwright');
 const {homedir}=require('node:os');
 const {join}=require('node:path');
-const {mkdir,open,access}=require('node:fs/promises');
+const {mkdir,open,access,readFile,rename}=require('node:fs/promises');
 const args=process.argv.slice(2);
 const login=args.length===1&&args[0]==='--login';
 const externalCode=args.length===2&&['--submit-one-ngn1000','--review-code'].includes(args[0])&&/^[A-Z0-9]{4,32}$/i.test(args[1])?args[1].toUpperCase():null;
 const liveTest=args[0]==='--submit-one-ngn1000'&&(args.length===1||!!externalCode);
-const review=liveTest||!!externalCode||args.length===1&&args[0]==='--review-profile';
-if(args.length&&!login&&!review)throw Error('Use --login, --review-profile, --review-code CODE, --submit-one-ngn1000 [CODE], or no option');
+const auto=args.length===1&&args[0]==='--auto-rollover';
+const review=auto||liveTest||!!externalCode||args.length===1&&args[0]==='--review-profile';
+if(args.length&&!login&&!review)throw Error('Use --login, --auto-rollover, --review-profile, --review-code CODE, --submit-one-ngn1000 [CODE], or no option');
 const profile=join(process.platform==='win32'&&process.env.LOCALAPPDATA||homedir(),'MatchdayOddsDesk','SportyBetReview');
 const sportyHome='https://www.sportybet.com/ng/';
 async function openProfile(){
@@ -31,16 +32,18 @@ const base=new URL(!login&&process.env.ROLLOVER_APP_URL||'https://matchday-odds-
 if(base.protocol!=='https:'||base.username||base.password)throw Error('Set ROLLOVER_APP_URL to your HTTPS application URL');
 if(!login&&(!token||token.length<32))throw Error('Set the same private ROLLOVER_WORKER_TOKEN on Render and the worker');
 const max=Number(process.env.ROLLOVER_MAX_STAKE_KOBO);
-if(!login&&!liveTest&&!externalCode&&(!Number.isSafeInteger(max)||max<=0))throw Error('Set ROLLOVER_MAX_STAKE_KOBO to your test stake ceiling in kobo');
+if(!login&&!auto&&!liveTest&&!externalCode&&(!Number.isSafeInteger(max)||max<=0))throw Error('Set ROLLOVER_MAX_STAKE_KOBO to your test stake ceiling in kobo');
 const url=new URL('/api/sportybet/virtual-rollover/worker',base);
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 let stopped=false,browser,profileContext,last=null;
 for(const sig of ['SIGINT','SIGTERM'])process.once(sig,()=>{stopped=true;});
-async function request(code){
+async function request(code,results=false){
  const u=new URL(url);
- if(externalCode)u.searchParams.set('external',externalCode);
+ if(results)u.pathname+='/scores';
+ else if(externalCode)u.searchParams.set('external',externalCode);
  else if(code)u.searchParams.set('quote',code);
- const r=await fetch(u,{headers:{Authorization:'Bearer '+token},redirect:'error',signal:AbortSignal.timeout(20000)});
+ const r=await fetch(u,{...(results?{method:'POST',body:JSON.stringify({legs:code})}:{}),
+  headers:{Authorization:'Bearer '+token,...(results?{'Content-Type':'application/json'}:{})},redirect:'error',signal:AbortSignal.timeout(20000)});
  if(r.status===401)throw Object.assign(Error('Worker token rejected'),{fatal:true});
  if(!r.ok)throw Error('App returned HTTP '+r.status);
  return r.json();
@@ -92,7 +95,13 @@ async function readSlip(page,mark=false){
  },mark);
 }
 const testLock=join(profile,'one-live-test-ngn1000.attempted');
-async function waitForLiveReceipt(page,receipt,quote){
+const decimal=kobo=>(kobo/100).toFixed(2);
+function amountPattern(kobo){
+ const [whole,fraction]=decimal(kobo).split('.');
+ const grouped=whole.replace(/\B(?=(\d{3})+(?!\d))/g,',');
+ return '(?:'+whole+'|'+grouped+')(?:\\.'+fraction+')'+(fraction==='00'?'?':'');
+}
+async function waitForLiveReceipt(page,receipt,quote,kobo){
  const heading=page.getByText('About to pay',{exact:true}).filter({visible:true});
  const deadline=Date.now()+10000;
  let confirmedPayment=false;
@@ -101,7 +110,7 @@ async function waitForLiveReceipt(page,receipt,quote){
   const dialogs=await heading.count();
   if(dialogs>1)throw Error('Ambiguous payment dialog');
   if(dialogs===1&&!confirmedPayment){
-   const matched=await heading.evaluate(label=>{
+   const matched=await heading.evaluate((label,amount)=>{
     document.querySelectorAll('[data-matchday-pay-dialog]').forEach(el=>el.removeAttribute('data-matchday-pay-dialog'));
     const visible=node=>node.getClientRects().length>0&&getComputedStyle(node).visibility==='visible';
     const text=node=>node.textContent.replace(/\s+/g,' ').trim();
@@ -109,13 +118,13 @@ async function waitForLiveReceipt(page,receipt,quote){
      const labels=[...el.querySelectorAll('*')].filter(visible).map(text);
      if(labels.includes('Place Bet'))break;
      if(labels.includes('Confirm')&&labels.includes('Cancel')){
-      if(!labels.some(value=>/^NGN\s+1,?000\.00$/i.test(value)))return false;
+      if(!labels.some(value=>new RegExp('^NGN\\s+'+amount+'$','i').test(value)))return false;
       el.setAttribute('data-matchday-pay-dialog','yes');
       return true;
      }
     }
     return false;
-   },undefined,{timeout:2000});
+   },amountPattern(kobo),{timeout:2000});
    if(!matched||verifySlip(await readSlip(page),quote)!=='browser_slip_verified')throw Error('Payment amount or slip could not be verified');
    const confirm=page.locator('[data-matchday-pay-dialog="yes"]').getByText('Confirm',{exact:true}).filter({visible:true});
    if(await confirm.count()!==1||stopped)throw Error('Payment confirmation control could not be verified');
@@ -126,7 +135,7 @@ async function waitForLiveReceipt(page,receipt,quote){
  }
  throw Error('No verified receipt');
 }
-async function attemptLive(page,code,quote){
+async function attemptLive(page,code,quote,kobo=100000,beforeClick=null){
  const stop=reason=>{throw Error('No submission attempted: '+reason);};
  if(!(await page.getByText('My Account',{exact:true}).first().isVisible()))stop('sign in using --login');
  if(await page.getByText('Submission Successful',{exact:true}).first().isVisible())stop('a success dialog is already open');
@@ -163,7 +172,7 @@ async function attemptLive(page,code,quote){
  const submitCount=await submit.count();
  if(await stake.count()!==1||submitCount!==1)
   stop('could not resolve controls (editable inputs: '+fieldStatus.inputs+', stake headers: '+fieldStatus.headerMatches+', Place Bet matches: '+submitCount+')');
- await stake.fill('1000',{timeout:2000});
+ await stake.fill(String(kobo/100),{timeout:2000});
  await stake.press('Tab',{timeout:2000});
  await submit.click({trial:true,timeout:2000});
  const fresh=await request(code);
@@ -171,28 +180,48 @@ async function attemptLive(page,code,quote){
     JSON.stringify(fresh.legs)!==JSON.stringify(quote.legs))stop('server quote changed');
  const updated=await readSlip(page,true);
  if(stopped||verifySlip(updated,fresh)!=='browser_slip_verified'||
-    !/\btotal stake\s+(?:1,000|1000)(?:\.00)?(?=\s|$)/i.test(updated)||
-    Number((await stake.inputValue({timeout:2000})).replace(/,/g,''))!==1000)stop('slip or total stake changed');
+    !new RegExp('\\btotal stake\\s+'+amountPattern(kobo)+'(?=\\s|$)','i').test(updated)||
+    Number((await stake.inputValue({timeout:2000})).replace(/,/g,''))!==kobo/100)stop('slip or total stake changed');
+ if(beforeClick)await beforeClick();
+ else {
  const lock=await open(testLock,'wx');
  try{await lock.writeFile(JSON.stringify({code,stakeNGN:1000,odds:fresh.odds,time:new Date().toISOString()}));await lock.sync();}
  finally{await lock.close();}
+ }
+ const orderIds=new Set(),reads=[];
+ const capture=response=>{
+  const u=new URL(response.url());
+  if(!auto||u.origin!=='https://www.sportybet.com'&&u.origin!=='https://sportybet.com'||response.request().method()!=='POST'||!/^\/api\/ng\/(?:realSportsGame\/order|orders\/(?:order|bet|placeBet))$/i.test(u.pathname))return;
+  reads.push(response.json().then(body=>{
+   if(body?.bizCode!==10000)return;
+   for(const row of [body.data,...(Array.isArray(body.data)?body.data:[]),body.data?.order]){
+    if(typeof row?.orderId==='string'&&/^\d+ord\d+$/i.test(row.orderId))orderIds.add(row.orderId);
+   }
+  }).catch(()=>{}));
+ };
+ if(auto)page.on('response',capture);
  try{
   await submit.click({timeout:2000});
   const receipt=page.getByText('Submission Successful',{exact:true});
-  await waitForLiveReceipt(page,receipt,fresh);
-  const confirmed=await receipt.evaluate(label=>{
+  await waitForLiveReceipt(page,receipt,fresh,kobo);
+  const confirmed=await receipt.evaluate((label,amount)=>{
    for(let el=label.parentElement;el&&el!==document.body;el=el.parentElement){
     const text=el.innerText;
     if(text.length>1600)break;
-    if(/Check Bet History/i.test(text)&&/\bTotal Stake\s+(?:1,000|1000)(?:\.00)?(?=\s|$)/i.test(text))return true;
+    if(/Check Bet History/i.test(text)&&new RegExp('\\bTotal Stake\\s+'+amount+'(?=\\s|$)','i').test(text))return true;
    }
    return false;
-  });
+  },amountPattern(kobo));
   if(!confirmed)throw Error('Receipt not verified');
+  if(auto){
+   await Promise.race([Promise.allSettled(reads),delay(2000)]);
+   if(orderIds.size!==1)throw Error('Exact order ID unavailable');
+   return {id:[...orderIds][0],stakeKobo:kobo};
+  }
   return 'submission_success_shown';
  }catch{
   throw Error('Submission outcome unknown. Check SportyBet Bet History. Do not retry.');
- }
+ }finally{if(auto)page.off('response',capture);}
 }
 async function confirmRemoveBetslip(page,deadline){
  const title=page.getByText('Remove Betslip',{exact:true}).filter({visible:true});
@@ -263,7 +292,7 @@ async function clearSavedBetslip(page){
  if(await loading.count())return 'browser_cart_loading_timeout';
  return confirmed?'browser_cart_still_full_after_confirmation':clicked?'browser_cart_remove_not_confirmed':'browser_cart_empty_not_verified';
 }
-async function inspect(code,quote){
+async function inspect(code,quote,kobo,beforeClick){
  if(!review)browser??=await chromium.launch({headless:true});
  const ctx=review?profileContext:await browser.newContext();
  let page;
@@ -280,7 +309,7 @@ async function inspect(code,quote){
   if(!response?.ok()||!['www.sportybet.com','sportybet.com'].includes(host))return 'browser_page_unavailable';
   for(let i=0;i<8;i++){
    const status=verifySlip(await readSlip(page),quote);
-   if(status==='browser_slip_verified'&&liveTest)return await attemptLive(page,code,quote);
+   if(status==='browser_slip_verified'&&(liveTest||auto))return await attemptLive(page,code,quote,kobo,beforeClick);
    if(status!=='browser_slip_not_confirmed')return status;
    await delay(750);
   }
@@ -314,6 +343,95 @@ async function tick(){
  console.log('DRY RUN:',ticket.code,quote.odds+'x','₦'+(ticket.stakeKobo/100).toFixed(2),status);
  last=ticket.code;
 }
+const ledgerPath=join(profile,'live-rollover-state-v1.json');
+async function saveLedger(value){
+ const temp=ledgerPath+'.new';
+ const file=await open(temp,'wx',0o600);
+ try{await file.writeFile(JSON.stringify(value));await file.sync();}
+ finally{await file.close();}
+ await rename(temp,ledgerPath);
+}
+async function accountOrder(id){
+ const page=await profileContext.newPage();
+ try{
+  const response=page.waitForResponse(r=>{
+   const u=new URL(r.url());
+   return /^https:\/\/(?:www\.)?sportybet\.com$/.test(u.origin)&&u.pathname==='/api/ng/realSportsGame/order'&&
+    u.searchParams.get('orderId')===id&&r.request().method()==='GET'&&r.ok();
+  },{timeout:15000}).catch(()=>null);
+  await page.goto(new URL('m/my_accounts/open_bets/bet_history/detail/'+encodeURIComponent(id)+'/bet_detail',sportyHome).href,
+    {waitUntil:'domcontentloaded',timeout:15000});
+  const hit=await response;
+  return hit?await hit.json():null;
+ }finally{await page.close();}
+}
+async function autoLoop(){
+ const rules=require('./rollover-run-state.cjs');
+ const {reconcileAccount}=require('./rollover-reconcile-account.cjs');
+ let ledger;
+ try{ledger=JSON.parse(await readFile(ledgerPath,'utf8'));}
+ catch(error){if(error.code!=='ENOENT')throw error;ledger={state:rules.initial(),attempt:null,lastCode:null,usedCodes:[]};}
+ if(ledger.attempt&&!ledger.state.pending)throw Error('A previous submission has no verified order ID. Check Bet History; automatic rollover remains paused.');
+ console.log('Automatic rollover armed · ₦2,000 start · 20 ticket wins · five WAT resets. Real wagers enabled.');
+ while(!stopped){
+  ledger.state=rules.refresh(ledger.state);
+  if(ledger.state.pending){
+   const detail=await accountOrder(ledger.state.pending.id);
+   let result=reconcileAccount(ledger.state,detail,[]);
+   if(result.reason==='zero_payout_without_verified_losing_selection'){
+    const final=await request(ledger.attempt.legs,true);
+    result=reconcileAccount(ledger.state,detail,final.status==='verified_results'?final.results:[]);
+   }
+   if(result.state==='settled'){
+    ledger.state=result.stateAfter;
+    ledger.attempt=null;
+    await saveLedger(ledger);
+    console.log(result.settlement.status.toUpperCase(),'return ₦'+decimal(result.settlement.payoutKobo),
+      'next ₦'+decimal(ledger.state.stakeKobo),ledger.state.wins+'/20 wins',ledger.state.resets+'/5 resets');
+   }else if(result.state!=='pending'){
+    console.error('AUTO: waiting for verified account settlement:',result.reason);
+   }
+  }else if(!ledger.state.awaitingReset){
+   const ticket=await request();
+   if(ticket.status==='pending'&&/^[A-Z0-9]{4,32}$/i.test(ticket.code)&&!(ledger.usedCodes||[]).includes(ticket.code)&&ticket.code!==last){
+    const quote=await request(ticket.code);
+    if(quote.status==='quote_matches'&&quote.code===ticket.code&&quote.odds>=1.30&&quote.odds<=1.50&&
+       quote.legs.every(leg=>typeof leg.eventId==='string'&&leg.marketId==='18'&&typeof leg.specifier==='string')){
+     const kobo=ledger.state.stakeKobo;
+     let receipt;
+     try{
+      receipt=await inspect(ticket.code,quote,kobo,async()=>{
+       ledger.attempt={code:ticket.code,stakeKobo:kobo,legs:quote.legs};
+       ledger.lastCode=ticket.code;
+       ledger.usedCodes=[...(ledger.usedCodes||[]),ticket.code];
+       await saveLedger(ledger);
+      });
+     }catch(error){
+      if(ledger.attempt)throw error;
+      console.log('AUTO: skipped before submission:',error.message.split('\n')[0]);
+     }
+     if(receipt&&typeof receipt==='object'){
+      const detail=await accountOrder(receipt.id);
+      const rows=detail?.bizCode===10000&&Array.isArray(detail.data)?detail.data.filter(row=>row.orderId===receipt.id):[];
+      const key=leg=>JSON.stringify([leg.eventId,String(leg.marketId),String(leg.outcomeId),leg.specifier]);
+      const actual=rows[0]?.selections?.map(key).sort();
+      const expected=quote.legs.map(key).sort();
+      if(rows.length!==1||rows[0].currency!=='NGN'||rows[0].stake!==kobo*100||Math.abs(Number(rows[0].totalOdds)-quote.odds)>0.005||!Number.isFinite(Number(rows[0].totalOdds))||
+         !actual||JSON.stringify(actual)!==JSON.stringify(expected))
+       throw Error('Order receipt could not be matched to the exact slip. Check Bet History; do not retry.');
+      ledger.state=rules.acceptReceipt(ledger.state,receipt);
+      await saveLedger(ledger);
+      console.log('AUTO: placed',ticket.code,'₦'+decimal(kobo),quote.odds+'x');
+     }else if(receipt){
+      last=ticket.code;
+      console.log('AUTO: skipped',ticket.code,receipt);
+     }
+    }
+   }
+  }
+  if(!stopped)await delay(10000);
+ }
+}
 (async()=>{
  if(login)return signIn();
  try{
@@ -325,6 +443,7 @@ async function tick(){
    profileContext=await openProfile();
    profileContext.once('close',()=>{stopped=true;});
   }
+  if(auto){await autoLoop();return;}
   if(liveTest||externalCode){await tick();return;}
   console.log(review?'Roll Over profile review started. No wagers can be submitted.':'Roll Over dry run started. No wagers can be submitted.');
   while(!stopped){

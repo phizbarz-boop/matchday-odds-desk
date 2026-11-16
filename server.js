@@ -4234,7 +4234,7 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
       if(!/^[A-Z0-9]{4,32}$/.test(code))return res.status(400).json({status:'invalid_external_code'});
       const rows=await withPublicSportyRequest(async()=>extractBookingOutcomes(await getBooking(code,{fresh:true})).map(normalizeBookingLeg),{signal:AbortSignal.timeout(12000)});
       if(rows.length<1||rows.length>lane.maxLegs)return res.json({code,status:'selection_count_out_of_range'});
-      const markets={'12:total=0.5':'Over 0.5 Goals','12:total=1.5':'Over 1.5 Goals','13:total=4.5':'Under 4.5 Goals'};
+      const markets={'12:total=0.5':'Over 0.5 Goals','13:total=4.5':'Under 4.5 Goals'};
       const seen=new Set();
       for(const r of rows){
         if(!/^(vfootball|virtual\s*football)$/i.test(r.sport.trim())||!/^sr:match:\d+$/.test(r.eventId)||seen.has(r.eventId)||
@@ -4255,7 +4255,8 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
     const {code,stake,legs}=pending;
     if(!/^[A-Z0-9]{4,32}$/i.test(code)||!Number.isSafeInteger(stake)||stake<=0||!Array.isArray(legs)||legs.length<1||legs.length>lane.maxLegs)
       return res.json({status:'invalid_pending_ticket'});
-    const info={code,stakeKobo:stake,legs:legs.map(({home,away,pick,kickoffUtc})=>({home,away,pick,kickoffUtc}))};
+    const info={code,stakeKobo:stake,legs:legs.map(({eventId,home,away,pick,kickoffUtc,marketId,outcomeId,specifier})=>({eventId,home,away,pick,kickoffUtc,marketId:String(marketId),outcomeId:String(outcomeId),specifier:analyzerSpecifier(specifier)}))};
+    if(legs.some(leg=>!lane.marketFields.includes(leg.field)))return res.json({status:'unsupported_rollover_selection',...info});
     if(req.query.quote!==code)return res.json({status:'pending',...info});
     if(legs.some(x=>!(Date.parse(x.kickoffUtc)>Date.now()+20000)))return res.json({status:'closed_or_near_kickoff',...info});
     const decoded=await withPublicSportyRequest(async()=>extractBookingOutcomes(await getBooking(code,{fresh:true})).map(normalizeBookingLeg),{signal:AbortSignal.timeout(12000)});
@@ -4265,6 +4266,25 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
     console.warn('[Roll Over worker] Read failed:',err.code??err.name);
     return res.status(502).json({error:'Roll Over quote unavailable'});
   }
+});
+// Independent final scores for an already placed RDP ticket.
+app.post('/api/sportybet/virtual-rollover/worker/scores',express.json({limit:'8kb'}),async(req,res)=>{
+  res.set('Cache-Control','no-store');
+  const worker=require('./lib/rolloverWorkerQuote');
+  if(!worker.authorized(req.get('authorization'),process.env.ROLLOVER_WORKER_TOKEN))return res.status(401).json({error:'unauthorized'});
+  const legs=req.body?.legs;
+  if(!Array.isArray(legs)||legs.length<1||legs.length>4||new Set(legs.map(row=>row?.eventId)).size!==legs.length||
+     !legs.every(row=>/^sr:match:\d+$/.test(row?.eventId??'')&&
+       [row.home,row.away].every(name=>typeof name==='string'&&name.length>0&&name.length<=128)&&
+       Date.parse(row.kickoffUtc)<=Date.now()))return res.status(400).json({status:'invalid_result_request'});
+  try{
+    const signal=AbortSignal.timeout(12000);
+    const results=await withPublicSportyRequest(()=>Promise.all(legs.map(async leg=>{
+      const score=await virtualRollOver.resultFor(sportyDirect,leg,signal).catch(()=>null);
+      return score&&!score.void?{eventId:leg.eventId,status:'final',homeGoals:score.h,awayGoals:score.a}:null;
+    })),{signal});
+    return res.json({status:'verified_results',results:results.filter(Boolean)});
+  }catch{return res.status(502).json({status:'results_unavailable'});}
 });
 
 app.get('/api/sportybet/virtual-rollover',async(_req,res)=>{
