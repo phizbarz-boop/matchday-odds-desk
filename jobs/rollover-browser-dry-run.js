@@ -17,6 +17,72 @@ async function openProfile(){
  await mkdir(profile,{recursive:true,mode:0o700});
  return chromium.launchPersistentContext(profile,{headless:false,acceptDownloads:false});
 }
+const autoPhone=auto?process.env.ROLLOVER_SPORTY_PHONE:null;
+const autoPassword=auto?process.env.ROLLOVER_SPORTY_PASSWORD:null;
+delete process.env.ROLLOVER_SPORTY_PHONE;
+delete process.env.ROLLOVER_SPORTY_PASSWORD;
+let lastSignIn=0;
+const loginStop=message=>Object.assign(Error(message),{fatal:true});
+function sportyOrigin(page){
+ return /^https:\/\/(?:www\.)?sportybet\.com$/.test(new URL(page.url()).origin);
+}
+async function ensureAutoSession(page){
+ if(!auto)return;
+ const account=page.getByText('My Account',{exact:true}).first();
+ if(!sportyOrigin(page))throw loginStop('Automatic sign-in stopped: unexpected website.');
+ if(await account.isVisible())return;
+ try{await account.waitFor({state:'visible',timeout:1500});return;}
+ catch(error){if(error.name!=='TimeoutError')throw error;}
+ const phone=(autoPhone??'').replace(/\D/g,'').replace(/^(?:234|0)(?=\d{10}$)/,'');
+ if(!/^\d{10}$/.test(phone)||!autoPassword)
+  throw loginStop('SportyBet signed out. Set ROLLOVER_SPORTY_PHONE and ROLLOVER_SPORTY_PASSWORD locally or run --login.');
+ if(Date.now()-lastSignIn<60000)
+  throw loginStop('SportyBet signed out again immediately. Check the session manually with --login.');
+ lastSignIn=Date.now();
+ const check=async()=>{
+  if(stopped||!sportyOrigin(page))throw loginStop('Automatic sign-in stopped before verification.');
+  if(await page.locator('input[autocomplete="one-time-code"], input[name*="otp" i], input[name*="verification" i], iframe[src*="captcha" i]').filter({visible:true}).count()||
+     await page.getByText(/verify you are human|unusual traffic|robot verification|captcha|enter (?:the |your )?(?:otp|verification code)/i).filter({visible:true}).count())
+   throw loginStop('SportyBet requires verification. Open --login to complete it manually.');
+ };
+ try{
+  await check();
+  const phoneField=page.locator('input[name="phone"]:visible');
+  const passwordField=page.locator('input[name="psd"][type="password"]:visible');
+  if(!await passwordField.count()){
+   const launcher=page.getByText(/^Log\s*in$/i,{exact:true}).filter({visible:true});
+   if(await launcher.count()!==1)throw loginStop('SportyBet login control could not be verified. Use --login.');
+   await launcher.click({timeout:5000});
+  }
+  await passwordField.waitFor({state:'visible',timeout:8000});
+  const matches=page.getByRole('button',{name:/^Log\s*in$/i}).filter({visible:true});
+  if(await phoneField.count()!==1||await passwordField.count()!==1||await matches.count()!==1)
+   throw loginStop('SportyBet login form could not be verified. Use --login.');
+  await check();
+  await phoneField.fill(phone,{timeout:3000});
+  await passwordField.fill(autoPassword,{timeout:3000});
+  await check();
+  await matches.click({timeout:4000});
+  const deadline=Date.now()+12000;
+  while(Date.now()<deadline){
+   await check();
+   if(await account.isVisible()){console.log('AUTO: SportyBet session restored');return;}
+   if(await page.getByText(/incorrect password|invalid password|wrong password|too many (?:attempts|logins)|account (?:locked|suspended)/i).filter({visible:true}).count())
+    throw loginStop('SportyBet rejected automatic sign-in. Use --login to check the account.');
+   await delay(500);
+  }
+  throw loginStop('SportyBet did not confirm sign-in. Use --login to check the account.');
+ }catch(error){
+  if(error?.fatal)throw error;
+  // Do not expose raw automation call logs while credentials are in the form.
+  throw loginStop('Automatic SportyBet sign-in could not finish. Use --login to check the account.');
+ }
+}
+async function restoreSessionFromHome(page){
+ if(!auto)return;
+ await page.goto(sportyHome,{waitUntil:'domcontentloaded',timeout:20000});
+ await ensureAutoSession(page);
+}
 async function signIn(){
  const ctx=await openProfile();
  const closed=new Promise(resolve=>ctx.once('close',resolve));
@@ -261,6 +327,7 @@ async function clearSavedBetslip(page){
  const response=await page.goto(sportyHome,{waitUntil:'domcontentloaded',timeout:20000});
  const url=new URL(page.url());
  if(!response?.ok()||url.protocol!=='https:'||!['www.sportybet.com','sportybet.com'].includes(url.hostname))return 'browser_cart_home_unavailable';
+ await ensureAutoSession(page);
  const heading=page.getByText(/^Betslip(?:\s*\d+)?$/i).filter({visible:true});
  try{await heading.first().waitFor({state:'visible',timeout:5000});}
  catch(error){if(error.name==='TimeoutError')return 'browser_cart_heading_not_visible';throw error;}
@@ -369,7 +436,8 @@ async function accountOrder(id){
   await page.goto(new URL('m/my_accounts/open_bets/bet_history/detail/'+encodeURIComponent(id)+'/bet_detail',sportyHome).href,
     {waitUntil:'domcontentloaded',timeout:15000});
   const hit=await response;
-  return hit?await hit.json():null;
+  if(!hit){await restoreSessionFromHome(page);return null;}
+  return await hit.json();
  }finally{await page.close();}
 }
 function historyStakeKobo(value){
@@ -409,7 +477,7 @@ async function recoverFromBetHistory(ledger,rules){
   await page.goto(new URL('my_accounts/bet_history/sport_bets',sportyHome).href,
     {waitUntil:'domcontentloaded',timeout:15000});
   const hit=await response;
-  if(!hit)return false;
+  if(!hit){await restoreSessionFromHome(page);return false;}
   const first=await hit.json();
   let receipt=matchHistoryOrder(first,ledger.attempt,when);
   // Use the captured All and Settled filters; either view can contain
@@ -448,7 +516,7 @@ async function autoLoop(){
   if(ledger.attempt&&!ledger.state.pending){
    let recovered=false;
    try{recovered=await recoverFromBetHistory(ledger,rules);}
-   catch(error){if(ledger.state.pending)throw error;}
+   catch(error){if(error.fatal||ledger.state.pending)throw error;}
    if(!recovered)console.log('AUTO: waiting for the existing order to appear in Bet History; new bets paused.');
   }else if(ledger.state.pending){
    const detail=await accountOrder(ledger.state.pending.id);
@@ -487,7 +555,7 @@ async function autoLoop(){
        if(!stopped)await delay(10000);
        continue;
       }
-      if(retryableAppRead(error))throw error;
+      if(error.fatal||retryableAppRead(error))throw error;
       console.log('AUTO: skipped before submission:',error.message.split('\n')[0]);
      }
      if(receipt&&typeof receipt==='object'){
