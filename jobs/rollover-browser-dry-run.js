@@ -45,7 +45,7 @@ async function request(code,results=false){
  const r=await fetch(u,{...(results?{method:'POST',body:JSON.stringify({legs:code})}:{}),
   headers:{Authorization:'Bearer '+token,...(results?{'Content-Type':'application/json'}:{})},redirect:'error',signal:AbortSignal.timeout(20000)});
  if(r.status===401)throw Object.assign(Error('Worker token rejected'),{fatal:true});
- if(!r.ok)throw Error('App returned HTTP '+r.status);
+ if(!r.ok)throw Object.assign(Error('App returned HTTP '+r.status),{rolloverReadStatus:r.status});
  return r.json();
 }
 function verifySlip(text,quote,now=Date.now()){
@@ -435,6 +435,7 @@ async function autoLoop(){
  catch(error){if(error.code!=='ENOENT')throw error;ledger={state:rules.initial(),attempt:null,lastCode:null,usedCodes:[]};}
  console.log('Automatic rollover armed · ₦2,000 start · 20 ticket wins · five WAT resets. Real wagers enabled.');
  while(!stopped){
+  try{
   ledger.state=rules.refresh(ledger.state);
   if(ledger.attempt&&!ledger.state.pending){
    let recovered=false;
@@ -478,6 +479,7 @@ async function autoLoop(){
        if(!stopped)await delay(10000);
        continue;
       }
+      if([502,503,504].includes(error?.rolloverReadStatus))throw error;
       console.log('AUTO: skipped before submission:',error.message.split('\n')[0]);
      }
      if(receipt&&typeof receipt==='object'){
@@ -498,6 +500,10 @@ async function autoLoop(){
      }
     }
    }
+  }
+  }catch(error){
+   if(![502,503,504].includes(error?.rolloverReadStatus))throw error;
+   console.warn('AUTO: '+error.message+' during a server read; waiting for the next check.');
   }
   if(!stopped)await delay(10000);
  }
