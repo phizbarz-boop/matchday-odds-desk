@@ -4229,6 +4229,25 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
   try{
     if(!rolloverRdpScheduler.status().running)return res.json({status:'rdp_rollover_disabled'});
     const lane=virtualRollOver.RDP;
+    if(req.query.external!==undefined){
+      const code=typeof req.query.external==='string'?req.query.external.trim().toUpperCase():'';
+      if(!/^[A-Z0-9]{4,32}$/.test(code))return res.status(400).json({status:'invalid_external_code'});
+      const rows=await withPublicSportyRequest(async()=>extractBookingOutcomes(await getBooking(code,{fresh:true})).map(normalizeBookingLeg),{signal:AbortSignal.timeout(12000)});
+      if(rows.length<1||rows.length>lane.maxLegs)return res.json({code,status:'selection_count_out_of_range'});
+      const markets={'12:total=0.5':'Over 0.5 Goals','12:total=1.5':'Over 1.5 Goals','13:total=4.5':'Under 4.5 Goals'};
+      const seen=new Set();
+      for(const r of rows){
+        if(!/^(vfootball|virtual\s*football)$/i.test(r.sport.trim())||!/^sr:match:\d+$/.test(r.eventId)||seen.has(r.eventId)||
+           !r.home||!r.away||r.marketId!=='18'||!Object.hasOwn(markets,r.outcomeId+':'+analyzerSpecifier(r.specifier))||
+           !Number.isFinite(r.odds)||r.odds<=1)return res.json({code,status:'unsupported_external_selection'});
+        seen.add(r.eventId);
+      }
+      if(rows.some(r=>!(Date.parse(r.kickoffUtc)>Date.now()+20000)))return res.json({code,status:'closed_or_near_kickoff'});
+      const odds=rows.reduce((acc,r)=>acc*r.odds,1);
+      if(odds<lane.minOdds||odds>lane.maxOdds)return res.json({code,status:'odds_out_of_range'});
+      const legs=rows.map(r=>({eventId:r.eventId,home:r.home,away:r.away,pick:markets[r.outcomeId+':'+analyzerSpecifier(r.specifier)],kickoffUtc:r.kickoffUtc,odds:r.odds}));
+      return res.json({code,status:'quote_matches',odds,legs});
+    }
     const redis=await getRedis();
     if(!redis)return res.status(503).json({error:'storage unavailable'});
     const {pending}=await virtualRollOver.stateOf(redis,lane);

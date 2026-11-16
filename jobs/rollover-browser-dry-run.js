@@ -6,7 +6,8 @@ const {join}=require('node:path');
 const {mkdir,open,access}=require('node:fs/promises');
 const args=process.argv.slice(2);
 const login=args.length===1&&args[0]==='--login';
-const liveTest=args.length===1&&args[0]==='--submit-one-ngn1000';
+const externalCode=args.length===2&&args[0]==='--submit-one-ngn1000'&&/^[A-Z0-9]{4,32}$/i.test(args[1])?args[1].toUpperCase():null;
+const liveTest=!!externalCode||args.length===1&&args[0]==='--submit-one-ngn1000';
 const review=liveTest||args.length===1&&args[0]==='--review-profile';
 if(args.length&&!login&&!review)throw Error('Use --login, --review-profile, --submit-one-ngn1000, or no option for signed-out dry run');
 const profile=join(process.platform==='win32'&&process.env.LOCALAPPDATA||homedir(),'MatchdayOddsDesk','SportyBetReview');
@@ -37,7 +38,8 @@ let stopped=false,browser,profileContext,last=null;
 for(const sig of ['SIGINT','SIGTERM'])process.once(sig,()=>{stopped=true;});
 async function request(code){
  const u=new URL(url);
- if(code)u.searchParams.set('quote',code);
+ if(externalCode)u.searchParams.set('external',externalCode);
+ else if(code)u.searchParams.set('quote',code);
  const r=await fetch(u,{headers:{Authorization:'Bearer '+token},redirect:'error',signal:AbortSignal.timeout(20000)});
  if(r.status===401)throw Object.assign(Error('Worker token rejected'),{fatal:true});
  if(!r.ok)throw Error('App returned HTTP '+r.status);
@@ -178,6 +180,14 @@ async function inspect(code,quote){
  }finally{if(review)await page?.close();else await ctx.close();}
 }
 async function tick(){
+ if(externalCode){
+  const quote=await request(externalCode);
+  if(quote.status!=='quote_matches'||quote.code!==externalCode||!(quote.odds>=1.30&&quote.odds<=1.50)){
+   console.log('No submission attempted:',externalCode,quote.status);return;
+  }
+  const status=await inspect(externalCode,quote);
+  console.log('ONE-SHOT:',externalCode,quote.odds+'x','₦1,000',status);return;
+ }
  const ticket=await request();
  if(ticket.status!=='pending'||ticket.code===last){if(liveTest)console.log('No current pending ticket; nothing submitted.');return;}
  if(!/^[A-Z0-9]{4,32}$/i.test(ticket.code))throw Error('Unexpected booking code format');
