@@ -4243,6 +4243,7 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
         seen.add(r.eventId);
       }
       if(rows.some(r=>!(Date.parse(r.kickoffUtc)>Date.now()+20000)))return res.json({code,status:'closed_or_near_kickoff'});
+      if(rows.some(r=>r.odds>lane.maxLegOdds))return res.json({code,status:'selection_odds_above_cap'});
       const odds=rows.reduce((acc,r)=>acc*r.odds,1);
       if(odds<lane.minOdds||odds>lane.maxOdds)return res.json({code,status:'odds_out_of_range'});
       const legs=rows.map(r=>({eventId:r.eventId,home:r.home,away:r.away,pick:markets[r.outcomeId+':'+analyzerSpecifier(r.specifier)],kickoffUtc:r.kickoffUtc,odds:r.odds}));
