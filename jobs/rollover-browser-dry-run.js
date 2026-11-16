@@ -92,6 +92,40 @@ async function readSlip(page,mark=false){
  },mark);
 }
 const testLock=join(profile,'one-live-test-ngn1000.attempted');
+async function waitForLiveReceipt(page,receipt,quote){
+ const heading=page.getByText('About to pay',{exact:true}).filter({visible:true});
+ const deadline=Date.now()+10000;
+ let confirmedPayment=false;
+ while(Date.now()<deadline&&!stopped){
+  if(await receipt.first().isVisible())return;
+  const dialogs=await heading.count();
+  if(dialogs>1)throw Error('Ambiguous payment dialog');
+  if(dialogs===1&&!confirmedPayment){
+   const matched=await heading.evaluate(label=>{
+    document.querySelectorAll('[data-matchday-pay-dialog]').forEach(el=>el.removeAttribute('data-matchday-pay-dialog'));
+    const visible=node=>node.getClientRects().length>0&&getComputedStyle(node).visibility==='visible';
+    const text=node=>node.textContent.replace(/\s+/g,' ').trim();
+    for(let el=label.parentElement,i=0;el&&el!==document.body&&i<8;el=el.parentElement,i++){
+     const labels=[...el.querySelectorAll('*')].filter(visible).map(text);
+     if(labels.includes('Place Bet'))break;
+     if(labels.includes('Confirm')&&labels.includes('Cancel')){
+      if(!labels.some(value=>/^NGN\s+1,?000\.00$/i.test(value)))return false;
+      el.setAttribute('data-matchday-pay-dialog','yes');
+      return true;
+     }
+    }
+    return false;
+   },undefined,{timeout:2000});
+   if(!matched||verifySlip(await readSlip(page),quote)!=='browser_slip_verified')throw Error('Payment amount or slip could not be verified');
+   const confirm=page.locator('[data-matchday-pay-dialog="yes"]').getByText('Confirm',{exact:true}).filter({visible:true});
+   if(await confirm.count()!==1||stopped)throw Error('Payment confirmation control could not be verified');
+   confirmedPayment=true;
+   await confirm.click({timeout:2000});
+  }
+  await delay(250);
+ }
+ throw Error('No verified receipt');
+}
 async function attemptLive(page,code,quote){
  const stop=reason=>{throw Error('No submission attempted: '+reason);};
  if(!(await page.getByText('My Account',{exact:true}).first().isVisible()))stop('sign in using --login');
@@ -145,7 +179,7 @@ async function attemptLive(page,code,quote){
  try{
   await submit.click({timeout:2000});
   const receipt=page.getByText('Submission Successful',{exact:true});
-  await receipt.waitFor({state:'visible',timeout:8000});
+  await waitForLiveReceipt(page,receipt,fresh);
   const confirmed=await receipt.evaluate(label=>{
    for(let el=label.parentElement;el&&el!==document.body;el=el.parentElement){
     const text=el.innerText;
