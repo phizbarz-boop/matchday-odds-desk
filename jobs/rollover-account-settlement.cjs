@@ -27,10 +27,11 @@ function decodeAccountSettlement(body,pending,finalResults=[]){
  if(order.currency!=='NGN'||orderAmountKobo(order.stake)!==pending.stakeKobo)
   return result('unverified','account_stake_or_currency_mismatch');
  if(order.isSettled===0)return result('pending','account_order_unsettled');
- if(order.isSettled!==1||!Array.isArray(order.selections)||!order.selections.length||
-    !order.selections.every(row=>row?.isSettled===1))
+ if(order.isSettled!==1||!Array.isArray(order.selections)||!order.selections.length)
   return result('unverified','account_settlement_flags_unverified');
  const payoutKobo=orderAmountKobo(order.winnings);
+ if(payoutKobo!==0&&!order.selections.every(row=>row?.isSettled===1))
+  return result('unverified','account_selection_settlement_flags_unverified');
  const combo=Array.isArray(order.combinations)&&order.combinations.length===1?order.combinations[0]:null;
  if(!combo||decimalKobo(combo.stake)!==pending.stakeKobo||
     payoutKobo===null||decimalKobo(combo.winnings)!==payoutKobo)
@@ -47,6 +48,7 @@ function decodeAccountSettlement(body,pending,finalResults=[]){
      decimalKobo(order.taxAmount)!==0||!Array.isArray(order.cashOutHistorys)||order.cashOutHistorys.length))
   return result('unverified','gift_tax_or_cashout_requires_reconciliation');
  if(payoutKobo===0){
+  // The whole order can settle as lost while other legs are still running.
   // Independent official results, keyed by event ID. A conflicting or
   // duplicate result is not evidence. Never infer a loss from odds alone.
   if(order.status===1||combo.status===1)

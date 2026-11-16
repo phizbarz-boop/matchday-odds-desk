@@ -532,9 +532,13 @@ async function autoLoop(){
   await saveLedger(ledger);
  }
  console.log('Automatic rollover armed · ₦2,500 start · 20 ticket wins · four total WAT runs. Real wagers enabled.');
+ let lastWait='';
+ const reportWait=message=>{if(message!==lastWait){lastWait=message;console.log('AUTO: '+message);}};
  while(!stopped){
   try{
+  const previousDay=ledger.state.day;
   ledger.state=rules.refresh(ledger.state);
+  if(ledger.state.day!==previousDay){await saveLedger(ledger);lastWait='';}
   if(ledger.attempt&&!ledger.state.pending){
    let recovered=false;
    try{recovered=await recoverFromBetHistory(ledger,rules);}
@@ -550,15 +554,21 @@ async function autoLoop(){
    if(result.state==='settled'){
     ledger.state=result.stateAfter;
     ledger.attempt=null;
+    lastWait='';
     await saveLedger(ledger);
     console.log(result.settlement.status.toUpperCase(),'return ₦'+decimal(result.settlement.payoutKobo),
-      'next ₦'+decimal(ledger.state.stakeKobo),ledger.state.wins+'/20 wins',(ledger.state.resets+1)+'/4 runs');
+      ledger.state.awaitingReset?'next run at 00:00 WAT':'next ₦'+decimal(ledger.state.stakeKobo),
+      ledger.state.wins+'/20 wins',(ledger.state.resets+1)+'/4 runs');
     if(!stopped&&!ledger.state.awaitingReset)continue;
    }else if(result.state!=='pending'){
-    console.error('AUTO: waiting for verified account settlement:',result.reason);
-   }
-  }else if(!ledger.state.awaitingReset&&ledger.state.resets<=RULES.maxDailyResets){
+    reportWait('waiting for verified account settlement: '+result.reason);
+   }else reportWait('the existing bet is still unsettled in Bet History.');
+  }else if(ledger.state.awaitingReset){
+   reportWait('four WAT runs complete; next run starts at 00:00 WAT.');
+  }else if(ledger.state.resets<=RULES.maxDailyResets){
    const ticket=await request();
+   if(ticket.status!=='pending')reportWait('waiting for a new ticket: '+ticket.status);
+   else if((ledger.usedCodes||[]).includes(ticket.code))reportWait('waiting for a new code; '+ticket.code+' was already used.');
    if(ticket.status==='pending'&&/^[A-Z0-9]{4,32}$/i.test(ticket.code)&&!(ledger.usedCodes||[]).includes(ticket.code)&&ticket.code!==last){
     const quote=await request(ticket.code);
     if(quote.status==='quote_matches'&&quote.code===ticket.code&&validRolloverOdds(quote.odds)&&
