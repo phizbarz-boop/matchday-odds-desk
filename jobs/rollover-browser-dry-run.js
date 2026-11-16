@@ -540,14 +540,6 @@ async function autoLoop(){
   const previousDay=ledger.state.day;
   ledger.state=rules.refresh(ledger.state);
   if(ledger.state.day!==previousDay){await saveLedger(ledger);lastWait='';}
-  if(ledger.codeAllowanceReset){
-   const acknowledgement=await request(ledger.codeAllowanceReset,false,true);
-   if(!['reset','already_reset','different_day'].includes(acknowledgement?.status))
-    throw Error('Server did not acknowledge the loss code allowance reset.');
-   delete ledger.codeAllowanceReset;
-   await saveLedger(ledger);
-   if(acknowledgement.status!=='different_day')console.log('AUTO: 30-code allowance reset after verified loss.');
-  }
   if(ledger.attempt&&!ledger.state.pending){
    let recovered=false;
    try{recovered=await recoverFromBetHistory(ledger,rules);}
@@ -562,8 +554,6 @@ async function autoLoop(){
    }
    if(result.state==='settled'){
     ledger.state=result.stateAfter;
-    if(result.settlement.status==='lost')
-     ledger.codeAllowanceReset={orderId:result.settlement.id,dateKey:ledger.state.day};
     ledger.attempt=null;
     lastWait='';
     await saveLedger(ledger);
