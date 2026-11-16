@@ -1,7 +1,7 @@
-name: Plot207 Twice Daily Probability Floor Picks
+name: Plot207 Morning Probability Floor Picks
 on:
   schedule:
-    - cron: '0 6,17 * * *'
+    - cron: '0 6 * * *'
   workflow_dispatch: {}
 permissions:
   contents: read

@@ -1,4 +1,4 @@
-name: Test Daily 30k, 10k and 1k Picks
+name: Test Daily 1,000x Pick
 on:
   workflow_dispatch: {}
 permissions:
@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: "Generate up to one ticket per target: 30k, 10k and 1k"
+      - name: Generate the 1,000x ticket
         env:
           TELEGRAM_REQUEST_TIMEOUT_SECONDS: 10
           TELEGRAM_POLL_MAX_SECONDS: 260
