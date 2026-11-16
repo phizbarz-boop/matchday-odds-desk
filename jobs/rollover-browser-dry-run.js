@@ -526,12 +526,12 @@ async function autoLoop(){
  catch(error){if(error.code!=='ENOENT')throw error;ledger={state:rules.initial(),attempt:null,lastCode:null,usedCodes:[]};}
  if(!ledger.attempt&&!ledger.state.pending&&!ledger.state.awaitingReset&&
     ledger.state.wins===0&&((ledger.state.runOpeningStakeKobo==null&&ledger.state.stakeKobo===200000)||
-    (ledger.state.runOpeningStakeKobo===500000&&ledger.state.stakeKobo===500000))){
+    (ledger.state.runOpeningStakeKobo===250000&&ledger.state.stakeKobo===250000))){
   ledger.state.stakeKobo=RULES.openingStakeKobo;
   ledger.state.runOpeningStakeKobo=RULES.openingStakeKobo;
   await saveLedger(ledger);
  }
- console.log('Automatic rollover armed · ₦2,500 start · 20 ticket wins · four total WAT runs. Real wagers enabled.');
+ console.log(`Automatic rollover armed · ₦${(RULES.openingStakeKobo/100).toLocaleString('en-NG')} start · ${RULES.targetTicketWins} ticket wins · ${RULES.maxDailyResets+1} total WAT runs. Real wagers enabled.`);
  let lastWait='';
  const reportWait=message=>{if(message!==lastWait){lastWait=message;console.log('AUTO: '+message);}};
  while(!stopped){
@@ -558,7 +558,7 @@ async function autoLoop(){
     await saveLedger(ledger);
     console.log(result.settlement.status.toUpperCase(),'return ₦'+decimal(result.settlement.payoutKobo),
       ledger.state.awaitingReset?'next run at 00:00 WAT':'next ₦'+decimal(ledger.state.stakeKobo),
-      ledger.state.wins+'/20 wins',(ledger.state.resets+1)+'/4 runs');
+      ledger.state.wins+'/'+RULES.targetTicketWins+' wins',(ledger.state.resets+1)+'/4 runs');
     if(!stopped&&!ledger.state.awaitingReset)continue;
    }else if(result.state!=='pending'){
     reportWait('waiting for verified account settlement: '+result.reason);
