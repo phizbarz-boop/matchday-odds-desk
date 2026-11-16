@@ -167,10 +167,14 @@ async function confirmRemoveBetslip(page,deadline){
  if(count!==1)return 'unverified';
  const matched=await title.evaluate(heading=>{
   document.querySelectorAll('[data-matchday-remove-dialog]').forEach(el=>el.removeAttribute('data-matchday-remove-dialog'));
-  for(let el=heading.parentElement;el&&el!==document.body;el=el.parentElement){
-   const text=el.innerText?.replace(/\s+/g,' ').trim();
-   if(text?.length>180)break;
-   if(/^Remove Betslip\s+Are you sure to remove all items\?\s+Later\s+OK$/i.test(text)){
+  const visible=node=>node.getClientRects().length>0&&getComputedStyle(node).visibility==='visible';
+  const text=node=>node.textContent.replace(/\s+/g,' ').trim();
+  const contains=(scope,pattern)=>[...scope.querySelectorAll('*')].some(node=>visible(node)&&pattern.test(text(node)));
+  // Match individual visible labels; innerText can concatenate inline controls.
+  let el=heading.parentElement;
+  for(let depth=0;el&&el!==document.body&&depth<8;depth++,el=el.parentElement){
+   if(contains(el,/^Are you sure to remove all items\?$/i)&&contains(el,/^Later$/i)&&
+      contains(el,/^OK$/i)&&!contains(el,/^Place Bet$/i)){
     el.setAttribute('data-matchday-remove-dialog','yes');
     return true;
    }
@@ -186,21 +190,22 @@ async function confirmRemoveBetslip(page,deadline){
 async function clearSavedBetslip(page){
  const response=await page.goto(sportyHome,{waitUntil:'domcontentloaded',timeout:20000});
  const url=new URL(page.url());
- if(!response?.ok()||url.protocol!=='https:'||!['www.sportybet.com','sportybet.com'].includes(url.hostname))return false;
+ if(!response?.ok()||url.protocol!=='https:'||!['www.sportybet.com','sportybet.com'].includes(url.hostname))return 'browser_cart_home_unavailable';
  const heading=page.getByText(/^Betslip(?:\s*\d+)?$/i).filter({visible:true});
- await heading.first().waitFor({state:'visible',timeout:5000});
+ try{await heading.first().waitFor({state:'visible',timeout:5000});}
+ catch(error){if(error.name==='TimeoutError')return 'browser_cart_heading_not_visible';throw error;}
  const remove=page.getByText('Remove All',{exact:true}).filter({visible:true});
  const loading=page.locator('.m-betslips-loading:visible');
  let clicked=false,confirmed=false,emptyReads=0;
  const deadline=Date.now()+15000;
  while(Date.now()<deadline){
-  if(stopped)return false;
+  if(stopped)return 'browser_cart_check_stopped';
   if(clicked&&!confirmed){
    try{
     const result=await confirmRemoveBetslip(page,deadline);
-    if(result==='unverified')return false;
+    if(result==='unverified')return 'browser_cart_remove_dialog_unverified';
     if(result==='confirmed'){confirmed=true;emptyReads=0;await delay(500);continue;}
-   }catch(error){if(error.name==='TimeoutError')return false;throw error;}
+   }catch(error){if(error.name==='TimeoutError')return 'browser_cart_confirmation_blocked';throw error;}
   }
   if(await loading.count()){
    emptyReads=0;
@@ -208,20 +213,21 @@ async function clearSavedBetslip(page){
    continue;
   }
   const count=await remove.count();
-  if(count>1)return false;
+  if(count>1)return 'browser_cart_remove_button_ambiguous';
   if(count===1&&!clicked){
    // The overlay can reappear between the check and click. Let Playwright
    // wait for a normal, actionable click; never force it through.
    try{await remove.click({timeout:Math.max(1,deadline-Date.now())});}
-   catch(error){if(error.name==='TimeoutError')return false;throw error;}
+   catch(error){if(error.name==='TimeoutError')return 'browser_cart_remove_button_blocked';throw error;}
    clicked=true;
    emptyReads=0;
   }else if(count===0&&!(await readSlip(page))&&!(await loading.count())){
-   if(++emptyReads===4)return true;
+   if(++emptyReads===4)return 'browser_cart_empty';
   }else emptyReads=0;
   await delay(500);
  }
- return false;
+ if(await loading.count())return 'browser_cart_loading_timeout';
+ return confirmed?'browser_cart_still_full_after_confirmation':clicked?'browser_cart_remove_not_confirmed':'browser_cart_empty_not_verified';
 }
 async function inspect(code,quote){
  if(!review)browser??=await chromium.launch({headless:true});
@@ -229,7 +235,10 @@ async function inspect(code,quote){
  let page;
  try{
   page=await ctx.newPage();
-  if(review&&!await clearSavedBetslip(page))return 'browser_cart_not_empty_or_unverified';
+  if(review){
+   const cart=await clearSavedBetslip(page);
+   if(cart!=='browser_cart_empty')return cart;
+  }
   const link=new URL(sportyHome);
   link.searchParams.set('shareCode',code);
   const response=await page.goto(link.href,{waitUntil:'domcontentloaded',timeout:20000});
