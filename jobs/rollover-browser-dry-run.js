@@ -373,7 +373,9 @@ async function clearSavedBetslip(page){
  const remove=page.getByText('Remove All',{exact:true}).filter({visible:true});
  const loading=page.locator('.m-betslips-loading:visible');
 
- let clicked=false,confirmed=false,emptyReads=0;
+ const rows=page.locator('.m-betslips .m-list .m-item:visible');
+ const rowRemove=page.locator('.m-betslips .m-list .m-item .m-item-play i.m-icon-delete:visible');
+ let clicked=false,confirmed=false,emptyReads=0,rowRemovalPending=null;
  const deadline=Date.now()+15000;
  while(Date.now()<deadline){
   if(stopped)return 'browser_cart_check_stopped';
@@ -391,6 +393,11 @@ async function clearSavedBetslip(page){
   }
   const count=await remove.count();
   if(count>1)return 'browser_cart_remove_button_ambiguous';
+  const rowCount=await rows.count();
+  if(rowRemovalPending!==null){
+   if(rowCount>=rowRemovalPending){await delay(500);continue;}
+   rowRemovalPending=null;
+  }
   if(count===1&&!clicked){
    // The overlay can reappear between the check and click. Let Playwright
    // wait for a normal, actionable click; never force it through.
@@ -398,7 +405,17 @@ async function clearSavedBetslip(page){
    catch(error){if(error.name==='TimeoutError')return 'browser_cart_remove_button_blocked';throw error;}
    clicked=true;
    emptyReads=0;
-  }else if(count===0&&!(await loading.count())){
+  }else if(count===0&&rowCount>0&&(!clicked||confirmed)){
+   // SportyBet hides Remove All for a single stale selection.
+   const first=rows.first().locator('.m-item-play i.m-icon-delete:visible');
+   if(await rowRemove.count()!==rowCount||await first.count()!==1)
+    return 'browser_cart_row_remove_unverified';
+   if(stopped)return 'browser_cart_check_stopped';
+   try{await first.click({timeout:Math.max(1,deadline-Date.now())});}
+   catch(error){if(error.name==='TimeoutError')return 'browser_cart_row_remove_blocked';throw error;}
+   rowRemovalPending=rowCount;
+   emptyReads=0;
+  }else if(count===0&&rowCount===0&&!(await loading.count())){
    const evidence=await emptyBetslipEvidence(page);
    if(evidence.bookingInputs===1&&evidence.emptyPanels===1){
     if(++emptyReads===4)return 'browser_cart_empty';
@@ -407,6 +424,7 @@ async function clearSavedBetslip(page){
   await delay(500);
  }
  if(await loading.count())return 'browser_cart_loading_timeout';
+ if(rowRemovalPending!==null)return 'browser_cart_row_removal_not_confirmed';
  const {bookingInputs,emptyPanels}=await emptyBetslipEvidence(page);
  return (confirmed?'browser_cart_still_full_after_confirmation':clicked?'browser_cart_remove_not_confirmed':'browser_cart_empty_not_verified')+
   ' (booking fields: '+bookingInputs+', empty panels: '+emptyPanels+')';
