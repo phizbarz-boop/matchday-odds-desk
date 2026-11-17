@@ -582,14 +582,15 @@ async function autoLoop(){
   ledger.state.runOpeningStakeKobo=RULES.openingStakeKobo;
   await saveLedger(ledger);
  }
- console.log(`Automatic rollover armed · ₦${(RULES.openingStakeKobo/100).toLocaleString('en-NG')} start · ${RULES.targetTicketWins} ticket wins · ${RULES.maxDailyResets+1} total WAT runs. Real wagers enabled.`);
+ console.log(`Automatic rollover armed · ₦${(RULES.openingStakeKobo/100).toLocaleString('en-NG')} start · ${RULES.targetTicketWins} ticket wins · pause after ${RULES.maxConsecutiveLosses} consecutive losses. Real wagers enabled.`);
  let lastWait='';
  const reportWait=message=>{if(message!==lastWait){lastWait=message;console.log('AUTO: '+message);}};
  while(!stopped){
   try{
-  const previousDay=ledger.state.day;
-  ledger.state=rules.refresh(ledger.state);
-  if(ledger.state.day!==previousDay){await saveLedger(ledger);lastWait='';}
+  const previousState=ledger.state;
+  ledger.state=rules.refresh(previousState);
+  if(ledger.state.day!==previousState.day||ledger.state.consecutiveLosses!==previousState.consecutiveLosses||
+     ledger.state.awaitingReset!==previousState.awaitingReset){await saveLedger(ledger);lastWait='';}
   if(ledger.attempt&&!ledger.state.pending){
    let recovered=false;
    try{recovered=await recoverFromBetHistory(ledger,rules);}
@@ -609,14 +610,14 @@ async function autoLoop(){
     await saveLedger(ledger);
     console.log(result.settlement.status.toUpperCase(),'return ₦'+decimal(result.settlement.payoutKobo),
       ledger.state.awaitingReset?'next run at 00:00 WAT':'next ₦'+decimal(ledger.state.stakeKobo),
-      ledger.state.wins+'/'+RULES.targetTicketWins+' wins',(ledger.state.resets+1)+'/4 runs');
+      ledger.state.wins+'/'+RULES.targetTicketWins+' wins',ledger.state.consecutiveLosses+'/'+RULES.maxConsecutiveLosses+' consecutive losses');
     if(!stopped&&!ledger.state.awaitingReset)continue;
    }else if(result.state!=='pending'){
     reportWait('waiting for verified account settlement: '+result.reason);
    }else reportWait('the existing bet is still unsettled in Bet History.');
   }else if(ledger.state.awaitingReset){
-   reportWait('four WAT runs complete; next run starts at 00:00 WAT.');
-  }else if(ledger.state.resets<=RULES.maxDailyResets){
+   reportWait('four consecutive losses; next run starts at 00:00 WAT.');
+  }else{
    const ticket=await request();
    if(ticket.status!=='pending')reportWait('waiting for a new ticket: '+ticket.status);
    else if((ledger.usedCodes||[]).includes(ticket.code))reportWait('waiting for a new code; '+ticket.code+' was already used.');
