@@ -339,6 +339,29 @@ async function confirmRemoveBetslip(page,deadline){
  await ok.click({timeout:Math.max(1,deadline-Date.now())});
  return 'confirmed';
 }
+async function emptyBetslipEvidence(page){
+ return page.evaluate(()=>{
+  const visible=el=>el.getClientRects().length>0&&getComputedStyle(el).visibility==='visible';
+  const text=el=>el.innerText?.replace(/\s+/g,' ').trim()||'';
+  const inputs=[...document.querySelectorAll('input')].filter(el=>visible(el)&&
+   /^booking\s*code$/i.test(el.placeholder.trim())&&!el.value.trim());
+  const panels=new Set();
+  for(const input of inputs){
+   for(let el=input.parentElement,depth=0;el&&el!==document.body&&depth<12;el=el.parentElement,depth++){
+    const value=text(el);
+    if(value.length>1600)break;
+    const headings=[...el.querySelectorAll('*')].filter(node=>visible(node)&&/^betslip(?:\s*\d+)?$/i.test(text(node)));
+    const hasLoad=[...el.querySelectorAll('*')].some(node=>visible(node)&&/^load$/i.test(text(node)));
+    if(!headings.length||!hasLoad)continue;
+    if(headings.some(node=>/^betslip\s*[1-9]\d*$/i.test(text(node)))||
+       /\b(?:remove all|accept changes|total stake|potential win|place bet|unavailable)\b/i.test(value)||
+       /\bo\s*\/\s*u\b/i.test(value))break;
+    panels.add(el);break;
+   }
+  }
+  return {bookingInputs:inputs.length,emptyPanels:panels.size};
+ });
+}
 async function clearSavedBetslip(page){
  const response=await page.goto(sportyHome,{waitUntil:'domcontentloaded',timeout:20000});
  const url=new URL(page.url());
@@ -350,8 +373,6 @@ async function clearSavedBetslip(page){
  const remove=page.getByText('Remove All',{exact:true}).filter({visible:true});
  const loading=page.locator('.m-betslips-loading:visible');
 
- // An unreadable slip is not an empty slip. Require SportyBet's empty-state prompt.
- const emptyNotice=page.getByText(/^(?:To place a bet,\s*click on the odds\b|(?:Your\s+)?Betslip is empty\b)/i).filter({visible:true});
  let clicked=false,confirmed=false,emptyReads=0;
  const deadline=Date.now()+15000;
  while(Date.now()<deadline){
@@ -377,17 +398,18 @@ async function clearSavedBetslip(page){
    catch(error){if(error.name==='TimeoutError')return 'browser_cart_remove_button_blocked';throw error;}
    clicked=true;
    emptyReads=0;
-  }else if(count===0&&await emptyNotice.count()===1&&
-           await heading.count()===1&&
-           !/\b[1-9]\d*\b/.test(await heading.innerText())&&
-           !(await readSlip(page))&&!(await loading.count())&&
-           !(await page.getByText('Accept Changes',{exact:true}).filter({visible:true}).count())){
-   if(++emptyReads===4)return 'browser_cart_empty';
+  }else if(count===0&&!(await loading.count())){
+   const evidence=await emptyBetslipEvidence(page);
+   if(evidence.bookingInputs===1&&evidence.emptyPanels===1){
+    if(++emptyReads===4)return 'browser_cart_empty';
+   }else emptyReads=0;
   }else emptyReads=0;
   await delay(500);
  }
  if(await loading.count())return 'browser_cart_loading_timeout';
- return confirmed?'browser_cart_still_full_after_confirmation':clicked?'browser_cart_remove_not_confirmed':'browser_cart_empty_not_verified';
+ const {bookingInputs,emptyPanels}=await emptyBetslipEvidence(page);
+ return (confirmed?'browser_cart_still_full_after_confirmation':clicked?'browser_cart_remove_not_confirmed':'browser_cart_empty_not_verified')+
+  ' (booking fields: '+bookingInputs+', empty panels: '+emptyPanels+')';
 }
 async function inspect(code,quote,kobo,beforeClick){
  if(!review)browser??=await chromium.launch({headless:true});
