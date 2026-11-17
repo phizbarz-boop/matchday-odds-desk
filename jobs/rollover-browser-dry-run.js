@@ -349,6 +349,9 @@ async function clearSavedBetslip(page){
  catch(error){if(error.name==='TimeoutError')return 'browser_cart_heading_not_visible';throw error;}
  const remove=page.getByText('Remove All',{exact:true}).filter({visible:true});
  const loading=page.locator('.m-betslips-loading:visible');
+
+ // An unreadable slip is not an empty slip. Require SportyBet's empty-state prompt.
+ const emptyNotice=page.getByText(/^(?:To place a bet,\s*click on the odds\b|(?:Your\s+)?Betslip is empty\b)/i).filter({visible:true});
  let clicked=false,confirmed=false,emptyReads=0;
  const deadline=Date.now()+15000;
  while(Date.now()<deadline){
@@ -374,7 +377,11 @@ async function clearSavedBetslip(page){
    catch(error){if(error.name==='TimeoutError')return 'browser_cart_remove_button_blocked';throw error;}
    clicked=true;
    emptyReads=0;
-  }else if(count===0&&!(await readSlip(page))&&!(await loading.count())){
+  }else if(count===0&&await emptyNotice.count()===1&&
+           await heading.count()===1&&
+           !/\b[1-9]\d*\b/.test(await heading.innerText())&&
+           !(await readSlip(page))&&!(await loading.count())&&
+           !(await page.getByText('Accept Changes',{exact:true}).filter({visible:true}).count())){
    if(++emptyReads===4)return 'browser_cart_empty';
   }else emptyReads=0;
   await delay(500);
@@ -397,7 +404,10 @@ async function inspect(code,quote,kobo,beforeClick){
   const response=await page.goto(link.href,{waitUntil:'domcontentloaded',timeout:20000});
   const host=new URL(page.url()).hostname;
   if(!response?.ok()||!['www.sportybet.com','sportybet.com'].includes(host))return 'browser_page_unavailable';
-  for(let i=0;i<8;i++){
+  const slipDeadline=Date.now()+20000;
+  const changed=page.getByText('Accept Changes',{exact:true}).filter({visible:true});
+  while(!stopped&&Date.now()<slipDeadline){
+   if(await changed.count())return 'browser_slip_requires_accept_changes';
    const status=verifySlip(await readSlip(page),quote);
    if(status==='browser_slip_verified'&&(liveTest||auto))return await attemptLive(page,code,quote,kobo,beforeClick);
    if(status!=='browser_slip_not_confirmed')return status;

@@ -4247,6 +4247,8 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
     const {pending}=await virtualRollOver.stateOf(redis,lane);
     if(!pending)return res.json({status:'no_pending_ticket'});
     const {code,stake,legs}=pending;
+    if(Array.isArray(legs)&&legs.some(leg=>!virtualRollOver.isRdpVirtualCountry(leg?.country)))
+      return res.json({status:'pending_ticket_league_not_verified'});
     if(!/^[A-Z0-9]{4,32}$/i.test(code)||!Number.isSafeInteger(stake)||stake<=0||!Array.isArray(legs)||legs.length<1||legs.length>lane.maxLegs)
       return res.json({status:'invalid_pending_ticket'});
     const info={code,stakeKobo:stake,legs:legs.map(({eventId,home,away,pick,kickoffUtc,marketId,outcomeId,specifier})=>({eventId,home,away,pick,kickoffUtc,marketId:String(marketId),outcomeId:String(outcomeId),specifier:analyzerSpecifier(specifier)}))};
