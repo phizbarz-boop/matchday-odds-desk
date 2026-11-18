@@ -4181,7 +4181,7 @@ const virtualRollOver=require('./lib/virtualRollOver');
 const rolloverBook=legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true});
 const rolloverTelegram=(text,signal)=>sendTelegramMessage(text,{}, {signal});
 const rolloverRdpLog=text=>console.log('[RDP Virtual Roll Over]',text.split('\n')[0]);
-function createRolloverChain({name,namespace,lane,enabled,configured,notify}){
+function createRolloverChain({name,namespace,lane,enabled,configured,notify,bookOnBoot=false}){
   const run=(ctx)=>withPublicSportyRequest(()=>virtualRollOver.run(ctx,{
     lane,book:rolloverBook,send:text=>notify(text,ctx.signal)
   }),{signal:ctx.signal});
@@ -4193,9 +4193,39 @@ function createRolloverChain({name,namespace,lane,enabled,configured,notify}){
   const scheduler=createWatScheduler({name,times:virtualRollOver.TIMES,runJob,enabled,configured,
     catchupMinutes:3,maxRunMilliseconds:120000});
   let timer,busy=false;
+  const kickoffOf=state=>state?.pending?.legs?.map(leg=>leg.kickoffUtc).filter(Boolean).sort()[0];
+  async function ensureFreshTicket(){
+    const redis=await getRedis();
+    if(!redis)throw Error('storage unavailable');
+    const state=await virtualRollOver.stateOf(redis,lane);
+    if(state.pending?.code){
+      const kick=kickoffOf(state);
+      console.log(`[${name} boot] ticket already running ${state.pending.code}; waiting for kickoff${kick?' '+kick:''}`);
+      return;
+    }
+    const result=await run({redis,slotKey:'boot:'+Date.now(),dateKey:watParts().date,signal:AbortSignal.timeout(110000),shouldAbort:()=>!scheduler.status().running});
+    if(result?.ticketsSent){
+      const fresh=await virtualRollOver.stateOf(redis,lane);
+      const kick=kickoffOf(fresh);
+      console.log(`[${name} boot] fresh ticket ${fresh.pending?.code||'booked'}; waiting for kickoff${kick?' '+kick:''}`);
+      return;
+    }
+    if(result?.retryable||['rollover_busy','prices_changed'].includes(result?.reason))throw Error(result.reason||'retry');
+    console.log(`[${name} boot] no fresh ticket; ${result?.reason||'unavailable'}`);
+  }
   return {status:()=>scheduler.status(),start(){
     scheduler.start();
     if(!scheduler.status().running||timer)return;
+    if(bookOnBoot)void (async()=>{
+      for(let attempt=1;attempt<=8;attempt++){
+        while(busy)await new Promise(resolve=>setTimeout(resolve,1000));
+        busy=true;
+        try{await ensureFreshTicket();return;}
+        catch(error){console.warn(`[${name} boot]`,error.message);if(attempt===8)return;}
+        finally{busy=false;}
+        await new Promise(resolve=>setTimeout(resolve,20000));
+      }
+    })();
     timer=setInterval(async()=>{
       if(busy||!scheduler.status().running)return;
       busy=true;
@@ -4221,7 +4251,7 @@ const rolloverScheduler=createRolloverChain({name:'Virtual Roll Over',namespace:
 const rolloverRdpScheduler=createRolloverChain({name:'RDP Virtual Roll Over',namespace:'virtual-rollover:rdp:schedule',
   lane:virtualRollOver.RDP,enabled:process.env.VIRTUAL_ROLLOVER_RDP_ENABLED==='true',
   configured:Boolean(process.env.REDIS_URL&&process.env.ROLLOVER_WORKER_TOKEN?.length>=32),
-  notify:rolloverRdpLog});
+  notify:rolloverRdpLog,bookOnBoot:true});
 async function virtualRollOverStatus(){
   const schedule=rolloverScheduler.status();
   if(!schedule.enabled||!schedule.configured)return 'ROLL OVER · VIRTUAL FOOTBALL\nScheduled picks are not active.';
