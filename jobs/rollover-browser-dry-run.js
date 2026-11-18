@@ -32,8 +32,8 @@ async function ensureAutoSession(page){
  if(!auto)return;
  const account=page.getByText('My Account',{exact:true}).first();
  if(!sportyOrigin(page))throw loginStop('Automatic sign-in stopped: unexpected website.');
- if(await account.isVisible())return false;
- try{await account.waitFor({state:'visible',timeout:1500});return false;}
+ if(await account.isVisible()){console.log('AUTO: already logged in');return false;}
+ try{await account.waitFor({state:'visible',timeout:1500});console.log('AUTO: already logged in');return false;}
  catch(error){if(error.name!=='TimeoutError')throw error;}
  console.log('AUTO: SportyBet is signed out; logging in');
  const phone=(autoPhone??'').replace(/\D/g,'').replace(/^(?:234|0)(?=\d{10}$)/,'');
@@ -54,8 +54,8 @@ async function ensureAutoSession(page){
   const passwordField=page.locator('input[name="psd"][type="password"]:visible');
   if(!await passwordField.count()){
    const launcher=page.getByText(/^Log\s*in$/i,{exact:true}).filter({visible:true});
-   if(await launcher.count()!==1)throw loginStop('SportyBet login control could not be verified. Use --login.');
-   await launcher.click({timeout:5000});
+   if(!await launcher.count())throw loginStop('SportyBet login control could not be verified. Use --login.');
+   await launcher.first().click({timeout:5000});
   }
   await passwordField.waitFor({state:'visible',timeout:8000});
   const matches=page.getByRole('button',{name:/^Log\s*in$/i}).filter({visible:true});
@@ -598,6 +598,9 @@ async function autoLoop(){
   await saveLedger(ledger);
  }
  console.log(`Automatic rollover armed · ₦${(RULES.openingStakeKobo/100).toLocaleString('en-NG')} start · ${RULES.targetTicketWins} ticket wins · pause after ${RULES.maxConsecutiveLosses} consecutive losses. Real wagers enabled.`);
+ console.log('AUTO: opening SportyBet to check login');
+ const home=profileContext.pages()[0]??await profileContext.newPage();
+ await restoreSessionFromHome(home);
  let lastWait='';
  const reportWait=message=>{if(message!==lastWait){lastWait=message;console.log('AUTO: '+message);}};
  while(!stopped){
