@@ -3803,22 +3803,29 @@ const publicCacheJob=createWatSlotJob({namespace:'sportybet:public-refresh',getR
 const publicCacheScheduler=createWatScheduler({name:'SportyBet public refresh',times:['06:30','12:30','17:30'],runJob:publicCacheJob,
   enabled:!['false','0','off'].includes(String(process.env.SPORTYBET_PUBLIC_CACHE_ENABLED||'true').toLowerCase()),maxRunMilliseconds:3300000});
 const {MORNING_PLANS:FLOOR_PLANS,MORNING_TIMES,MORNING_CATCHUP_MINUTES,runFloorPicks,resolveFloorSlot}=require('./lib/telegramFloorPicks');
+async function applyDailyLessons(rows){
+ try{const redis=await getRedis();if(!redis)return rows;return require('./lib/strategyLearning').adjustDailyRows(rows,await require('./lib/strategyLearning').readModel(redis));}
+ catch(err){console.warn('[strategy-learning]',String(err.message).slice(0,160));return rows;}
+}
 const floorDeps={
  now:()=>new Date(),
  loadPool:({signal,hours=168})=>withPublicSportyRequest(async()=>{
-  const options={sportScope:'all',marketHours:hours,minProbability:0,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'};
+  const floor=require('./lib/telegramFloorPicks');
+  const options={sportScope:'all',marketHours:hours,minProbability:0,minEdge:-100,includeAllMarkets:false,liveMode:'prematch',betTypes:floor.MORNING_POOL_BET_TYPES};
   let rows=await loadAutoCandidates(options);
-  const winners=await loadAutoCandidates({...options,marketHours:504,marketMaxPages:20,includeAllMarkets:false,betTypes:require('./lib/telegramFloorPicks').WINNERS});
+  const winners=await loadAutoCandidates({...options,marketHours:504,marketMaxPages:20,betTypes:floor.WINNERS});
   const keys=new Set(rows.map(sportySelectionKey));
   for(const c of winners)if(!keys.has(sportySelectionKey(c))){rows.push(c);keys.add(sportySelectionKey(c));}
   if(!rows.length&&Object.keys(rows.sourceErrors||{}).length)throw Error('Public SportyBet markets are temporarily unavailable');
-  return require('./lib/sportyH2h').checkCandidates(rows,{signal});
+  return applyDailyLessons(await require('./lib/sportyH2h').checkCandidates(rows,{signal}));
  },{signal}),
  validate:async(selections,{signal,plan})=>{
   const fresh=await require('./lib/sportyH2h').checkCandidates(await validatePublicSelections(selections,{signal}),{signal});if(plan.multi||plan.winnerGapMaxOne||plan.winnerGapBelowOne||plan.winnerGapAboveEight){const feed=await require('./lib/goalKickFeed').collectFootballStatMarkets({marketIds:['1'],hours:168,signal,source:'SportyBet fresh winner gap verification'});return plan.multi?require('./lib/multiPick').annotate(fresh,feed.rows):require('./lib/telegramSmallGap').annotateSmallGap(fresh,feed.rows);}if(!plan.winnerGapOnly)return fresh;
   return withPublicSportyRequest(async()=>{const rows=await loadAutoCandidates({sportScope:'all',marketHours:168,minProbability:70,minEdge:-100,includeAllMarkets:false,liveMode:'prematch',winnerGapOnly:true,betTypes:['home_win','away_win','basketball_winner','hockey_winner','handball_winner','volleyball_winner','tennis_winner']});const keys=new Set(rows.map(sportySelectionKey));return fresh.map(c=>({...c,winnerGapQualified:keys.has(sportySelectionKey(c))}));},{signal});
  },book:selections=>bookBet(selections),send:sendTelegramMessage,
- saveCode:(redis,dateKey,code)=>saveTelegramDailyCodes(redis,dateKey,{codes:[code]}),track:trackTelegramSlip,updateTrack:updateTrackedTicket
+ saveCode:(redis,dateKey,code)=>saveTelegramDailyCodes(redis,dateKey,{codes:[code]}),
+ track:async(redis,slip)=>{const saved=await trackTelegramSlip(redis,slip);await require('./lib/strategyLearning').recordSample(redis,require('./lib/strategyLearning').dailySample(slip,new Date().toISOString())).catch(err=>console.warn('[strategy-learning]',String(err.message).slice(0,160)));return saved;},
+ updateTrack:updateTrackedTicket
 };
 const floorJob=createWatSlotJob({namespace:'telegram:floor',getRedis,run:ctx=>runFloorPicks({...floorDeps,plans:FLOOR_PLANS},ctx)});
 
@@ -3854,7 +3861,7 @@ async function loadTodayTestPool({signal}){
  signal?.throwIfAborted();
  const rows=await require('./lib/sportyPublicCache').publicCandidates(catalog);
  signal?.throwIfAborted();
- return require('./lib/sportyH2h').checkCandidates(rows,{signal});
+ return applyDailyLessons(await require('./lib/sportyH2h').checkCandidates(rows,{signal}));
 }
 
 const todayTestJob=createWatSlotJob({namespace:'telegram:today10k-test',getRedis,run:ctx=>runFloorPicks({...floorDeps,plans:todayTestPlans,loadPool:loadTodayTestPool,namespace:'telegram:today10k-test',buildPack:(pool,opts)=>require('./lib/telegramFloorPicks').buildPack(pool,{...opts,plans:todayTestPlans})},ctx)});
@@ -3866,6 +3873,15 @@ app.post('/api/telegram/today-10k-test',express.json(),todayTestRequests.wrap(as
  const result=await todayTestJob({...slot,signal:AbortSignal.timeout(240000)});return res.status(result.statusCode).json(result.body);
 }));
 app.get('/api/telegram/today-10k-test/run-status/:runId',todayTestRequests.status);
+app.get('/api/strategy-learning',async(req,res)=>{
+ if(!authorizeTelegramJob(req))return res.status(401).json({error:'unauthorized'});
+ try{const redis=await getRedis();if(!redis)return res.status(503).json({error:'REDIS_URL required'});
+  const learning=require('./lib/strategyLearning');
+  const model=await learning.readModel(redis);
+  const samples=JSON.parse(await redis.get(learning.SAMPLES_KEY)||'[]');
+  res.json({model,samples,note:'Virtual rollover and daily-pick settlements train this table. Empty buckets leave selection unchanged.'});
+ }catch(err){res.status(503).json({error:'Strategy learning is unavailable',detail:String(err.message).slice(0,180)});}
+});
 const dailyHighTestPlans=FLOOR_PLANS.filter(p=>p.dailyHighOdds);
 async function loadDailyHighTestPool({signal,dateKey}){
  const now=new Date();
@@ -3877,7 +3893,7 @@ async function loadDailyHighTestPool({signal,dateKey}){
  try{
   const fresh=await withPublicSportyRequest(async()=>{
    const rows=await loadAutoCandidates({sportScope:'all',marketHours:48,minProbability:0,minEdge:-100,includeAllMarkets:true,liveMode:'prematch'});
-   return require('./lib/sportyH2h').checkCandidates(rows,{signal});
+   return applyDailyLessons(await require('./lib/sportyH2h').checkCandidates(rows,{signal}));
   },{signal});
   return fresh.length?fresh:cached;
  }catch(error){
