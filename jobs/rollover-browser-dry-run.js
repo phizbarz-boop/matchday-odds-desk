@@ -32,9 +32,10 @@ async function ensureAutoSession(page){
  if(!auto)return;
  const account=page.getByText('My Account',{exact:true}).first();
  if(!sportyOrigin(page))throw loginStop('Automatic sign-in stopped: unexpected website.');
- if(await account.isVisible())return;
- try{await account.waitFor({state:'visible',timeout:1500});return;}
+ if(await account.isVisible())return false;
+ try{await account.waitFor({state:'visible',timeout:1500});return false;}
  catch(error){if(error.name!=='TimeoutError')throw error;}
+ console.log('AUTO: SportyBet is signed out; logging in');
  const phone=(autoPhone??'').replace(/\D/g,'').replace(/^(?:234|0)(?=\d{10}$)/,'');
  if(!/^\d{10}$/.test(phone)||!autoPassword)
   throw loginStop('SportyBet signed out. Set ROLLOVER_SPORTY_PHONE and ROLLOVER_SPORTY_PASSWORD locally or run --login.');
@@ -68,7 +69,7 @@ async function ensureAutoSession(page){
   const deadline=Date.now()+12000;
   while(Date.now()<deadline){
    await check();
-   if(await account.isVisible()){console.log('AUTO: SportyBet session restored');return;}
+   if(await account.isVisible()){console.log('AUTO: SportyBet session restored');return true;}
    if(await page.getByText(/incorrect password|invalid password|wrong password|too many (?:attempts|logins)|account (?:locked|suspended)/i).filter({visible:true}).count())
     throw loginStop('SportyBet rejected automatic sign-in. Use --login to check the account.');
    await delay(500);
@@ -226,6 +227,7 @@ async function waitForLiveReceipt(page,receipt,quote,kobo){
 }
 async function attemptLive(page,code,quote,kobo=100000,beforeClick=null){
  const stop=reason=>{throw Error('No submission attempted: '+reason);};
+ if(auto)await ensureAutoSession(page);
  if(!(await page.getByText('My Account',{exact:true}).first().isVisible()))stop('sign in using --login');
  if(await page.getByText('Submission Successful',{exact:true}).first().isVisible())stop('a success dialog is already open');
  const slip=await readSlip(page,true);
@@ -399,6 +401,7 @@ async function clearSavedBetslip(page){
    rowRemovalPending=null;
   }
   if(count===1&&!clicked){
+   if(auto)console.log('AUTO: removing the old betslip selection');
    // The overlay can reappear between the check and click. Let Playwright
    // wait for a normal, actionable click; never force it through.
    try{await remove.click({timeout:Math.max(1,deadline-Date.now())});}
@@ -411,6 +414,7 @@ async function clearSavedBetslip(page){
    if(await rowRemove.count()!==rowCount||await first.count()!==1)
     return 'browser_cart_row_remove_unverified';
    if(stopped)return 'browser_cart_check_stopped';
+   if(auto)console.log('AUTO: removing the old betslip selection');
    try{await first.click({timeout:Math.max(1,deadline-Date.now())});}
    catch(error){if(error.name==='TimeoutError')return 'browser_cart_row_remove_blocked';throw error;}
    rowRemovalPending=rowCount;
@@ -435,15 +439,26 @@ async function inspect(code,quote,kobo,beforeClick){
  let page;
  try{
   page=await ctx.newPage();
+  if(auto)console.log('AUTO: checking login and clearing the cart before',code);
   if(review){
    const cart=await clearSavedBetslip(page);
    if(cart!=='browser_cart_empty')return cart;
+   if(auto&&!(await page.getByText('My Account',{exact:true}).first().isVisible()))return 'browser_not_logged_in';
+   if(auto)console.log('AUTO: logged in and the cart is empty');
   }
   const link=new URL(sportyHome);
   link.searchParams.set('shareCode',code);
-  const response=await page.goto(link.href,{waitUntil:'domcontentloaded',timeout:20000});
-  const host=new URL(page.url()).hostname;
-  if(!response?.ok()||!['www.sportybet.com','sportybet.com'].includes(host))return 'browser_page_unavailable';
+  const openTicket=async()=>{
+   const response=await page.goto(link.href,{waitUntil:'domcontentloaded',timeout:20000});
+   const host=new URL(page.url()).hostname;
+   return Boolean(response?.ok()&&['www.sportybet.com','sportybet.com'].includes(host));
+  };
+  if(!await openTicket())return 'browser_page_unavailable';
+  if(auto&&await ensureAutoSession(page)){
+   console.log('AUTO: signed in on the ticket page; reloading',code);
+   if(!await openTicket())return 'browser_page_unavailable';
+  }
+  if(auto&&!(await page.getByText('My Account',{exact:true}).first().isVisible()))return 'browser_not_logged_in';
   const slipDeadline=Date.now()+45000;
   const changed=page.getByText('Accept Changes',{exact:true}).filter({visible:true});
   while(!stopped&&Date.now()<slipDeadline){
@@ -658,7 +673,7 @@ async function autoLoop(){
      }else if(receipt){
       // The share page was slow or still drawing. Keep this code until it is
       // placed or the server withdraws it. Do not burn it on the first miss.
-      if(receipt==='browser_slip_not_confirmed'||receipt==='browser_page_unavailable'||String(receipt).startsWith('browser_cart_')){
+      if(receipt==='browser_slip_not_confirmed'||receipt==='browser_page_unavailable'||receipt==='browser_not_logged_in'||String(receipt).startsWith('browser_cart_')){
        console.log('AUTO: slip not ready for',ticket.code,receipt+'; retrying this same ticket.');
       }else{
        last=ticket.code;
