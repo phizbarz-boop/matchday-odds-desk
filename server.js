@@ -3789,7 +3789,7 @@ const publicCacheJob=createWatSlotJob({namespace:'sportybet:public-refresh',getR
   return {ok:!result.skipped,retryable:Boolean(result.skipped),reason:result.reason||null,source:'SportyBet public website feeds',loginRequired:false};
 }});
 const publicCacheScheduler=createWatScheduler({name:'SportyBet public refresh',times:['06:30','12:30','17:30'],runJob:publicCacheJob,
-  enabled:!['false','0','off'].includes(String(process.env.SPORTYBET_PUBLIC_CACHE_ENABLED||'true').toLowerCase()),maxRunMilliseconds:3300000});
+  enabled:!['false','0','off'].includes(String(process.env.SPORTYBET_PUBLIC_CACHE_ENABLED||'true').toLowerCase()),maxRunMilliseconds:1200000,catchupMinutes:20});
 const {MORNING_PLANS:FLOOR_PLANS,MORNING_TIMES,MORNING_CATCHUP_MINUTES,runFloorPicks,resolveFloorSlot}=require('./lib/telegramFloorPicks');
 async function applyDailyLessons(rows){
  try{const redis=await getRedis();if(!redis)return rows;return require('./lib/strategyLearning').adjustDailyRows(rows,await require('./lib/strategyLearning').readModel(redis));}

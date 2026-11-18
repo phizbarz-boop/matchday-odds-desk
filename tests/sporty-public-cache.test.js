@@ -45,11 +45,11 @@ test('overlapping collection and ordinary request scopes retain separate read ca
   const b=withFreshSportyRequest(()=>memoSportyRead('same',read));release();
   assert.deepEqual(await Promise.all([a,b]),['public','account']);assert.equal(reads,2);
 });
-test('the catalogue retains all returned market types across six sports but only models supported selections',async()=>{
+test('the catalogue drops unmodelled markets across six sports and only models supported selections',async()=>{
   const c=client({async fetchEventDetail(id){const sport=SPORTS.find(s=>id.includes('-'+s+'-')),e=event(sport);
     e.markets.push(market('unsupported-'+sport,'Unmodelled special market',[outcome('special','Special selection',2)]));return {data:e};}});
   const catalog=await collect(c);assert.deepEqual(Object.keys(catalog.sports),SPORTS);assert.equal(catalog.loginRequired,false);
-  for(const data of Object.values(catalog.sports)){assert.equal(data.fixtures.length,1);assert.ok(data.rows.some(r=>r.marketDesc==='Unmodelled special market'));assert.equal(data.coverage.complete,true);}
+  for(const data of Object.values(catalog.sports)){assert.equal(data.fixtures.length,1);assert.ok(data.rows.every(r=>r.marketDesc!=='Unmodelled special market'));assert.equal(data.coverage.complete,true);}
   const candidates=await publicCandidates(catalog);
   for(const label of Object.values(sporty.SPORT_LABELS))assert.ok(candidates.some(c=>c.sport===label),'missing '+label);
   assert.ok(candidates.every(c=>c.probability>0&&c.probability<=100&&c.eventId&&c.marketId&&c.outcomeId));
