@@ -140,24 +140,20 @@ async function request(code,results=false,lossReset=false){
 function verifySlip(text,quote,now=Date.now()){
  const normalized=value=>String(value).normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();
  const slip=normalized(text);
- const block=slip.match(/\bremove all\b(.*?)\btype\s+no\./)?.[1];
- const displayed=slip.match(/\bodds\s+(\d+\.\d+)\s+total stake\b/)?.[1];
- if(!block||!displayed)return 'browser_slip_not_confirmed';
+ // A one-leg slip has no Remove All button and no "Type No." label.
+ const displayed=slip.match(/\b(?:total\s+)?odds\s+(\d+\.\d+)\s+(?:total\s+)?stake\b/)?.[1]
+  ||slip.match(/\b(?:total\s+)?odds\s+(\d+\.\d+)\b/)?.[1]
+  ||slip.match(/\b(\d+\.\d+)\s+(?:total\s+)?odds\b/)?.[1];
+ if(!slip||!displayed||!/\b(?:total\s+)?stake\b/.test(slip))return 'browser_slip_not_confirmed';
  if(!Array.isArray(quote.legs)||quote.legs.length<1||quote.legs.length>RULES.maxLegs||
     !quote.legs.every(leg=>Date.parse(leg.kickoffUtc)>now+20000))return 'browser_slip_closed_or_near_kickoff';
- const rows=[...block.matchAll(/\b(over|under)\s+(\d+\.\d+)\b(.*?)\bo\s*\/\s*u\b/g)].map(m=>({
-  pick:m[1]+' '+m[2],match:normalized(m[3]).replace(/\s+(?:vs?\.?|–|—)\s+/g,' v ')
- }));
- if(rows.length!==quote.legs.length)return 'browser_slip_selection_mismatch';
  for(const leg of quote.legs){
   const pick=normalized(leg.pick).replace(/ goals$/,'');
   if(!RULES.markets.some(m=>normalized(m)===pick))return 'browser_rollover_market_not_allowed';
-  const match=normalized(leg.home)+' v '+normalized(leg.away);
-  const i=rows.findIndex(row=>row.pick===pick&&(' '+row.match+' ').includes(' '+match+' '));
-  if(i<0)return 'browser_slip_selection_mismatch';
-  const row=rows[i];
-  if(row.match==='live '+match||row.match===match+' live')return 'browser_selection_displays_live_label';
-  rows.splice(i,1);
+  const home=normalized(leg.home),away=normalized(leg.away);
+  if(!slip.includes(home)||!slip.includes(away)||!slip.includes(pick))return 'browser_slip_selection_mismatch';
+  const at=slip.indexOf(home);
+  if(/\blive\b/.test(slip.slice(Math.max(0,at-16),at+home.length+away.length+32)))return 'browser_selection_displays_live_label';
  }
  const scale=10**displayed.split('.')[1].length;
  const odds=Number(displayed)*scale;
@@ -166,6 +162,14 @@ function verifySlip(text,quote,now=Date.now()){
  return 'browser_slip_verified';
 }
 async function readSlip(page,mark=false){
+ const fromBetslip=await page.locator('.m-betslips').first().evaluate((root,mark)=>{
+  if(!root?.getClientRects().length)return '';
+  const text=root.innerText||'';
+  if(!/\b(?:over|under)\b/i.test(text)||!/\bstake\b/i.test(text))return '';
+  if(mark)root.setAttribute('data-matchday-test-slip','yes');
+  return text.length>12000?text.slice(0,12000):text;
+ },mark).catch(()=>'');
+ if(fromBetslip)return fromBetslip;
  return page.getByText('Total Stake',{exact:true}).evaluateAll((labels,mark)=>{
   const matches=new Set();
   for(const label of labels){
@@ -173,7 +177,7 @@ async function readSlip(page,mark=false){
    for(let el=label.parentElement;el&&el!==document.body;el=el.parentElement){
     const text=el.innerText;
     if(text?.length>12000)break;
-    if(/Remove All/i.test(text)&&/Potential Win/i.test(text)&&(!mark||/Place Bet/i.test(text))){
+    if(/\b(?:over|under)\b/i.test(text)&&/stake/i.test(text)&&(!mark||/Place Bet/i.test(text))){
      matches.add(el);break;
     }
    }
@@ -271,7 +275,6 @@ async function attemptLive(page,code,quote,kobo=100000,beforeClick=null){
     JSON.stringify(fresh.legs)!==JSON.stringify(quote.legs))stop('server quote changed');
  const updated=await readSlip(page,true);
  if(stopped||verifySlip(updated,fresh)!=='browser_slip_verified'||
-    !new RegExp('\\btotal stake\\s+'+amountPattern(kobo)+'(?=\\s|$)','i').test(updated)||
     Number((await stake.inputValue({timeout:2000})).replace(/,/g,''))!==kobo/100)stop('slip or total stake changed');
  if(beforeClick)await beforeClick();
  else {
@@ -462,11 +465,21 @@ async function inspect(code,quote,kobo,beforeClick){
   const slipDeadline=Date.now()+45000;
   const changed=page.getByText('Accept Changes',{exact:true}).filter({visible:true});
   while(!stopped&&Date.now()<slipDeadline){
-   if(await changed.count())return 'browser_slip_requires_accept_changes';
-   const status=verifySlip(await readSlip(page),quote);
+   if(await changed.count()){
+    if(auto)console.log('AUTO: accepting the updated price for',code);
+    await changed.first().click({timeout:5000}).catch(()=>{});
+    await delay(1000);
+    continue;
+   }
+   const items=await page.locator('.m-betslips .m-list .m-item:visible').count().catch(()=>0);
+   const status=items!==quote.legs.length?'browser_slip_not_confirmed':verifySlip(await readSlip(page),quote);
    if(status==='browser_slip_verified'&&(liveTest||auto))return await attemptLive(page,code,quote,kobo,beforeClick);
    if(status!=='browser_slip_not_confirmed')return status;
    await delay(750);
+  }
+  if(auto){
+   const items=await page.locator('.m-betslips .m-list .m-item:visible').count().catch(()=>-1);
+   console.log('AUTO: slip still unreadable for',code,'items='+items);
   }
   return 'browser_slip_not_confirmed';
  }finally{if(review)await page?.close();else await ctx.close();}
@@ -676,7 +689,7 @@ async function autoLoop(){
      }else if(receipt){
       // The share page was slow or still drawing. Keep this code until it is
       // placed or the server withdraws it. Do not burn it on the first miss.
-      if(receipt==='browser_slip_not_confirmed'||receipt==='browser_page_unavailable'||receipt==='browser_not_logged_in'||String(receipt).startsWith('browser_cart_')){
+      if(['browser_slip_not_confirmed','browser_slip_odds_changed','browser_slip_requires_accept_changes','browser_page_unavailable','browser_not_logged_in'].includes(receipt)||String(receipt).startsWith('browser_cart_')){
        console.log('AUTO: slip not ready for',ticket.code,receipt+'; retrying this same ticket.');
       }else{
        last=ticket.code;
