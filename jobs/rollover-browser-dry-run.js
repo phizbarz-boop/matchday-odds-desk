@@ -171,7 +171,7 @@ async function readSlip(page,mark=false){
    if(!label.getClientRects().length)continue;
    for(let el=label.parentElement;el&&el!==document.body;el=el.parentElement){
     const text=el.innerText;
-    if(text?.length>3500)break;
+    if(text?.length>12000)break;
     if(/Remove All/i.test(text)&&/Potential Win/i.test(text)&&(!mark||/Place Bet/i.test(text))){
      matches.add(el);break;
     }
@@ -444,7 +444,7 @@ async function inspect(code,quote,kobo,beforeClick){
   const response=await page.goto(link.href,{waitUntil:'domcontentloaded',timeout:20000});
   const host=new URL(page.url()).hostname;
   if(!response?.ok()||!['www.sportybet.com','sportybet.com'].includes(host))return 'browser_page_unavailable';
-  const slipDeadline=Date.now()+20000;
+  const slipDeadline=Date.now()+45000;
   const changed=page.getByText('Accept Changes',{exact:true}).filter({visible:true});
   while(!stopped&&Date.now()<slipDeadline){
    if(await changed.count())return 'browser_slip_requires_accept_changes';
@@ -656,8 +656,14 @@ async function autoLoop(){
       await saveLedger(ledger);
       console.log('AUTO: placed',ticket.code,'₦'+decimal(kobo),quote.odds+'x');
      }else if(receipt){
-      last=ticket.code;
-      console.log('AUTO: skipped',ticket.code,receipt);
+      // The share page was slow or still drawing. Keep this code until it is
+      // placed or the server withdraws it. Do not burn it on the first miss.
+      if(receipt==='browser_slip_not_confirmed'||receipt==='browser_page_unavailable'||String(receipt).startsWith('browser_cart_')){
+       console.log('AUTO: slip not ready for',ticket.code,receipt+'; retrying this same ticket.');
+      }else{
+       last=ticket.code;
+       console.log('AUTO: skipped',ticket.code,receipt);
+      }
      }
     }
    }
