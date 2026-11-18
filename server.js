@@ -32,7 +32,7 @@ const {createTelegramHourlyScheduler}=require('./lib/telegramHourlyScheduler');
 const {watHourKey}=require('./lib/telegramQuickCash');
 const {selectionKey:sportySelectionKey}=require('./lib/sportyPublicCache');
 const {refreshTicketResults,buildPerformanceReport,performanceText,registerTelegramPerformanceRoute}=require('./lib/telegramPerformance');
-const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, getPunterProfile } = require('./lib/copyHub');
+const { addObservedCode, importSportySocialBatch, buildLeaderboard, readStore: readCopyHubStore, scanXRecent, settlePending: settleCopyHubPending, forgetSportySocial, getPunterProfile } = require('./lib/copyHub');
 const bookingRequests=createBookingRequests({getRedis,runInScope:fn=>withFreshSportyRequest(fn,{reset:true})});
 console.info('[Runtime memory] startup '+JSON.stringify(require('./lib/runtimeMemory').snapshot()));
 const redisConnection=require('./lib/redisConnection').createRedisConnection({createClient:options=>require('redis').createClient(options)});
@@ -2905,21 +2905,9 @@ app.post('/api/copy/import-code', express.json({ limit: '20kb' }), async (req, r
 });
 
 
-// Protected endpoint used by the twice-daily GitHub Playwright collector.
-// It accepts only sanitized SportySocial feed records; credentials/cookies never reach Render.
-app.post('/api/copy/sportysocial/import-batch', express.json({ limit: '5mb' }), async (req, res) => {
-  try {
-    if (!copyHubEnabled()) return res.status(404).json({ error: 'Copy Hub is disabled' });
-    if (!authorizeCopyHub(req)) return res.status(401).json({ error: 'unauthorized' });
-    const redis = await getRedis();
-    const items = Array.isArray(req.body?.items) ? req.body.items : [];
-    if (!items.length) return res.status(400).json({ error: 'No SportySocial items supplied' });
-    const result = await importSportySocialBatch(redis, items);
-    res.json({ ok: true, source: 'sportysocial', ...result });
-  } catch (err) {
-    console.error('Copy Hub SportySocial import error:', err.message);
-    res.status(400).json({ error: 'Could not import SportySocial batch', detail: process.env.NODE_ENV === 'production' ? undefined : err.message });
-  }
+// SportySocial Copy Hub is retired. Do not collect or import it.
+app.post('/api/copy/sportysocial/import-batch', express.json({ limit: '5mb' }), (_req, res) => {
+  res.status(410).json({ error: 'SportySocial Copy Hub has been removed' });
 });
 
 // Official X API only: no cookie scraping, passwords, browser sessions, or account automation.
@@ -4382,6 +4370,13 @@ const httpServer=app.listen(PORT, () => {
   console.log(`Matchday site listening on :${PORT}`);
   publicCacheScheduler.start();floorScheduler.start();rolloverScheduler.start();rolloverRdpScheduler.start();
   console.log(`[SportyBet access] Public data reads; booking mode=${sportyDirect.sessionStatus().bookingMode}`);
+  void (async()=>{
+    try{
+      const redis=await getRedis();
+      const cleared=await forgetSportySocial(redis);
+      console.log('[SportySocial] removed stored records',cleared.removed);
+    }catch(err){console.warn('[SportySocial] stored records were not cleared',err.message);}
+  })();
 });
 const stopSchedulers=()=>{publicCacheScheduler.stop();floorScheduler.stop();rolloverScheduler.stop();rolloverRdpScheduler.stop();};
 httpServer.once('close',stopSchedulers);
