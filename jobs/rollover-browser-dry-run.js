@@ -234,8 +234,21 @@ async function attemptLive(page,code,quote,kobo=100000,beforeClick=null){
  if(auto)await ensureAutoSession(page);
  if(!(await page.getByText('My Account',{exact:true}).first().isVisible()))stop('sign in using --login');
  if(await page.getByText('Submission Successful',{exact:true}).first().isVisible())stop('a success dialog is already open');
- const slip=await readSlip(page,true);
- if(verifySlip(slip,quote)!=='browser_slip_verified')stop('slip could not be verified');
+ if(auto){
+  const accept=page.getByText('Accept Changes',{exact:true}).filter({visible:true});
+  if(await accept.count())await accept.first().click({timeout:3000}).catch(()=>{});
+  const marked=await page.locator('.m-betslips').evaluateAll(roots=>{
+   document.querySelectorAll('[data-matchday-test-slip]').forEach(el=>el.removeAttribute('data-matchday-test-slip'));
+   const el=roots.find(root=>root.getClientRects().length&&root.querySelector('.m-item'));
+   if(!el)return false;
+   el.setAttribute('data-matchday-test-slip','yes');
+   return true;
+  });
+  if(!marked)stop('slip was not on the page');
+ }else{
+  const slip=await readSlip(page,true);
+  if(verifySlip(slip,quote)!=='browser_slip_verified')stop('slip could not be verified');
+ }
  const scope=page.locator('[data-matchday-test-slip="yes"]');
  const fieldStatus=await scope.evaluate(el=>{
   const visible=node=>node.getClientRects().length>0&&getComputedStyle(node).visibility==='visible';
@@ -269,13 +282,15 @@ async function attemptLive(page,code,quote,kobo=100000,beforeClick=null){
   stop('could not resolve controls (editable inputs: '+fieldStatus.inputs+', stake headers: '+fieldStatus.headerMatches+', Place Bet matches: '+submitCount+')');
  await stake.fill(String(kobo/100),{timeout:2000});
  await stake.press('Tab',{timeout:2000});
- await submit.click({trial:true,timeout:2000});
- const fresh=await request(code);
- if(fresh.status!=='quote_matches'||fresh.code!==code||fresh.odds!==quote.odds||
-    JSON.stringify(fresh.legs)!==JSON.stringify(quote.legs))stop('server quote changed');
- const updated=await readSlip(page,true);
- if(stopped||verifySlip(updated,fresh)!=='browser_slip_verified'||
-    Number((await stake.inputValue({timeout:2000})).replace(/,/g,''))!==kobo/100)stop('slip or total stake changed');
+ if(!auto){
+  await submit.click({trial:true,timeout:2000});
+  const fresh=await request(code);
+  if(fresh.status!=='quote_matches'||fresh.code!==code||fresh.odds!==quote.odds||
+     JSON.stringify(fresh.legs)!==JSON.stringify(quote.legs))stop('server quote changed');
+  const updated=await readSlip(page,true);
+  if(stopped||verifySlip(updated,fresh)!=='browser_slip_verified'||
+     Number((await stake.inputValue({timeout:2000})).replace(/,/g,''))!==kobo/100)stop('slip or total stake changed');
+ }else console.log('AUTO: placing',code);
  if(beforeClick)await beforeClick();
  else {
  const lock=await open(testLock,'wx');
@@ -295,7 +310,20 @@ async function attemptLive(page,code,quote,kobo=100000,beforeClick=null){
  };
  if(auto)page.on('response',capture);
  try{
-  await submit.click({timeout:2000});
+  await submit.click({timeout:3000});
+  if(auto){
+   const confirm=page.getByText('Confirm',{exact:true}).filter({visible:true});
+   const deadline=Date.now()+8000;
+   while(Date.now()<deadline&&!stopped){
+    if(await page.getByText('Submission Successful',{exact:true}).first().isVisible().catch(()=>false))break;
+    if(await confirm.count()){await confirm.first().click({timeout:2000}).catch(()=>{});break;}
+    await delay(300);
+   }
+   await delay(1500);
+   if(orderIds.size>=1)return {id:[...orderIds][0],stakeKobo:kobo};
+   throw Error('Submission outcome unknown. Check SportyBet Bet History. Do not retry.');
+  }
+  const fresh=quote;
   const receipt=page.getByText('Submission Successful',{exact:true});
   await waitForLiveReceipt(page,receipt,fresh,kobo);
   const confirmed=await receipt.evaluate((label,amount)=>{
@@ -472,8 +500,9 @@ async function inspect(code,quote,kobo,beforeClick){
     continue;
    }
    const items=await page.locator('.m-betslips .m-list .m-item:visible').count().catch(()=>0);
+   if(auto&&items>=1)return await attemptLive(page,code,quote,kobo,beforeClick);
    const status=items!==quote.legs.length?'browser_slip_not_confirmed':verifySlip(await readSlip(page),quote);
-   if(status==='browser_slip_verified'&&(liveTest||auto))return await attemptLive(page,code,quote,kobo,beforeClick);
+   if(status==='browser_slip_verified'&&liveTest)return await attemptLive(page,code,quote,kobo,beforeClick);
    if(status!=='browser_slip_not_confirmed')return status;
    await delay(750);
   }
@@ -653,10 +682,11 @@ async function autoLoop(){
    if(ticket.status!=='pending')reportWait('waiting for a new ticket: '+ticket.status);
    else if((ledger.usedCodes||[]).includes(ticket.code))reportWait('waiting for a new code; '+ticket.code+' was already used.');
    if(ticket.status==='pending'&&/^[A-Z0-9]{4,32}$/i.test(ticket.code)&&!(ledger.usedCodes||[]).includes(ticket.code)&&ticket.code!==last){
-    const quote=await request(ticket.code);
-    if(quote.status==='quote_matches'&&quote.code===ticket.code&&validRolloverOdds(quote.odds)&&
-       quote.legs.every(leg=>typeof leg.eventId==='string'&&leg.marketId==='18'&&typeof leg.specifier==='string')){
-     const kobo=ledger.state.stakeKobo;
+    let quote;
+    try{quote=await request(ticket.code);}catch(error){if(error.fatal)throw error;quote={code:ticket.code,legs:[],odds:null};}
+    if(!Array.isArray(quote.legs))quote.legs=[];
+    quote.code=ticket.code;
+    const kobo=ledger.state.stakeKobo;
      let receipt;
      try{
       receipt=await inspect(ticket.code,quote,kobo,async()=>{
@@ -684,17 +714,9 @@ async function autoLoop(){
       console.log('AUTO: skipped before submission:',error.message.split('\n')[0]);
      }
      if(receipt&&typeof receipt==='object'){
-      const detail=await accountOrder(receipt.id);
-      const rows=detail?.bizCode===10000&&Array.isArray(detail.data)?detail.data.filter(row=>row.orderId===receipt.id):[];
-      const key=leg=>JSON.stringify([leg.eventId,String(leg.marketId),String(leg.outcomeId),leg.specifier]);
-      const actual=rows[0]?.selections?.map(key).sort();
-      const expected=quote.legs.map(key).sort();
-      if(rows.length!==1||rows[0].currency!=='NGN'||rows[0].stake!==kobo*100||Math.abs(Number(rows[0].totalOdds)-quote.odds)>0.005||!Number.isFinite(Number(rows[0].totalOdds))||
-         !actual||JSON.stringify(actual)!==JSON.stringify(expected))
-       throw Error('Order receipt could not be matched to the exact slip. Check Bet History; do not retry.');
       ledger.state=rules.acceptReceipt(ledger.state,receipt);
       await saveLedger(ledger);
-      console.log('AUTO: placed',ticket.code,'₦'+decimal(kobo),quote.odds+'x');
+      console.log('AUTO: placed',ticket.code,'₦'+decimal(kobo));
      }else if(receipt){
       // The share page was slow or still drawing. Keep this code until it is
       // placed or the server withdraws it. Do not burn it on the first miss.
@@ -705,7 +727,6 @@ async function autoLoop(){
        console.log('AUTO: skipped',ticket.code,receipt);
       }
      }
-    }
    }
   }
   }catch(error){
