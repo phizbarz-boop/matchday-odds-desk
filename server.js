@@ -4261,11 +4261,12 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
       if(!/^[A-Z0-9]{4,32}$/.test(code))return res.status(400).json({status:'invalid_external_code'});
       const rows=await withPublicSportyRequest(async()=>extractBookingOutcomes(await getBooking(code,{fresh:true})).map(normalizeBookingLeg),{signal:AbortSignal.timeout(12000)});
       if(rows.length<1||rows.length>lane.maxLegs)return res.json({code,status:'selection_count_out_of_range'});
-      const markets={'12:total=0.5':'Over 0.5 Goals','12:total=1.5':'Over 1.5 Goals','13:total=4.5':'Under 4.5 Goals','13:total=5.5':'Under 5.5 Goals'};
+      const markets={'12:total=0.5':'Over 0.5 Goals','13:total=4.5':'Under 4.5 Goals','13:total=5.5':'Under 5.5 Goals','68:13:total=3.5':'1st Half Under 3.5 Goals'};
       const seen=new Set();
+      const marketKey=r=>String(r.marketId)==='68'?'68:'+r.outcomeId+':'+analyzerSpecifier(r.specifier):r.outcomeId+':'+analyzerSpecifier(r.specifier);
       for(const r of rows){
         if(!/^(vfootball|virtual\s*football)$/i.test(r.sport.trim())||!/^sr:match:\d+$/.test(r.eventId)||seen.has(r.eventId)||
-           !r.home||!r.away||r.marketId!=='18'||!Object.hasOwn(markets,r.outcomeId+':'+analyzerSpecifier(r.specifier))||
+           !r.home||!r.away||!['18','68'].includes(String(r.marketId))||!Object.hasOwn(markets,marketKey(r))||
            !Number.isFinite(r.odds)||r.odds<=1)return res.json({code,status:'unsupported_external_selection'});
         seen.add(r.eventId);
       }
@@ -4273,7 +4274,7 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
       if(rows.some(r=>r.odds>lane.maxLegOdds))return res.json({code,status:'selection_odds_above_cap'});
       const odds=rows.reduce((acc,r)=>acc*r.odds,1);
       if(odds<lane.minOdds||odds>lane.maxOdds)return res.json({code,status:'odds_out_of_range'});
-      const legs=rows.map(r=>({eventId:r.eventId,home:r.home,away:r.away,pick:markets[r.outcomeId+':'+analyzerSpecifier(r.specifier)],kickoffUtc:r.kickoffUtc,odds:r.odds}));
+      const legs=rows.map(r=>({eventId:r.eventId,home:r.home,away:r.away,pick:markets[marketKey(r)],kickoffUtc:r.kickoffUtc,odds:r.odds}));
       return res.json({code,status:'quote_matches',odds,legs});
     }
     const redis=await getRedis();
@@ -4281,8 +4282,6 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
     const {pending}=await virtualRollOver.stateOf(redis,lane);
     if(!pending)return res.json({status:'no_pending_ticket'});
     const {code,stake,legs}=pending;
-    if(Array.isArray(legs)&&legs.some(leg=>!virtualRollOver.isRdpVirtualCountry(leg?.country)))
-      return res.json({status:'pending_ticket_league_not_verified'});
     if(!/^[A-Z0-9]{4,32}$/i.test(code)||!Number.isSafeInteger(stake)||stake<=0||!Array.isArray(legs)||legs.length<1||legs.length>lane.maxLegs)
       return res.json({status:'invalid_pending_ticket'});
     const info={code,stakeKobo:stake,legs:legs.map(({eventId,home,away,pick,kickoffUtc,marketId,outcomeId,specifier})=>({eventId,home,away,pick,kickoffUtc,marketId:String(marketId),outcomeId:String(outcomeId),specifier:analyzerSpecifier(specifier)}))};
@@ -4327,7 +4326,7 @@ app.post('/api/sportybet/virtual-rollover/worker/scores',express.json({limit:'8k
     const signal=AbortSignal.timeout(12000);
     const results=await withPublicSportyRequest(()=>Promise.all(legs.map(async leg=>{
       const score=await virtualRollOver.resultFor(sportyDirect,leg,signal).catch(()=>null);
-      return score&&!score.void?{eventId:leg.eventId,status:'final',homeGoals:score.h,awayGoals:score.a}:null;
+      return score&&!score.void?{eventId:leg.eventId,status:'final',homeGoals:score.h,awayGoals:score.a,firstHalfGoals:Number.isInteger(score.fh)?score.fh:null}:null;
     })),{signal});
     return res.json({status:'verified_results',results:results.filter(Boolean)});
   }catch{return res.status(502).json({status:'results_unavailable'});}

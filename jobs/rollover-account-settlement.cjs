@@ -71,7 +71,10 @@ function decodeAccountSettlement(body,pending,finalResults=[]){
 function hasVerifiedLosingSelection(selections,finalResults){
  if(!Array.isArray(finalResults))return false;
  return selections.some(leg=>{
-  if(typeof leg?.eventId!=='string'||!leg.eventId.trim()||String(leg.marketId)!=='18')return false;
+  if(typeof leg?.eventId!=='string'||!leg.eventId.trim())return false;
+  if(String(leg.marketId)==='68'&&String(leg.outcomeId)==='13'&&String(leg.specifier)==='total=3.5')
+   return Number.isSafeInteger(records[0].firstHalfGoals)&&records[0].firstHalfGoals>=4;
+  if(String(leg.marketId)!=='18')return false;
   const records=finalResults.filter(record=>record?.eventId===leg.eventId);
   if(records.length!==1)return false;
   const {status,homeGoals,awayGoals}=records[0];

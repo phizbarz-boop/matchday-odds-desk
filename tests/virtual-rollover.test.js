@@ -79,8 +79,16 @@ test('scheduled virtual End status uses the final setScore and verifies event id
  const event={...f,matchStatus:'End',eventStatus:3,setScore:'0:4',gameScore:['0:2','0:2'],score:'0:2'};
  const read=e=>roll.resultFor({fetchEventDetail:async()=>({data:{event:e}})},f);
  const result=await read(event);
- assert.deepEqual(result,{h:0,a:4});
+ assert.deepEqual(result,{h:0,a:4,fh:2});
  assert.equal(roll.settle({stake:250000,step:0,legs:[{field:'u45',odds:1.13}]},[result]).returned,282500);
  assert.equal(await read({...event,matchStatus:'Live'}),null);
  assert.equal(await read({...event,eventId:'sr:match:other'}),null);
+});
+
+test('RDP follows the virtual markets, adds under 5.5 and 1st-half under 3.5, and starts at ₦2,000 with 1.50-2.00',()=>{
+ assert.equal(roll.RDP.minOdds,1.5);assert.equal(roll.RDP.maxOdds,2);assert.equal(roll.RDP.maxLegs,3);assert.equal(roll.RDP.opening,200000);
+ assert.deepEqual([...roll.RDP.marketFields],['o05','u45','u55','h35']);
+ assert.equal(roll.settle({stake:200000,step:0,legs:[{field:'h35',odds:1.6}]},[{h:2,a:2,fh:1}],200000).returned,320000);
+ assert.equal(roll.settle({stake:200000,step:1,legs:[{field:'h35',odds:1.6}]},[{h:4,a:1,fh:4}],200000).nextBalance,200000);
+ assert.equal(roll.settle({stake:200000,step:1,legs:[{field:'h35',odds:1.6}]},[{h:4,a:1}],200000),null);
 });

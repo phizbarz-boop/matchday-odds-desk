@@ -634,7 +634,8 @@ async function autoLoop(){
  catch(error){if(error.code!=='ENOENT')throw error;ledger={state:rules.initial(),attempt:null,lastCode:null,usedCodes:[]};}
  if(!ledger.attempt&&!ledger.state.pending&&!ledger.state.awaitingReset&&
     ledger.state.wins===0&&((ledger.state.runOpeningStakeKobo==null&&ledger.state.stakeKobo===200000)||
-    (ledger.state.runOpeningStakeKobo===500000&&ledger.state.stakeKobo===500000))){
+    (ledger.state.runOpeningStakeKobo===500000&&ledger.state.stakeKobo===500000)||
+    ((ledger.state.runOpeningStakeKobo==null||ledger.state.runOpeningStakeKobo===250000)&&ledger.state.stakeKobo===250000))){
   ledger.state.stakeKobo=RULES.openingStakeKobo;
   ledger.state.runOpeningStakeKobo=RULES.openingStakeKobo;
   await saveLedger(ledger);
