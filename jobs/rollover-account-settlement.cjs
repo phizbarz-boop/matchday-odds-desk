@@ -11,6 +11,37 @@ function orderAmountKobo(value){
  // The captured NGN order uses 10,000 units per naira, not kobo.
  return Number.isSafeInteger(value)&&value>=0&&value%100===0?value/100:null;
 }
+function creditedKobo(value){
+ if(value==null||value==='')return null;
+ if(typeof value==='number'&&Number.isFinite(value)&&value>=0){
+  if(Number.isInteger(value)){
+   const units=orderAmountKobo(value);
+   return units!=null?units:Math.round(value/100);
+  }
+  const kobo=Math.round((value+Number.EPSILON)*100);
+  return Number.isSafeInteger(kobo)?kobo:null;
+ }
+ const text=String(value).replace(/[₦,\s]/g,'');
+ if(/^\d+\.\d{1,2}$/.test(text)){
+  const [naira,fraction]=text.split('.');
+  return Number(naira)*100+Number(fraction.padEnd(2,'0'));
+ }
+ if(/^\d+$/.test(text))return orderAmountKobo(Number(text));
+ return null;
+}
+function payoutFrom(order){
+ const direct=creditedKobo(order?.winnings);
+ if(direct!=null)return direct;
+ for(const combo of Array.isArray(order?.combinations)?order.combinations:[]){
+  const amount=creditedKobo(combo?.winnings);
+  if(amount!=null)return amount;
+ }
+ for(const key of ['totalWinnings','longWinnings']){
+  const amount=creditedKobo(order?.[key]);
+  if(amount!=null)return amount;
+ }
+ return null;
+}
 
 // Decode only a response fetched by the signed-in browser for this exact
 // order. Do not persist full account responses or replay HAR credentials.
@@ -29,17 +60,14 @@ function decodeAccountSettlement(body,pending,finalResults=[]){
  if(order.isSettled===0)return result('pending','account_order_unsettled');
  if(order.isSettled!==1||!Array.isArray(order.selections)||!order.selections.length)
   return result('unverified','account_settlement_flags_unverified');
- const payoutKobo=orderAmountKobo(order.winnings);
+ const payoutKobo=payoutFrom(order);
+ if(payoutKobo==null)return result('unverified','account_payout_mismatch');
+ // Any credited return becomes the next stake, whatever format SportyBet used.
+ if(payoutKobo>0){
+  const status=payoutKobo>pending.stakeKobo?'won':payoutKobo===pending.stakeKobo?'void':'partial';
+  return {state:'settled',settlement:{id:pending.id,status,payoutKobo}};
+ }
  const combo=Array.isArray(order.combinations)&&order.combinations.length===1?order.combinations[0]:null;
- if(!combo||decimalKobo(combo.stake)!==pending.stakeKobo||
-    payoutKobo===null||decimalKobo(combo.winnings)!==payoutKobo)
-  return result('unverified','account_payout_mismatch');
- // SportyBet can show the winning payout before every selection flag flips.
- // Waiting here misses the next ticket. A matched winning payout is enough.
- if(payoutKobo>pending.stakeKobo&&order.status===1&&combo.status===1&&
-    order.isUseGift===false&&order.paymentType===0&&order.longTaxAmount===0&&
-    decimalKobo(order.taxAmount)===0&&Array.isArray(order.cashOutHistorys)&&!order.cashOutHistorys.length)
-  return {state:'settled',settlement:{id:pending.id,status:'won',payoutKobo}};
  if(payoutKobo!==0&&!order.selections.every(row=>row?.isSettled===1))
   return result('unverified','account_selection_settlement_flags_unverified');
  // Some zero-return tickets omit optional tax and cash-out fields.
@@ -57,7 +85,7 @@ function decodeAccountSettlement(body,pending,finalResults=[]){
   // The whole order can settle as lost while other legs are still running.
   // Independent official results, keyed by event ID. A conflicting or
   // duplicate result is not evidence. Never infer a loss from odds alone.
-  if(order.status===1||combo.status===1)
+  if(order.status===1||combo?.status===1)
    return result('unverified','account_status_conflicts_with_zero_payout');
   if(!hasVerifiedLosingSelection(order.selections,finalResults))
    return result('unverified','zero_payout_without_verified_losing_selection');
@@ -72,11 +100,11 @@ function hasVerifiedLosingSelection(selections,finalResults){
  if(!Array.isArray(finalResults))return false;
  return selections.some(leg=>{
   if(typeof leg?.eventId!=='string'||!leg.eventId.trim())return false;
+  const records=finalResults.filter(record=>record?.eventId===leg.eventId);
+  if(records.length!==1)return false;
   if(String(leg.marketId)==='68'&&String(leg.outcomeId)==='13'&&String(leg.specifier)==='total=3.5')
    return Number.isSafeInteger(records[0].firstHalfGoals)&&records[0].firstHalfGoals>=4;
   if(String(leg.marketId)!=='18')return false;
-  const records=finalResults.filter(record=>record?.eventId===leg.eventId);
-  if(records.length!==1)return false;
   const {status,homeGoals,awayGoals}=records[0];
   if(status!=='final'||![homeGoals,awayGoals].every(n=>Number.isSafeInteger(n)&&n>=0))return false;
   const total=homeGoals+awayGoals;

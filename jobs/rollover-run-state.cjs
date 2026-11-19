@@ -36,10 +36,11 @@ function settle(state,result,now=Date.now()){
  const next=refresh(state,now);
  if(!next.pending||next.pending.id!==result?.id)throw Error('Settlement does not match the pending ticket');
  const {status,payoutKobo}=result,{stakeKobo}=next.pending;
+ const partial=status==='partial'&&payoutKobo>0&&payoutKobo<stakeKobo;
  if(!money(payoutKobo)||!(
    (status==='lost'&&payoutKobo===0)||
    (status==='won'&&payoutKobo>stakeKobo)||
-   (status==='void'&&payoutKobo===stakeKobo)))throw Error('Settlement or credited payout is not verified');
+   (status==='void'&&payoutKobo===stakeKobo)||partial))throw Error('Settlement or credited payout is not verified');
  const profitKobo=payoutKobo-stakeKobo;
  next.netKobo+=profitKobo;
  next.pending=null;
