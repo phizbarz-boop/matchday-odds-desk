@@ -45,25 +45,16 @@ test('an empty learning store does not change virtual selection',()=>{
  assert.equal(plain.legs[0].eventId,learned.legs[0].eventId);assert.equal(plain.odds,learned.odds);
 });
 
-test('RDP skips weak Under 4.5 leagues and unproven Over 0.5 leagues',()=>{
- const played=(field,league,status,i)=>({id:field+league+i,strategy:'virtual-rollover-rdp',status,legs:[{eventId:'sr:match:'+field+i,league,field,betType:field,status,startingOdds:1.3,modelProbability:70}]});
- const samples=[
-  ...Array.from({length:3},(_,i)=>played('u45','Bad League','lost',i)),
-  ...Array.from({length:3},(_,i)=>played('u45','Good League','won',i)),
-  ...Array.from({length:3},(_,i)=>played('o05','Good Over','won',i)),
-  played('o05','Good Over','lost',9),
-  ...Array.from({length:3},(_,i)=>played('o05','Bad Over','lost',i))
- ];
- const model=learning.train(samples);
- const board=[{fixture:{league:'x'},rows:[
-  {field:'u45',league:'Bad League',odds:1.2,probability:70,home:'A',away:'B'},
-  {field:'u45',league:'Good League',odds:1.2,probability:70,home:'C',away:'D'},
-  {field:'u45',league:'New League',odds:1.2,probability:70,home:'E',away:'F'},
-  {field:'o05',league:'Good Over',odds:1.2,probability:80,home:'G',away:'H'},
-  {field:'o05',league:'Bad Over',odds:1.2,probability:80,home:'I',away:'J'},
-  {field:'o05',league:'New League',odds:1.2,probability:80,home:'K',away:'L'},
-  {field:'h35',league:'Bad League',odds:1.5,probability:75,home:'M',away:'N'}
+test('RDP keeps unders in Spain and France and Over 0.5 in England',()=>{
+ const board=[{fixture:{},rows:[
+  {field:'u45',league:'Spain League',odds:1.2,probability:70},
+  {field:'u55',league:'French League',odds:1.3,probability:70},
+  {field:'h35',country:'spain',league:'999',odds:1.4,probability:70},
+  {field:'u45',league:'England League',odds:1.2,probability:70},
+  {field:'o05',league:'England League',odds:1.2,probability:80},
+  {field:'o05',league:'Spain League',odds:1.2,probability:80},
+  {field:'h35',league:'Italy League',odds:1.4,probability:70}
  ]}];
- const kept=learning.filterVirtualBoard(board,model,'virtual-rollover-rdp')[0].rows.map(row=>row.field+':'+row.league);
- assert.deepEqual(kept,['u45:Good League','u45:New League','o05:Good Over','h35:Bad League']);
+ const kept=learning.filterVirtualBoard(board,learning.train([]),'virtual-rollover-rdp')[0].rows.map(row=>row.field+':'+(row.country||row.league));
+ assert.deepEqual(kept,['u45:Spain League','u55:French League','h35:spain','o05:England League']);
 });
