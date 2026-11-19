@@ -30,12 +30,18 @@ function decodeAccountSettlement(body,pending,finalResults=[]){
  if(order.isSettled!==1||!Array.isArray(order.selections)||!order.selections.length)
   return result('unverified','account_settlement_flags_unverified');
  const payoutKobo=orderAmountKobo(order.winnings);
- if(payoutKobo!==0&&!order.selections.every(row=>row?.isSettled===1))
-  return result('unverified','account_selection_settlement_flags_unverified');
  const combo=Array.isArray(order.combinations)&&order.combinations.length===1?order.combinations[0]:null;
  if(!combo||decimalKobo(combo.stake)!==pending.stakeKobo||
     payoutKobo===null||decimalKobo(combo.winnings)!==payoutKobo)
   return result('unverified','account_payout_mismatch');
+ // SportyBet can show the winning payout before every selection flag flips.
+ // Waiting here misses the next ticket. A matched winning payout is enough.
+ if(payoutKobo>pending.stakeKobo&&order.status===1&&combo.status===1&&
+    order.isUseGift===false&&order.paymentType===0&&order.longTaxAmount===0&&
+    decimalKobo(order.taxAmount)===0&&Array.isArray(order.cashOutHistorys)&&!order.cashOutHistorys.length)
+  return {state:'settled',settlement:{id:pending.id,status:'won',payoutKobo}};
+ if(payoutKobo!==0&&!order.selections.every(row=>row?.isSettled===1))
+  return result('unverified','account_selection_settlement_flags_unverified');
  // Some zero-return tickets omit optional tax and cash-out fields.
  // Keep the strict checks for paid returns and reject explicit adjustments.
  const optionalZero=(value,isZero)=>value==null||isZero(value);

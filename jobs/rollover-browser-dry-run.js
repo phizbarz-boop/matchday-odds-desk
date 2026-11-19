@@ -667,8 +667,17 @@ async function autoLoop(){
       });
      }catch(error){
       if(ledger.attempt){
-       console.log('AUTO: submission needs Bet History verification; new bets paused.');
-       if(!stopped)await delay(10000);
+       let recovered=false;
+       try{recovered=await recoverFromBetHistory(ledger,rules);}catch(err){if(err.fatal)throw err;}
+       if(!recovered&&!stopped){
+        await delay(5000);
+        try{recovered=await recoverFromBetHistory(ledger,rules);}catch(err){if(err.fatal)throw err;}
+       }
+       if(recovered)continue;
+       ledger.attempt=null;
+       ledger.usedCodes=(ledger.usedCodes||[]).filter(code=>code!==ticket.code);
+       await saveLedger(ledger);
+       console.log('AUTO: place was not accepted for',ticket.code+'; retrying this ticket.');
        continue;
       }
       if(error.fatal||retryableAppRead(error))throw error;
