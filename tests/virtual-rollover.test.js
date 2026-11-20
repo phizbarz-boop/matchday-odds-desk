@@ -121,3 +121,17 @@ test('the one-year prior prices the best teams and can stand in when recent form
  assert.ok(ticket);
  assert.ok(ticket.probability>0.9);
 });
+
+test('the virtual desk applies the probability floor and rejects markets outside the four virtual bets',()=>{
+ const now=Date.now(), kick=new Date(now+600000).toISOString();
+ const board=[{fixture:{eventId:'sr:match:desk',home:'RAY',away:'VCF',league:'Spain',kickoffUtc:kick},rows:[
+  {field:'u45',odds:1.4,home:'RAY',away:'VCF',eventId:'sr:match:desk',pick:'Under 4.5'},
+  {field:'o15',odds:1.4,home:'RAY',away:'VCF',eventId:'sr:match:desk',pick:'Over 1.5'}
+ ]}];
+ const lane={minOdds:1.2,maxOdds:2,maxLegs:2,marketFields:['u45','u55','o05','h35']};
+ assert.equal(roll.select(board,[],now,new Set(),{...lane,minProbability:99}),null);
+ const ticket=roll.select(board,[],now,new Set(),{...lane,minProbability:80});
+ assert.equal(ticket.legs.length,1);assert.equal(ticket.legs[0].field,'u45');
+ assert.deepEqual(roll.deskOptions({markets:['o15','u45'],minProbability:200,maxLegs:20}).markets,['u45']);
+ assert.equal(roll.deskOptions({minOdds:1.8,maxOdds:1.2}).maxOdds,1.8);
+});
