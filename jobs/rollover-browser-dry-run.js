@@ -298,11 +298,12 @@ async function attemptLive(page,code,quote,kobo=100000,beforeClick=null){
  finally{await lock.close();}
  }
  const orderIds=new Set(),reads=[];
+ let refusal='';
  const capture=response=>{
   const u=new URL(response.url());
   if(!auto||u.origin!=='https://www.sportybet.com'&&u.origin!=='https://sportybet.com'||response.request().method()!=='POST'||!/^\/api\/ng\/(?:realSportsGame\/order|orders\/(?:order|bet|placeBet))$/i.test(u.pathname))return;
   reads.push(response.json().then(body=>{
-   if(body?.bizCode!==10000)return;
+   if(body?.bizCode!==10000){refusal=String(body?.message||body?.innerMsg||body?.bizCode||'refused').replace(/\s+/g,' ').slice(0,140);return;}
    for(const row of [body.data,...(Array.isArray(body.data)?body.data:[]),body.data?.order]){
     if(typeof row?.orderId==='string'&&/^\d+ord\d+$/i.test(row.orderId))orderIds.add(row.orderId);
    }
@@ -320,7 +321,9 @@ async function attemptLive(page,code,quote,kobo=100000,beforeClick=null){
     await delay(300);
    }
    await delay(1500);
+   await Promise.allSettled(reads);
    if(orderIds.size>=1)return {id:[...orderIds][0],stakeKobo:kobo};
+   if(refusal)console.log('AUTO: SportyBet refused',code+':',refusal);
    throw Error('Submission outcome unknown. Check SportyBet Bet History. Do not retry.');
   }
   const fresh=quote;
@@ -638,6 +641,7 @@ async function autoLoop(){
  catch(error){if(error.code!=='ENOENT')throw error;ledger={state:rules.initial(),attempt:null,lastCode:null,usedCodes:[]};}
  if(!ledger.attempt&&!ledger.state.pending&&!ledger.state.awaitingReset&&
     ledger.state.wins===0&&((ledger.state.runOpeningStakeKobo==null&&ledger.state.stakeKobo===200000)||
+    (ledger.state.runOpeningStakeKobo===200000&&ledger.state.stakeKobo===200000)||
     (ledger.state.runOpeningStakeKobo===500000&&ledger.state.stakeKobo===500000)||
     ((ledger.state.runOpeningStakeKobo==null||ledger.state.runOpeningStakeKobo===250000)&&ledger.state.stakeKobo===250000))){
   ledger.state.stakeKobo=RULES.openingStakeKobo;
