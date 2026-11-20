@@ -6,7 +6,7 @@ test('scheduled Roll Over waits for a confirmed score, then rolls the win and re
  let now=Date.now()-3600000, id='sr:match:99901', kickoff=now+120000, mode='NS', score='0:0', books=0;
  const messages=[], map=new Map();
  const redis={get:async k=>map.get(k),set:async(k,v,o)=>{if(o?.NX&&map.has(k))return null;map.set(k,v);return 'OK';},eval:async(_,o)=>{if(map.get(o.keys[0])===o.arguments[0])map.delete(o.keys[0]);}};
- const f={eventId:id,homeTeamName:'V A',awayTeamName:'V B',tournamentId:'777',estimateStartTime:kickoff};
+ const f={eventId:id,homeTeamName:'MON',awayTeamName:'RAY',tournamentId:'777',estimateStartTime:kickoff};
  const active=()=>({...f,eventId:id,estimateStartTime:kickoff,matchStatus:mode,score});
  const client={
   fetchPrematchPage:async sport=>{assert.equal(sport,'sr:sport:202120001');return {data:{events:[{...active(),markets:[
@@ -16,7 +16,7 @@ test('scheduled Roll Over waits for a confirmed score, then rolls the win and re
   fetchEventDetail:async eventId=>({data:{...active(),eventId,...(eventId!==id?{matchStatus:'FT',score:'1:0'}:{})}})
  };
  const state=roll.freshState();
- for(let i=0;i<5;i++)state.history.push({eventId:'sr:match:'+(500+i),league:'777',home:'V A',away:'V B',h:1,a:1,verifiedAt:now-3600000-i});
+ for(let i=0;i<5;i++)state.history.push({eventId:'sr:match:'+(500+i),league:'777',home:'MON',away:'RAY',h:1,a:1,verifiedAt:now-3600000-i});
  await redis.set('virtual-rollover:v1',JSON.stringify(state));
  const run=(slotKey,pendingCode)=>roll.run({redis,slotKey,pendingCode,dateKey:'2026-11-15'},{client,clock:()=>now,book:async legs=>{
   assert.equal(legs.length,1);assert.equal(legs[0].specifier,'total=4.5');books++;return {shareCode:'CODE'+books};
@@ -91,4 +91,17 @@ test('RDP follows the virtual markets, adds under 5.5 and 1st-half under 3.5, an
  assert.equal(roll.settle({stake:200000,step:0,legs:[{field:'h35',odds:1.6}]},[{h:2,a:2,fh:1}],200000).returned,320000);
  assert.equal(roll.settle({stake:200000,step:1,legs:[{field:'h35',odds:1.6}]},[{h:4,a:1,fh:4}],200000).nextBalance,200000);
  assert.equal(roll.settle({stake:200000,step:1,legs:[{field:'h35',odds:1.6}]},[{h:4,a:1}],200000),null);
+});
+
+test('research list allows a bet when either team has zero fails on that market',()=>{
+ const row=(field,home,away)=>({field,home,away});
+ assert.equal(roll.rowTeamAllowed(row('u45','RAY','CHE')),true);
+ assert.equal(roll.rowTeamAllowed(row('u45','CHE','ARS')),false);
+ assert.equal(roll.rowTeamAllowed(row('u55','TOU','ARS')),true);
+ assert.equal(roll.rowTeamAllowed(row('u55','CHE','ARS')),false);
+ assert.equal(roll.rowTeamAllowed(row('o05','SGE','CHE')),true);
+ assert.equal(roll.rowTeamAllowed(row('o05','BMU','CHE')),false);
+ assert.equal(roll.rowTeamAllowed(row('h35','INT','CHE')),true);
+ assert.equal(roll.rowTeamAllowed(row('h35','CHE','ARS')),false);
+ assert.equal(roll.rowTeamAllowed(row('o15','MON','RAY')),false);
 });
