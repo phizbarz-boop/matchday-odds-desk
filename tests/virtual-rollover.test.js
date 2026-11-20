@@ -97,10 +97,13 @@ test('research list allows a bet when either team has zero fails on that market'
  const row=(field,home,away)=>({field,home,away});
  assert.equal(roll.rowTeamAllowed(row('u45','RAY','CHE')),true);
  assert.equal(roll.rowTeamAllowed(row('u45','CHE','ARS')),false);
- assert.equal(roll.rowTeamAllowed(row('u55','TOU','ARS')),true);
+ assert.equal(roll.rowTeamAllowed(row('u55','RBB','ARS')),true);
+ assert.equal(roll.rowTeamAllowed(row('u55','TOU','ARS')),false);
  assert.equal(roll.rowTeamAllowed(row('u55','CHE','ARS')),false);
  assert.equal(roll.rowTeamAllowed(row('o05','SGE','CHE')),true);
- assert.equal(roll.rowTeamAllowed(row('o05','BMU','CHE')),false);
+ assert.equal(roll.rowTeamAllowed(row('o05','BMU','CHE')),true);
+ assert.equal(roll.rowTeamAllowed(row('o05','FRO','CHE')),false);
+ assert.equal(roll.rowTeamAllowed(row('h35','AUX','CHE')),true);
  assert.equal(roll.rowTeamAllowed(row('h35','INT','CHE')),true);
  assert.equal(roll.rowTeamAllowed(row('h35','CHE','ARS')),false);
  assert.equal(roll.rowTeamAllowed(row('o15','MON','RAY')),false);
