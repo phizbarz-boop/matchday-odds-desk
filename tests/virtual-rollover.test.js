@@ -139,4 +139,10 @@ test('the virtual desk applies the probability floor and rejects markets outside
  const many=Array.from({length:50},(_,i)=>({fixture:{eventId:'sr:match:m'+i,home:'RAY',away:'VCF',league:'Spain',kickoffUtc:kick},rows:[{field:'u45',odds:1.02,home:'RAY',away:'VCF',eventId:'sr:match:m'+i,pick:'Under 4.5'}]}));
  const wide=roll.select(many,[],now,new Set(),{...lane,maxOdds:20,maxLegs:50,minProbability:80,stack:true});
  assert.equal(wide.legs.length,50);
+
+ assert.equal(roll.rowTeamAllowed({field:'u45',home:'CHE',away:'ZZZ'}),false);
+ const plain=[{fixture:{eventId:'sr:match:che',home:'CHE',away:'ZZZ',league:'England',kickoffUtc:kick},rows:[{field:'u45',odds:1.4,home:'CHE',away:'ZZZ',eventId:'sr:match:che',pick:'Under 4.5'}]}];
+ assert.equal(roll.select(plain,[],now,new Set(),{...lane,stack:true,minProbability:85}),null);
+ assert.equal(roll.select(plain,[],now,new Set(),{...lane,stack:true,minProbability:70}).legs[0].field,'u45');
 });
+
