@@ -564,6 +564,10 @@ async function accountOrder(id){
  }finally{await page.close();}
 }
 function historyStakeKobo(value){
+ if(typeof value==='number'&&Number.isFinite(value)){
+  const kobo=Math.round(value*100);
+  return Number.isSafeInteger(kobo)?kobo:null;
+ }
  if(typeof value!=='string'||!/^\d+(?:\.\d{1,2})?$/.test(value))return null;
  const [whole,fraction='']=value.split('.');
  const kobo=Number(whole+fraction.padEnd(2,'0'));
@@ -578,7 +582,7 @@ function matchHistoryOrder(body,attempt,time){
  const matches=body.data.entityList.filter(row=>{
   if(typeof row?.orderId!=='string'||!/^\d+ord\d+$/i.test(row.orderId)||
      row.currency!=='NGN'||row.paymentType!==0||row.isPaymentInProgress!==false||
-     !Number.isSafeInteger(row.createTime)||row.createTime<time-30000||row.createTime>time+120000||
+     !Number.isSafeInteger(row.createTime)||row.createTime<time-120000||row.createTime>time+600000||
      historyStakeKobo(row.totalStake)!==attempt.stakeKobo||!Array.isArray(row.selections))return false;
   if(Number.isFinite(attempt.odds)){
    const actualOdds=row.selections.reduce((n,leg)=>n*Number(leg.odds),1);
@@ -656,7 +660,19 @@ async function autoLoop(){
    let recovered=false;
    try{recovered=await recoverFromBetHistory(ledger,rules);}
    catch(error){if(error.fatal||ledger.state.pending)throw error;}
-   if(!recovered)console.log('AUTO: waiting for the existing order to appear in Bet History; new bets paused.');
+   if(!recovered){
+    ledger.historyMisses=(ledger.historyMisses||0)+1;
+    const started=Number(ledger.attempt?.startedAt)||0;
+    const waited=started?Date.now()-started:ledger.historyMisses*10000;
+    if(waited>=3*60*1000){
+     const code=ledger.attempt.code;
+     ledger.attempt=null;
+     ledger.historyMisses=0;
+     await saveLedger(ledger);
+     lastWait='';
+     console.log('AUTO: no Bet History order for',code,'after 3 minutes. It was not placed. Taking the next ticket.');
+    }else reportWait('waiting for the existing order to appear in Bet History; new bets paused.');
+   }else ledger.historyMisses=0;
   }else if(ledger.state.pending){
    const detail=await accountOrder(ledger.state.pending.id);
    let result=reconcileAccount(ledger.state,detail,[]);
