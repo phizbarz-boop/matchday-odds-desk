@@ -102,9 +102,22 @@ test('research list allows a bet when either team has zero fails on that market'
  assert.equal(roll.rowTeamAllowed(row('u55','CHE','ARS')),false);
  assert.equal(roll.rowTeamAllowed(row('o05','SGE','CHE')),true);
  assert.equal(roll.rowTeamAllowed(row('o05','BMU','CHE')),true);
- assert.equal(roll.rowTeamAllowed(row('o05','FRO','CHE')),false);
+ assert.equal(roll.rowTeamAllowed(row('o05','FRO','RAY')),false);
  assert.equal(roll.rowTeamAllowed(row('h35','AUX','CHE')),true);
  assert.equal(roll.rowTeamAllowed(row('h35','INT','CHE')),true);
  assert.equal(roll.rowTeamAllowed(row('h35','CHE','ARS')),false);
  assert.equal(roll.rowTeamAllowed(row('o15','MON','RAY')),false);
+});
+
+test('the one-year prior prices the best teams and can stand in when recent form is missing',()=>{
+ const prior=require('../lib/vfTeamPrior');
+ assert.ok(prior.rate('RAY','u45')>prior.rate('CHE','u45'));
+ assert.equal(prior.best('CHE','o05'),true);
+ assert.equal(prior.best('CHE','u45'),false);
+ assert.equal(roll.rowTeamAllowed({field:'u45',home:'VCF',away:'CHE'}),true);
+ assert.equal(roll.rowTeamAllowed({field:'o05',home:'CHE',away:'SUN'}),true);
+ const now=Date.now();
+ const ticket=roll.select([{fixture:{eventId:'sr:match:prior',home:'RAY',away:'VCF',league:'Spain',kickoffUtc:new Date(now+600000).toISOString()},rows:[{field:'u45',odds:1.2,home:'RAY',away:'VCF',eventId:'sr:match:prior'}]}],[],now);
+ assert.ok(ticket);
+ assert.ok(ticket.probability>0.9);
 });
