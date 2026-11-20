@@ -50,15 +50,39 @@ async function ensureAutoSession(page){
  };
  try{
   await check();
-  const phoneField=page.locator('input[name="phone"]:visible');
-  const passwordField=page.locator('input[name="psd"][type="password"]:visible');
-  if(!await passwordField.count()){
-   const launcher=page.getByText(/^Log\s*in$/i,{exact:true}).filter({visible:true});
-   if(!await launcher.count())throw loginStop('SportyBet login control could not be verified. Use --login.');
-   await launcher.first().click({timeout:5000});
+  const markLogin=()=>page.evaluate(()=>{
+   const visible=el=>!!el.getClientRects().length&&getComputedStyle(el).visibility==='visible'&&getComputedStyle(el).display!=='none';
+   const text=el=>(el.innerText||el.value||'').replace(/\s+/g,' ').trim();
+   document.querySelectorAll('[data-matchday-login]').forEach(el=>el.removeAttribute('data-matchday-login'));
+   const passwords=[...document.querySelectorAll('input[type="password"]')].filter(visible);
+   if(passwords.length!==1)return {passwords:passwords.length};
+   const password=passwords[0];
+   let phone=null,button=null;
+   for(let el=password.parentElement,i=0;el&&el!==document.body&&i<8;el=el.parentElement,i++){
+    const phones=[...el.querySelectorAll('input')].filter(node=>node!==password&&visible(node)&&/^(?:tel|text|number|search)?$/.test(node.type||'')&&!node.readOnly&&!node.disabled);
+    const buttons=[...el.querySelectorAll('button,a,div,span')].filter(node=>visible(node)&&/^log\s*in$/i.test(text(node))&&![...node.children].some(child=>/^log\s*in$/i.test(text(child))));
+    if(!phone&&phones.length===1)phone=phones[0];
+    if(!button&&buttons.length===1)button=buttons[0];
+    if(phone&&button)break;
+   }
+   if(!phone||!button)return {passwords:1,phone:!!phone,button:!!button};
+   password.setAttribute('data-matchday-login','password');
+   phone.setAttribute('data-matchday-login','phone');
+   button.setAttribute('data-matchday-login','submit');
+   return {passwords:1,phone:true,button:true};
+  }).catch(()=>null);
+  let marked=null;
+  const readyAt=Date.now()+15000;
+  while(Date.now()<readyAt&&!stopped){
+   if(await account.isVisible()){console.log('AUTO: already logged in');return false;}
+   marked=await markLogin();
+   if(marked?.phone&&marked?.button)break;
+   await delay(500);
   }
-  await passwordField.waitFor({state:'visible',timeout:8000});
-  const matches=page.getByRole('button',{name:/^Log\s*in$/i}).filter({visible:true});
+  if(!(marked?.phone&&marked?.button))throw loginStop('SportyBet login control could not be verified. Use --login.');
+  const phoneField=page.locator('[data-matchday-login="phone"]');
+  const passwordField=page.locator('[data-matchday-login="password"]');
+  const matches=page.locator('[data-matchday-login="submit"]');
   if(await phoneField.count()!==1||await passwordField.count()!==1||await matches.count()!==1)
    throw loginStop('SportyBet login form could not be verified. Use --login.');
   await check();
