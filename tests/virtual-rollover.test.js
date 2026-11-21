@@ -153,3 +153,15 @@ test('the higher virtual session looks six hours ahead and leaves the rollover w
  assert.equal(roll.deskSession({session:'higher'}).maxLegOdds,5);
  assert.equal(roll.deskSession({session:'next'}).maxLegOdds,null);
 });
+
+test('a high combined target uses the longer prices instead of the shortest ones',()=>{
+ const now=Date.now(), kick=new Date(now+600000).toISOString();
+ const board=[];
+ for(let i=0;i<20;i++)board.push({fixture:{eventId:'sr:match:s'+i,home:'RAY',away:'VCF',league:'Spain',kickoffUtc:kick},rows:[{field:'u45',odds:1.08,home:'RAY',away:'VCF',eventId:'sr:match:s'+i,pick:'Under 4.5'}]});
+ for(let i=0;i<20;i++)board.push({fixture:{eventId:'sr:match:l'+i,home:'MON',away:'NAP',league:'Italy',kickoffUtc:kick},rows:[{field:'u45',odds:1.35,home:'MON',away:'NAP',eventId:'sr:match:l'+i,pick:'Under 4.5'}]});
+ const note={}, lane={minOdds:200,maxOdds:2000,maxLegs:20,minProbability:70,marketFields:['u45'],stack:true,maxLegOdds:5,note};
+ const ticket=roll.select(board,[],now,new Set(),lane);
+ assert.ok(ticket.odds>=200&&ticket.odds<=2000);
+ assert.ok(ticket.legs.every(leg=>leg.odds===1.35));
+ assert.equal(roll.deskOptions({minOdds:200,maxOdds:2000}).maxOdds,2000);
+});
