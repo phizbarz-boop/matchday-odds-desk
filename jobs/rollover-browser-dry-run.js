@@ -268,7 +268,7 @@ async function waitForLiveReceipt(page,receipt,quote,kobo){
  }
  throw Error('No verified receipt');
 }
-async function attemptLive(page,code,quote,kobo=100000,beforeClick=null){
+async function attemptLive(page,code,quote,kobo=500000,beforeClick=null){
  const stop=reason=>{throw Error('No submission attempted: '+reason);};
  if(auto)await ensureAutoSession(page);
  if(!(await page.getByText('My Account',{exact:true}).first().isVisible()))stop('sign in using --login');
@@ -684,6 +684,7 @@ async function autoLoop(){
  if(!ledger.attempt&&!ledger.state.pending&&!ledger.state.awaitingReset&&
     ledger.state.wins===0&&((ledger.state.runOpeningStakeKobo==null&&ledger.state.stakeKobo===200000)||
     (ledger.state.runOpeningStakeKobo===200000&&ledger.state.stakeKobo===200000)||
+    (ledger.state.runOpeningStakeKobo===100000&&ledger.state.stakeKobo===100000)||
     (ledger.state.runOpeningStakeKobo===500000&&ledger.state.stakeKobo===500000)||
     ((ledger.state.runOpeningStakeKobo==null||ledger.state.runOpeningStakeKobo===250000)&&ledger.state.stakeKobo===250000))){
   ledger.state.stakeKobo=RULES.openingStakeKobo;
