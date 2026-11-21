@@ -4168,11 +4168,7 @@ app.post('/api/refresh', express.json(), (req, res) => {
 const virtualRollOver=require('./lib/virtualRollOver');
 const rolloverBook=legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true});
 const rolloverTelegram=(text,signal)=>sendTelegramMessage(text,{}, {signal});
-const rolloverRdpLog=async text=>{
-  console.log('[RDP Virtual Roll Over]',text.split('\n')[0]);
-  if(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID)
-    await rolloverTelegram(text).catch(err=>console.warn('[RDP Virtual Roll Over] telegram',String(err.message).slice(0,160)));
-};
+const rolloverRdpLog=text=>console.log('[RDP Virtual Roll Over]',text.split('\n')[0]);
 function createRolloverChain({name,namespace,lane,enabled,configured,notify,bookOnBoot=false}){
   const run=(ctx)=>withPublicSportyRequest(()=>virtualRollOver.run(ctx,{
     lane,book:rolloverBook,send:text=>notify(text,ctx.signal)
