@@ -179,3 +179,17 @@ test('max payout under uses only the under markets and keeps the ticket even bel
  assert.deepEqual(ticket.legs.map(leg=>leg.field),['u55','u45']);
  assert.ok(ticket.odds<200);
 });
+
+test('website under tickets can price first-half under 2.5 and 1.5 for a trusted half team',()=>{
+ assert.equal(roll.rowTeamAllowed({field:'h25',home:'RAY',away:'CHE'}),true);
+ assert.equal(roll.rowTeamAllowed({field:'h15',home:'CHE',away:'ARS'}),false);
+ const now=Date.now(), kick=new Date(now+600000).toISOString();
+ const board=[{fixture:{eventId:'sr:match:half',home:'RAY',away:'MON',league:'Spain',kickoffUtc:kick},rows:[
+  {field:'h15',odds:1.9,home:'RAY',away:'MON',eventId:'sr:match:half',pick:'1st Half Under 1.5'},
+  {field:'h25',odds:1.35,home:'RAY',away:'MON',eventId:'sr:match:half',pick:'1st Half Under 2.5'}
+ ]}];
+ const ticket=roll.select(board,[],now,new Set(),{minOdds:1.05,maxOdds:20,maxLegs:2,minProbability:75,marketFields:['h15','h25'],stack:true,preferLong:true,maxLegOdds:5});
+ assert.equal(ticket.legs.length,1);
+ assert.equal(ticket.legs[0].field,'h25');
+ assert.ok(ticket.legs[0].probability>=75);
+});

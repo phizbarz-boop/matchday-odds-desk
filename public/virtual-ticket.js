@@ -1,5 +1,5 @@
 'use strict';
-const markets=[['o05','Over 0.5'],['u45','Under 4.5'],['u55','Under 5.5'],['h35','1st half Under 3.5']];
+const markets=[['o05','Over 0.5'],['u45','Under 4.5'],['u55','Under 5.5'],['h35','1st half Under 3.5'],['h25','1st half Under 2.5'],['h15','1st half Under 1.5']];
 const box=document.getElementById('virtual-ticket-markets');
 box.innerHTML=markets.map(([id,label])=>`<label class="bet-toggle"><input type="checkbox" value="${id}" checked><span>${label}</span></label>`).join('');
 const buttons=[document.getElementById('virtual-ticket-build'),document.getElementById('virtual-ticket-code')];
