@@ -4258,8 +4258,10 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
   const worker=require('./lib/rolloverWorkerQuote');
   if(!worker.authorized(req.get('authorization'),process.env.ROLLOVER_WORKER_TOKEN))return res.status(401).json({error:'unauthorized'});
   try{
-    if(!rolloverRdpScheduler.status().running)return res.json({status:'rdp_rollover_disabled'});
-    const lane=virtualRollOver.RDP;
+    const telegramBook=req.query.book==='telegram';
+    if(!telegramBook&&!rolloverRdpScheduler.status().running)return res.json({status:'rdp_rollover_disabled'});
+    if(telegramBook&&!rolloverScheduler.status().running)return res.json({status:'no_pending_ticket'});
+    const lane=telegramBook?virtualRollOver.STANDARD:virtualRollOver.RDP;
     if(req.query.external!==undefined){
       const code=typeof req.query.external==='string'?req.query.external.trim().toUpperCase():'';
       if(!/^[A-Z0-9]{4,32}$/.test(code))return res.status(400).json({status:'invalid_external_code'});

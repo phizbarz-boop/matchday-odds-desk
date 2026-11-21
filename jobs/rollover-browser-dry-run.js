@@ -143,15 +143,15 @@ const max=Number(process.env.ROLLOVER_MAX_STAKE_KOBO);
 if(!login&&!auto&&!liveTest&&!externalCode&&(!Number.isSafeInteger(max)||max<=0))throw Error('Set ROLLOVER_MAX_STAKE_KOBO to your test stake ceiling in kobo');
 const url=new URL('/api/sportybet/virtual-rollover/worker',base);
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
-let stopped=false,browser,profileContext,last=null;
+let stopped=false,browser,profileContext,last=null,ledger=null;
 for(const sig of ['SIGINT','SIGTERM'])process.once(sig,()=>{stopped=true;});
-async function request(code,results=false,lossReset=false){
+async function request(code,results=false,lossReset=false,book=null){
  const readStep=lossReset?'loss code allowance reset':results?'final-score lookup':externalCode?'external-code verification':code?'latest-code quote verification':'latest-code lookup';
  const u=new URL(url);
  if(lossReset)u.pathname+='/loss-reset';
  else if(results)u.pathname+='/scores';
  else if(externalCode)u.searchParams.set('external',externalCode);
- else if(code)u.searchParams.set('quote',code);
+ else {if(book)u.searchParams.set('book',book); if(code)u.searchParams.set('quote',code);}
  const signal=AbortSignal.timeout(20000);
  try{
   const r=await fetch(u,{...(results||lossReset?{method:'POST',body:JSON.stringify(lossReset?code:{legs:code})}:{}),
@@ -675,10 +675,102 @@ async function recoverFromBetHistory(ledger,rules){
  }finally{await page.close();}
 }
 const retryableAppRead=error=>error?.rolloverReadTimeout===true||[502,503,504].includes(error?.rolloverReadStatus);
+async function readHistoryReceipt(attempt){
+ if(!attempt)return null;
+ const when=Number(attempt.startedAt)||Date.now();
+ const page=await profileContext.newPage();
+ try{
+  const response=page.waitForResponse(r=>{
+   const u=new URL(r.url());
+   return /^https:\/\/(?:www\.)?sportybet\.com$/.test(u.origin)&&u.pathname==='/api/ng/orders/order/v2/realbetlist'&&
+    r.request().method()==='GET'&&r.ok();
+  },{timeout:15000}).catch(()=>null);
+  await page.goto(new URL('my_accounts/bet_history/sport_bets',sportyHome).href,{waitUntil:'domcontentloaded',timeout:15000});
+  const hit=await response;
+  if(!hit){await restoreSessionFromHome(page);return null;}
+  let receipt=matchHistoryOrder(await hit.json(),attempt,when);
+  if(!receipt){
+   const other=new URL(hit.url());
+   const filter=other.searchParams.get('isSettled');
+   if(filter==='10'||filter==='1'){
+    other.searchParams.set('isSettled',filter==='10'?'1':'10');
+    other.searchParams.set('_t',String(Date.now()));
+    const body=await page.evaluate(async url=>{
+     const res=await fetch(url,{credentials:'same-origin',redirect:'error'});
+     return res.ok?res.json():null;
+    },other.href).catch(()=>null);
+    receipt=matchHistoryOrder(body,attempt,when);
+   }
+  }
+  return receipt;
+ }finally{await page.close();}
+}
+async function recoverTelegramAttempt(){
+ if(!ledger.telegramAttempt||ledger.telegramPending)return;
+ const receipt=await readHistoryReceipt(ledger.telegramAttempt);
+ if(!receipt){
+  const started=Number(ledger.telegramAttempt.startedAt)||0;
+  if(started&&Date.now()-started>=8*60*1000){
+   console.log('AUTO: telegram',ledger.telegramAttempt.code,'was not found in Bet History. It was not placed.');
+   ledger.telegramAttempt=null;await saveLedger(ledger);
+  }else console.log('AUTO: telegram place clicked for',ledger.telegramAttempt.code+'. Waiting for its order id. No second click.');
+  return;
+ }
+ ledger.telegramPending={id:receipt.id,code:ledger.telegramAttempt.code,stakeKobo:receipt.stakeKobo};
+ const placed=ledger.telegramPending;
+ ledger.telegramAttempt=null;await saveLedger(ledger);
+ console.log('AUTO: telegram order',placed.id,'for',placed.code,'₦'+decimal(placed.stakeKobo)+'. The RDP order stays separate.');
+}
+async function settleTelegram(){
+ const pending=ledger.telegramPending;
+ if(!pending)return;
+ const detail=await accountOrder(pending.id);
+ const {decodeAccountSettlement}=require('./rollover-account-settlement.cjs');
+ const outcome=decodeAccountSettlement(detail,pending,[]);
+ const row=Array.isArray(detail?.data)?detail.data.find(item=>item?.orderId===pending.id):null;
+ if(outcome.state!=='settled'&&row?.isSettled!==1)return;
+ const status=outcome.settlement?.status||'settled';
+ const payout=outcome.settlement?.payoutKobo;
+ console.log('TELEGRAM',String(status).toUpperCase(),pending.code,'order',pending.id,payout==null?'':('return ₦'+decimal(payout)));
+ ledger.telegramPending=null;await saveLedger(ledger);
+}
+async function placeTelegramIfFree(){
+ if(stopped||ledger.telegramPending||ledger.telegramAttempt)return;
+ if(ledger.attempt&&!ledger.state.pending)return;
+ let ticket;
+ try{ticket=await request(null,false,false,'telegram');}
+ catch(error){if(error.fatal)throw error;console.log('AUTO: telegram lookup failed:',error.message.split('\n')[0]);return;}
+ if(ticket.status!=='pending'||!/^[A-Z0-9]{4,32}$/i.test(ticket.code||''))return;
+ if((ledger.telegramUsed||[]).includes(ticket.code)||ticket.code===(ledger.state.pending&&ledger.state.pending.code))return;
+ let quote;
+ try{quote=await request(ticket.code,false,false,'telegram');}
+ catch(error){if(error.fatal)throw error;console.log('AUTO: telegram quote failed:',error.message.split('\n')[0]);return;}
+ if(quote.status!=='quote_matches'||!Array.isArray(quote.legs)||!quote.legs.length||!Number.isSafeInteger(ticket.stakeKobo)||ticket.stakeKobo<=0){
+  console.log('AUTO: telegram',ticket.code,'not placed:',quote.status||'no stake');return;
+ }
+ quote.code=ticket.code;
+ console.log('AUTO: placing telegram',ticket.code,'₦'+decimal(ticket.stakeKobo),'while the RDP book stays open');
+ let receipt;
+ try{
+  receipt=await inspect(ticket.code,quote,ticket.stakeKobo,async()=>{
+   ledger.telegramAttempt={code:ticket.code,stakeKobo:ticket.stakeKobo,legs:quote.legs,odds:quote.odds,startedAt:Date.now()};
+   ledger.telegramUsed=[...(ledger.telegramUsed||[]),ticket.code].slice(-80);
+   await saveLedger(ledger);
+  });
+ }catch(error){
+  if(ledger.telegramAttempt){console.log('AUTO: telegram place clicked for',ticket.code+'. Waiting for its order id. No second click.');return;}
+  if(error.fatal)throw error;
+  console.log('AUTO: telegram skipped before submission:',error.message.split('\n')[0]);return;
+ }
+ if(receipt&&typeof receipt==='object'){
+  ledger.telegramPending={id:receipt.id,code:ticket.code,stakeKobo:ticket.stakeKobo};
+  ledger.telegramAttempt=null;await saveLedger(ledger);
+  console.log('AUTO: placed telegram',ticket.code,'order',receipt.id,'₦'+decimal(ticket.stakeKobo));
+ }else if(receipt)console.log('AUTO: telegram slip not ready for',ticket.code,receipt);
+}
 async function autoLoop(){
  const rules=require('./rollover-run-state.cjs');
  const {reconcileAccount}=require('./rollover-reconcile-account.cjs');
- let ledger;
  try{ledger=JSON.parse(await readFile(ledgerPath,'utf8'));}
  catch(error){if(error.code!=='ENOENT')throw error;ledger={state:rules.initial(),attempt:null,lastCode:null,usedCodes:[]};}
  if(!ledger.attempt&&!ledger.state.pending&&!ledger.state.awaitingReset&&
@@ -692,6 +784,7 @@ async function autoLoop(){
   await saveLedger(ledger);
  }
  console.log(`Automatic rollover armed · ₦${(RULES.openingStakeKobo/100).toLocaleString('en-NG')} start · ${RULES.targetTicketWins} ticket wins · pause after ${RULES.maxConsecutiveLosses} consecutive losses. Real wagers enabled.`);
+ console.log('AUTO: Telegram tickets are placed on this same SportyBet account and kept separate by booking code and order id.');
  console.log('AUTO: opening SportyBet to check login');
  const home=profileContext.pages()[0]??await profileContext.newPage();
  await restoreSessionFromHome(home);
@@ -699,6 +792,9 @@ async function autoLoop(){
  const reportWait=message=>{if(message!==lastWait){lastWait=message;console.log('AUTO: '+message);}};
  while(!stopped){
   try{
+  await settleTelegram();
+  await recoverTelegramAttempt();
+  await placeTelegramIfFree();
   const previousState=ledger.state;
   ledger.state=rules.refresh(previousState);
   if(ledger.state.day!==previousState.day||ledger.state.consecutiveLosses!==previousState.consecutiveLosses||
