@@ -17,7 +17,13 @@ const profile=join(process.platform==='win32'&&process.env.LOCALAPPDATA||homedir
 const sportyHome='https://www.sportybet.com/ng/';
 async function openProfile(){
  await mkdir(profile,{recursive:true,mode:0o700});
- return chromium.launchPersistentContext(profile,{headless:false,acceptDownloads:false});
+ const ctx=await chromium.launchPersistentContext(profile,{
+  headless:false,acceptDownloads:false,viewport:{width:1440,height:900},locale:'en-NG',
+  ignoreDefaultArgs:['--enable-automation'],
+  args:['--disable-blink-features=AutomationControlled']
+ });
+ await ctx.addInitScript(()=>{Object.defineProperty(navigator,'webdriver',{get:()=>undefined});});
+ return ctx;
 }
 const autoPhone=auto?process.env.ROLLOVER_SPORTY_PHONE:null;
 const autoPassword=auto?process.env.ROLLOVER_SPORTY_PASSWORD:null;
@@ -105,9 +111,18 @@ async function ensureAutoSession(page){
   throw loginStop('Automatic SportyBet sign-in could not finish. Use --login to check the account.');
  }
 }
+async function sportyShellReady(page){
+ return page.evaluate(()=>/my account|log\s*in|register|vfootball/i.test(document.body?.innerText||'')).catch(()=>false);
+}
 async function restoreSessionFromHome(page){
  if(!auto)return;
- await page.goto(sportyHome,{waitUntil:'domcontentloaded',timeout:20000});
+ for(let attempt=0;attempt<3&&!stopped;attempt++){
+  await page.goto(sportyHome,{waitUntil:'domcontentloaded',timeout:20000}).catch(()=>null);
+  const deadline=Date.now()+12000;
+  while(Date.now()<deadline&&!stopped&&!await sportyShellReady(page))await delay(500);
+  if(await sportyShellReady(page))break;
+  console.log('AUTO: SportyBet is still on the loading logo. Reloading.');
+ }
  await ensureAutoSession(page);
 }
 async function signIn(){
