@@ -4224,13 +4224,7 @@ function createRolloverChain({name,namespace,lane,enabled,configured,notify,book
       try{
         const redis=await getRedis();
         if(!redis)return;
-        const state=await virtualRollOver.stateOf(redis,lane);
-        if(!state.pending&&state.lastReason==='missed_kickoff'){
-          const retry=await run({redis,slotKey:'retry:'+Date.now(),dateKey:watParts().date,signal:AbortSignal.timeout(90000),shouldAbort:()=>!scheduler.status().running});
-          if(retry?.ticketsSent)console.log('['+name+' ticket] next round booked tickets='+retry.ticketsSent);
-          return;
-        }
-        const pending=state.pending;
+        const {pending}=await virtualRollOver.stateOf(redis,lane);
         if(!pending?.legs.some(leg=>Date.parse(leg.kickoffUtc)<=Date.now()))return;
         const result=await run({redis,pendingCode:pending.code,slotKey:'settled:'+pending.code,
           dateKey:watParts().date,signal:AbortSignal.timeout(60000),shouldAbort:()=>!scheduler.status().running});
@@ -4299,13 +4293,7 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
     const info={code,stakeKobo:stake,legs:legs.map(({eventId,home,away,pick,kickoffUtc,marketId,outcomeId,specifier})=>({eventId,home,away,pick,kickoffUtc,marketId:String(marketId),outcomeId:String(outcomeId),specifier:analyzerSpecifier(specifier)}))};
     if(legs.some(leg=>!lane.marketFields.includes(leg.field)))return res.json({status:'unsupported_rollover_selection',...info});
     if(req.query.quote!==code)return res.json({status:'pending',...info});
-    if(legs.some(x=>!(Date.parse(x.kickoffUtc)>Date.now()+20000))){
-      if(telegramBook){
-        const refresh=await virtualRollOver.run({redis,slotKey:'retry:'+Date.now(),dateKey:watParts().date,signal:AbortSignal.timeout(90000),releaseCode:code},{lane,book:rolloverBook,send:text=>rolloverTelegram(text)});
-        return res.json({status:'closed_or_near_kickoff',refresh:refresh.reason||(refresh.ticketsSent?'booked':'waiting_next_round'),tickets:refresh.ticketsSent||0,...info});
-      }
-      return res.json({status:'closed_or_near_kickoff',...info});
-    }
+    if(legs.some(x=>!(Date.parse(x.kickoffUtc)>Date.now()+20000)))return res.json({status:'closed_or_near_kickoff',...info});
     const decoded=await withPublicSportyRequest(async()=>extractBookingOutcomes(await getBooking(code,{fresh:true})).map(normalizeBookingLeg),{signal:AbortSignal.timeout(12000)});
     if((await virtualRollOver.stateOf(redis,lane)).pending?.code!==code)return res.json({status:'ticket_changed'});
     return res.json({...info,...worker.compare(pending,decoded,analyzerSpecifier,Date.now(),lane)});

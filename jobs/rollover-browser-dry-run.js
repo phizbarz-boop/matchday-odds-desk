@@ -745,6 +745,12 @@ async function placeTelegramIfFree(){
  let quote;
  try{quote=await request(ticket.code,false,false,'telegram');}
  catch(error){if(error.fatal)throw error;console.log('AUTO: telegram quote failed:',error.message.split('\n')[0]);return;}
+ if(quote.status==='closed_or_near_kickoff'){
+  ledger.telegramUsed=[...(ledger.telegramUsed||[]),ticket.code].slice(-80);
+  await saveLedger(ledger);
+  console.log('AUTO: telegram',ticket.code,'is the posted Telegram code, but that round has started. It will not be replaced.');
+  return;
+ }
  if(quote.status!=='quote_matches'||!Array.isArray(quote.legs)||!quote.legs.length||!Number.isSafeInteger(ticket.stakeKobo)||ticket.stakeKobo<=0){
   console.log('AUTO: telegram',ticket.code,'not placed:',quote.status||'no stake');return;
  }
@@ -794,7 +800,6 @@ async function autoLoop(){
   try{
   await settleTelegram();
   await recoverTelegramAttempt();
-  await placeTelegramIfFree();
   const previousState=ledger.state;
   ledger.state=rules.refresh(previousState);
   if(ledger.state.day!==previousState.day||ledger.state.consecutiveLosses!==previousState.consecutiveLosses||
@@ -880,6 +885,7 @@ async function autoLoop(){
      }
    }
   }
+  await placeTelegramIfFree();
   }catch(error){
    if(!retryableAppRead(error))throw error;
    console.warn('AUTO: '+(error.rolloverReadStep??'server read')+' failed: '+error.message+'; waiting for the next check.');
