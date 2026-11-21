@@ -193,3 +193,5 @@ test('website under tickets can price first-half under 2.5 and 1.5 for a trusted
  assert.equal(ticket.legs[0].field,'h25');
  assert.ok(ticket.legs[0].probability>=75);
 });
+
+test("kept virtual games can be booked again without the removed ones",()=>{const board=[{fixture:{eventId:"sr:match:1"},rows:[{eventId:"sr:match:1",marketId:"68",outcomeId:"13",specifier:"total=2.5",odds:1.4,home:"RAY",away:"MON",pick:"1st Half Under 2.5"}]},{fixture:{eventId:"sr:match:2"},rows:[{eventId:"sr:match:2",marketId:"18",outcomeId:"13",specifier:"total=4.5",odds:1.2,home:"NAP",away:"BFC",pick:"Under 4.5"}]}];const kept=roll.matchKept(board,[{eventId:"sr:match:1",marketId:"68",outcomeId:"13",specifier:"total=2.5",home:"RAY",away:"MON"}]);assert.equal(kept.legs[0].home,"RAY");assert.equal(roll.matchKept(board,[{eventId:"sr:match:9",marketId:"68",outcomeId:"13",specifier:"total=2.5",home:"CHE",away:"ARS"}]).missing[0].home,"CHE");});

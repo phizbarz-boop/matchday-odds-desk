@@ -4366,15 +4366,21 @@ app.post('/api/telegram/virtual-rollover-test',express.json(),async(req,res)=>{
 });
 
 let virtualDeskBusy=false;
-app.post('/api/sportybet/virtual-ticket',express.json({limit:'4kb'}),async(req,res)=>{
+app.post('/api/sportybet/virtual-ticket',express.json({limit:'24kb'}),async(req,res)=>{
   res.set('Cache-Control','no-store');
   if(virtualDeskBusy)return res.status(429).json({error:'A virtual ticket is already being built. Wait for it to finish.'});
   virtualDeskBusy=true;
   try{
+    const book=legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true});
+    if(req.body?.rebook===true){
+      const signal=AbortSignal.timeout(45000);
+      const data=await withPublicSportyRequest(()=>virtualRollOver.rebookDesk(req.body,{signal,book}),{signal});
+      return res.json(data);
+    }
     const redis=await getRedis();
     if(!redis)return res.status(503).json({error:'Virtual ticket storage is unavailable.'});
     const signal=AbortSignal.timeout(req.body?.session==='higher'||req.body?.session==='max-under'?45000:25000);
-    const data=await withPublicSportyRequest(()=>virtualRollOver.buildDesk(redis,req.body||{},{signal,book:req.body?.createCode===true?(legs=>withFreshSportyRequest(()=>bookBet(legs),{reset:true})):null}),{signal});
+    const data=await withPublicSportyRequest(()=>virtualRollOver.buildDesk(redis,req.body||{},{signal,book:req.body?.createCode===true?book:null}),{signal});
     res.json(data);
   }catch(err){console.warn('[Virtual ticket]',String(err.message).slice(0,180));res.status(502).json({error:'Virtual ticket did not finish. Try again in a moment.'});}
   finally{virtualDeskBusy=false;}
