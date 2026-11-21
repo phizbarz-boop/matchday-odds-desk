@@ -146,3 +146,10 @@ test('the virtual desk applies the probability floor and rejects markets outside
  assert.equal(roll.select(plain,[],now,new Set(),{...lane,stack:true,minProbability:70}).legs[0].field,'u45');
 });
 
+
+test('the higher virtual session looks six hours ahead and leaves the rollover window at 30 minutes',()=>{
+ assert.equal(roll.deskSession({}).horizonMs,30*60000);
+ assert.equal(roll.deskSession({session:'higher'}).horizonMs,6*3600000);
+ assert.equal(roll.deskSession({session:'higher'}).maxLegOdds,5);
+ assert.equal(roll.deskSession({session:'next'}).maxLegOdds,null);
+});

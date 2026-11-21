@@ -132,9 +132,10 @@
   </details>
   <script src="/virtual-rollover.js" defer></script>
   <section class="panel auto-builder" id="virtual-ticket-builder">
-    <div class="auto-head"><div><div class="auto-kicker">Virtual ticket</div><div class="auto-title">Build a virtual football code</div><div class="auto-desc">Same engine as the rollover: probability model, your floor, the team whitelist, and the one-year team stats. Only Over 0.5, Under 4.5, Under 5.5 and 1st half Under 3.5. One pick per match, combined into your odds band.</div></div></div>
+    <div class="auto-head"><div><div class="auto-kicker">Virtual ticket</div><div class="auto-title">Build a virtual football code</div><div class="auto-desc">Same whitelist and probability model as the rollover. Next round stays on the next 30 minutes. Higher ticket looks six hours ahead and stacks those picks into the odds you set. The live rollover is not changed.</div></div></div>
     <div class="bet-type-grid" id="virtual-ticket-markets"></div>
     <div class="auto-grid" style="margin-top:12px">
+      <label class="field"><span class="settings-label">Ticket session</span><select class="number-input" id="virtual-session"><option value="next">Next round · 30 minutes</option><option value="higher">Higher ticket · next 6 hours</option></select></label>
       <label class="field"><span class="settings-label">Minimum probability</span><input class="number-input" id="virtual-min-prob" type="number" min="0" max="99" step="1" value="75"></label>
       <label class="field"><span class="settings-label">Minimum combined odds</span><input class="number-input" id="virtual-min-odds" type="number" min="1.05" max="500" step="0.01" value="1.20"></label>
       <label class="field"><span class="settings-label">Maximum combined odds</span><input class="number-input" id="virtual-max-odds" type="number" min="1.05" max="500" step="0.01" value="2.00"></label>
