@@ -619,7 +619,8 @@ function matchHistoryOrder(body,attempt,time){
  if(body?.bizCode!==10000||!Array.isArray(body.data?.entityList)||
     !Number.isFinite(time)||!Array.isArray(attempt?.legs)||!attempt.legs.length||
     !Number.isSafeInteger(attempt.stakeKobo)||attempt.stakeKobo<=0)return null;
- const key=leg=>JSON.stringify([leg.eventId,String(leg.marketId),String(leg.outcomeId),leg.specifier]);
+ const spec=value=>{const found=String(value??'').match(/(\d+(?:\.\d+)?)/);return found?found[1]:String(value??'');};
+ const key=leg=>JSON.stringify([leg.eventId,String(leg.marketId),String(leg.outcomeId),spec(leg.specifier)]);
  const expected=JSON.stringify(attempt.legs.map(key).sort());
  const matches=body.data.entityList.filter(row=>{
   if(typeof row?.orderId!=='string'||!/^\d+ord\d+$/i.test(row.orderId)||
@@ -628,11 +629,13 @@ function matchHistoryOrder(body,attempt,time){
      historyStakeKobo(row.totalStake)!==attempt.stakeKobo||!Array.isArray(row.selections))return false;
   if(Number.isFinite(attempt.odds)){
    const actualOdds=row.selections.reduce((n,leg)=>n*Number(leg.odds),1);
-   if(!Number.isFinite(actualOdds)||Math.abs(actualOdds-attempt.odds)>0.005)return false;
+   if(!Number.isFinite(actualOdds)||Math.abs(actualOdds-attempt.odds)>Math.max(0.05,attempt.odds*0.08))return false;
   }
   return JSON.stringify(row.selections.map(key).sort())===expected;
  });
- return matches.length===1?{id:matches[0].orderId,stakeKobo:attempt.stakeKobo}:null;
+ if(!matches.length)return null;
+ matches.sort((a,b)=>Math.abs(a.createTime-time)-Math.abs(b.createTime-time));
+ return {id:matches[0].orderId,stakeKobo:attempt.stakeKobo};
 }
 async function recoverFromBetHistory(ledger,rules){
  const when=ledger.attempt.startedAt??(await stat(ledgerPath)).mtimeMs;
@@ -707,13 +710,13 @@ async function autoLoop(){
     ledger.historyMisses=(ledger.historyMisses||0)+1;
     const started=Number(ledger.attempt?.startedAt)||0;
     const waited=started?Date.now()-started:ledger.historyMisses*10000;
-    if(waited>=3*60*1000){
+    if(waited>=8*60*1000){
      const code=ledger.attempt.code;
      ledger.attempt=null;
      ledger.historyMisses=0;
      await saveLedger(ledger);
      lastWait='';
-     console.log('AUTO: no Bet History order for',code,'after 3 minutes. It was not placed. Taking the next ticket.');
+     console.log('AUTO: no Bet History order for',code,'after 8 minutes. It was not placed. Taking the next ticket.');
     }else reportWait('waiting for the existing order to appear in Bet History; new bets paused.');
    }else ledger.historyMisses=0;
   }else if(ledger.state.pending){
@@ -747,6 +750,7 @@ async function autoLoop(){
     if(!Array.isArray(quote.legs))quote.legs=[];
     quote.code=ticket.code;
     const kobo=ledger.state.stakeKobo;
+    if(!quote.legs.length||!Number.isFinite(Number(quote.odds))){reportWait('waiting for a confirmed quote for '+ticket.code);continue;}
      let receipt;
      try{
       receipt=await inspect(ticket.code,quote,kobo,async()=>{
@@ -757,17 +761,7 @@ async function autoLoop(){
       });
      }catch(error){
       if(ledger.attempt){
-       let recovered=false;
-       try{recovered=await recoverFromBetHistory(ledger,rules);}catch(err){if(err.fatal)throw err;}
-       if(!recovered&&!stopped){
-        await delay(5000);
-        try{recovered=await recoverFromBetHistory(ledger,rules);}catch(err){if(err.fatal)throw err;}
-       }
-       if(recovered)continue;
-       ledger.attempt=null;
-       ledger.usedCodes=(ledger.usedCodes||[]).filter(code=>code!==ticket.code);
-       await saveLedger(ledger);
-       console.log('AUTO: place was not accepted for',ticket.code+'; retrying this ticket.');
+       console.log('AUTO: place clicked for',ticket.code+'. Waiting for Bet History. No second bet.');
        continue;
       }
       if(error.fatal||retryableAppRead(error))throw error;
