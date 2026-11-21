@@ -4293,7 +4293,13 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
     const info={code,stakeKobo:stake,legs:legs.map(({eventId,home,away,pick,kickoffUtc,marketId,outcomeId,specifier})=>({eventId,home,away,pick,kickoffUtc,marketId:String(marketId),outcomeId:String(outcomeId),specifier:analyzerSpecifier(specifier)}))};
     if(legs.some(leg=>!lane.marketFields.includes(leg.field)))return res.json({status:'unsupported_rollover_selection',...info});
     if(req.query.quote!==code)return res.json({status:'pending',...info});
-    if(legs.some(x=>!(Date.parse(x.kickoffUtc)>Date.now()+20000)))return res.json({status:'closed_or_near_kickoff',...info});
+    if(legs.some(x=>!(Date.parse(x.kickoffUtc)>Date.now()+20000))){
+      if(!telegramBook){
+        const refresh=await virtualRollOver.run({redis,slotKey:'retry:'+Date.now(),dateKey:watParts().date,signal:AbortSignal.timeout(90000),releaseCode:code},{lane,book:rolloverBook,send:text=>rolloverRdpLog(text)});
+        return res.json({status:'closed_or_near_kickoff',refresh:refresh.reason||'next',tickets:refresh.ticketsSent||0,...info});
+      }
+      return res.json({status:'closed_or_near_kickoff',...info});
+    }
     const decoded=await withPublicSportyRequest(async()=>extractBookingOutcomes(await getBooking(code,{fresh:true})).map(normalizeBookingLeg),{signal:AbortSignal.timeout(12000)});
     if((await virtualRollOver.stateOf(redis,lane)).pending?.code!==code)return res.json({status:'ticket_changed'});
     return res.json({...info,...worker.compare(pending,decoded,analyzerSpecifier,Date.now(),lane)});

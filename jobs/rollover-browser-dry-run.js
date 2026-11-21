@@ -852,7 +852,8 @@ async function autoLoop(){
     if(!Array.isArray(quote.legs))quote.legs=[];
     quote.code=ticket.code;
     const kobo=ledger.state.stakeKobo;
-    if(!quote.legs.length||!Number.isFinite(Number(quote.odds))){reportWait('waiting for a confirmed quote for '+ticket.code);continue;}
+    if(quote.status==='closed_or_near_kickoff'){console.log('AUTO:',ticket.code,'round already started. It was not placed. Taking the next RDP ticket.');continue;}
+    if(!quote.legs.length||!Number.isFinite(Number(quote.odds))||quote.status!=='quote_matches'){reportWait('waiting for a confirmed quote for '+ticket.code+(quote.status?': '+quote.status:''));continue;}
      let receipt;
      try{
       receipt=await inspect(ticket.code,quote,kobo,async()=>{
