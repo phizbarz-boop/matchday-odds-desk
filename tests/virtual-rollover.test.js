@@ -165,3 +165,17 @@ test('a high combined target uses the longer prices instead of the shortest ones
  assert.ok(ticket.legs.every(leg=>leg.odds===1.35));
  assert.equal(roll.deskOptions({minOdds:200,maxOdds:2000}).maxOdds,2000);
 });
+
+test('max payout under uses only the under markets and keeps the ticket even below a high target',()=>{
+ assert.equal(roll.deskSession({session:'max-under'}).horizonMs,6*3600000);
+ assert.equal(roll.deskSession({session:'max-under'}).maxUnder,true);
+ const now=Date.now(), kick=new Date(now+600000).toISOString();
+ const board=[
+  {fixture:{eventId:'sr:match:over',home:'NFO',away:'SUN',league:'England',kickoffUtc:kick},rows:[{field:'o05',odds:4,home:'NFO',away:'SUN',eventId:'sr:match:over',pick:'Over 0.5'}]},
+  {fixture:{eventId:'sr:match:short',home:'RAY',away:'VCF',league:'Spain',kickoffUtc:kick},rows:[{field:'u45',odds:1.08,home:'RAY',away:'VCF',eventId:'sr:match:short',pick:'Under 4.5'}]},
+  {fixture:{eventId:'sr:match:long',home:'MON',away:'NAP',league:'Italy',kickoffUtc:kick},rows:[{field:'u55',odds:1.4,home:'MON',away:'NAP',eventId:'sr:match:long',pick:'Under 5.5'}]}
+ ];
+ const ticket=roll.select(board,[],now,new Set(),{minOdds:1.05,maxOdds:2000,maxLegs:20,minProbability:70,marketFields:['u45','u55','h35'],stack:true,maxLegOdds:5,preferLong:true});
+ assert.deepEqual(ticket.legs.map(leg=>leg.field),['u55','u45']);
+ assert.ok(ticket.odds<200);
+});

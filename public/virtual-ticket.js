@@ -13,7 +13,7 @@ async function buildVirtualTicket(createCode){
  status.textContent=createCode?'Building the virtual code…':'Checking the virtual board…';
  out.replaceChildren();
  try{
-  const res=await fetch('/api/sportybet/virtual-ticket',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:document.getElementById('virtual-session').value,markets:chosen,minProbability:Number(document.getElementById('virtual-min-prob').value),minOdds:Number(document.getElementById('virtual-min-odds').value),maxOdds:Number(document.getElementById('virtual-max-odds').value),maxLegs:Number(document.getElementById('virtual-max-legs').value),createCode})});
+  const res=await fetch('/api/sportybet/virtual-ticket',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:document.getElementById('virtual-session').value,markets:chosen,minProbability:document.getElementById('virtual-min-prob').value===''?75:Number(document.getElementById('virtual-min-prob').value),minOdds:Number(document.getElementById('virtual-min-odds').value),maxOdds:Number(document.getElementById('virtual-max-odds').value),maxLegs:Number(document.getElementById('virtual-max-legs').value),createCode})});
   const data=await res.json();
   if(!res.ok)throw Error(data.error||'Virtual ticket is unavailable.');
   if(data.status!=='preview'&&data.status!=='booked'){status.className='auto-status err';status.textContent=data.reason||'No virtual ticket matched those filters.';return;}
@@ -39,8 +39,11 @@ buttons[0].addEventListener('click',()=>buildVirtualTicket(false));
 buttons[1].addEventListener('click',()=>buildVirtualTicket(true));
 
 document.getElementById('virtual-session').addEventListener('change',()=>{
- const higher=document.getElementById('virtual-session').value==='higher';
- document.getElementById('virtual-min-odds').value=higher?'5.00':'1.20';
- document.getElementById('virtual-max-odds').value=higher?'20.00':'2.00';
- document.getElementById('virtual-max-legs').value=higher?'15':'3';
+ const session=document.getElementById('virtual-session').value;
+ const maxUnder=session==='max-under', higher=session==='higher';
+ document.getElementById('virtual-min-odds').value=maxUnder?'1.05':higher?'5.00':'1.20';
+ document.getElementById('virtual-max-odds').value=maxUnder?'2000':higher?'20.00':'2.00';
+ document.getElementById('virtual-max-legs').value=maxUnder?'20':higher?'15':'3';
+ if(document.getElementById('virtual-min-prob').value==='')document.getElementById('virtual-min-prob').value='75';
+ box.querySelectorAll('input').forEach(input=>{input.checked=maxUnder?input.value!=='o05':true;});
 });
