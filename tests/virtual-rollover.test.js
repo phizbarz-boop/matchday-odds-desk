@@ -146,3 +146,24 @@ test('the virtual desk applies the probability floor and rejects markets outside
  assert.equal(roll.select(plain,[],now,new Set(),{...lane,stack:true,minProbability:70}).legs[0].field,'u45');
 });
 
+
+test('telegram rollover takes profit once at 10 wins and compounds until win 60',()=>{
+ const opening=250000;
+ const tenth=roll.applyTelegramWin({sessionWins:9},{nextBalance:400000,nextStep:10},opening);
+ assert.equal(tenth.takeProfit,true);
+ assert.equal(tenth.balance,opening);
+ assert.equal(tenth.step,0);
+ assert.equal(tenth.sessionWins,10);
+ const twentieth=roll.applyTelegramWin({sessionWins:19},{nextBalance:800000,nextStep:10},opening);
+ assert.equal(twentieth.takeProfit,false);
+ assert.equal(twentieth.finished,false);
+ assert.equal(twentieth.balance,800000);
+ assert.equal(twentieth.step,10);
+ assert.equal(twentieth.sessionWins,20);
+ const sixtieth=roll.applyTelegramWin({sessionWins:59},{nextBalance:1800000,nextStep:50},opening);
+ assert.equal(sixtieth.finished,true);
+ assert.equal(sixtieth.shown,60);
+ assert.equal(sixtieth.balance,opening);
+ assert.equal(sixtieth.step,0);
+ assert.equal(sixtieth.sessionWins,0);
+});
