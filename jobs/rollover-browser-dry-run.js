@@ -268,7 +268,7 @@ async function waitForLiveReceipt(page,receipt,quote,kobo){
  }
  throw Error('No verified receipt');
 }
-async function attemptLive(page,code,quote,kobo=500000,beforeClick=null){
+async function attemptLive(page,code,quote,kobo=200000,beforeClick=null){
  const stop=reason=>{throw Error('No submission attempted: '+reason);};
  if(auto)await ensureAutoSession(page);
  if(!(await page.getByText('My Account',{exact:true}).first().isVisible()))stop('sign in using --login');
