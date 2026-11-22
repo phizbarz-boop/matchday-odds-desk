@@ -79,7 +79,7 @@ document.getElementById('virtual-session').addEventListener('change',()=>{
  const session=document.getElementById('virtual-session').value;
  const maxUnder=session==='max-under', higher=session==='higher';
  document.getElementById('virtual-min-odds').value=maxUnder?'1.05':higher?'5.00':'1.20';
- document.getElementById('virtual-max-odds').value=maxUnder?'2000':higher?'20.00':'2.00';
+ document.getElementById('virtual-max-odds').value=maxUnder?'1000000000':higher?'20.00':'2.00';
  document.getElementById('virtual-max-legs').value=maxUnder?'20':higher?'15':'3';
  if(document.getElementById('virtual-min-prob').value==='')document.getElementById('virtual-min-prob').value='75';
  box.querySelectorAll('input').forEach(input=>{input.checked=maxUnder?input.value!=='o05':true;});

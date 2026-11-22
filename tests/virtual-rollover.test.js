@@ -208,3 +208,9 @@ test('the trusted toggle keeps whitelist or year top 20% teams only',()=>{
  assert.ok(open.legs.some(leg=>leg.home==='CHE'));
  assert.deepEqual(closed.legs.map(leg=>leg.home),['RAY']);
 });
+
+test('the virtual builder can target 200 million combined odds',()=>{
+ assert.equal(roll.deskOptions({minOdds:1.2,maxOdds:200000000}).maxOdds,200000000);
+ assert.equal(roll.deskOptions({maxOdds:1e15}).maxOdds,1e12);
+ assert.equal(roll.deskSession({session:'max-under'}).maxLegOdds,20);
+});
