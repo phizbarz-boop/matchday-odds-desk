@@ -4221,11 +4221,15 @@ function createRolloverChain({name,namespace,lane,enabled,configured,notify,book
         const redis=await getRedis();
         if(!redis)return;
         const {pending}=await virtualRollOver.stateOf(redis,lane);
-        if(!pending?.legs.some(leg=>Date.parse(leg.kickoffUtc)<=Date.now()))return;
+        if(pending?.legs.some(leg=>Date.parse(leg.kickoffUtc)<=Date.now())){
         const result=await run({redis,pendingCode:pending.code,slotKey:'settled:'+pending.code,
           dateKey:watParts().date,signal:AbortSignal.timeout(60000),shouldAbort:()=>!scheduler.status().running});
         if(!['awaiting_settlement','pending_changed','rollover_busy'].includes(result.reason))
           console.log('['+name+' ticket]',pending.code,result.reason??'booked','tickets='+result.ticketsSent);
+        }else if(lane?.band&&!pending){
+          const result=await run({redis,slotKey:'next:'+Date.now(),dateKey:watParts().date,signal:AbortSignal.timeout(90000),shouldAbort:()=>!scheduler.status().running});
+          if(result?.ticketsSent)console.log('['+name+' ticket]',result.reason??'booked','tickets='+result.ticketsSent);
+        }
       }catch(error){console.warn('['+name+' result check]',error.message);}
       finally{busy=false;}
     },20000);
@@ -4291,12 +4295,18 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
     if(!/^[A-Z0-9]{4,32}$/i.test(code)||!Number.isSafeInteger(stake)||stake<=0||!Array.isArray(legs)||legs.length<1||legs.length>lane.maxLegs)
       return res.json({status:'invalid_pending_ticket'});
     const info={code,stakeKobo:stake,legs:legs.map(({eventId,home,away,pick,kickoffUtc,marketId,outcomeId,specifier})=>({eventId,home,away,pick,kickoffUtc,marketId:String(marketId),outcomeId:String(outcomeId),specifier:analyzerSpecifier(specifier)}))};
+    if(typeof req.query.release==='string'&&req.query.release.trim().toUpperCase()===code){
+      const state=await virtualRollOver.stateOf(redis,lane);
+      if(state.pending?.code===code){state.pending=null;state.lastReason='worker_released';await redis.set(lane.key,JSON.stringify(state));}
+      return res.json({status:'released',code});
+    }
     if(legs.some(leg=>!lane.marketFields.includes(leg.field)))return res.json({status:'unsupported_rollover_selection',...info});
     if(req.query.quote!==code)return res.json({status:'pending',...info});
-    if(legs.some(x=>!(Date.parse(x.kickoffUtc)>Date.now()+20000)))return res.json({status:'closed_or_near_kickoff',...info});
+    const leadMs=lane.band?0:20000;
+    if(legs.some(x=>!(Date.parse(x.kickoffUtc)>Date.now()+leadMs)))return res.json({status:'closed_or_near_kickoff',...info});
     const decoded=await withPublicSportyRequest(async()=>extractBookingOutcomes(await getBooking(code,{fresh:true})).map(normalizeBookingLeg),{signal:AbortSignal.timeout(12000)});
     if((await virtualRollOver.stateOf(redis,lane)).pending?.code!==code)return res.json({status:'ticket_changed'});
-    return res.json({...info,...worker.compare(pending,decoded,analyzerSpecifier,Date.now(),lane)});
+    return res.json({...info,...worker.compare(pending,decoded,analyzerSpecifier,Date.now(),{...lane,leadMs}),leadMs});
   }catch(err){
     console.warn('[Roll Over worker] Read failed:',err.code??err.name);
     return res.status(502).json({error:'Roll Over quote unavailable'});

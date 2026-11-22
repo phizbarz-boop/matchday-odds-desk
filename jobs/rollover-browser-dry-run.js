@@ -145,7 +145,7 @@ const url=new URL('/api/sportybet/virtual-rollover/worker',base);
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 let stopped=false,browser,profileContext,last=null;
 for(const sig of ['SIGINT','SIGTERM'])process.once(sig,()=>{stopped=true;});
-async function request(code,results=false,lossReset=false,band=false){
+async function request(code,results=false,lossReset=false,band=false,release=false){
  const readStep=lossReset?'loss code allowance reset':results?'final-score lookup':externalCode?'external-code verification':code?'latest-code quote verification':'latest-code lookup';
  const u=new URL(url);
  if(lossReset)u.pathname+='/loss-reset';
@@ -153,7 +153,8 @@ async function request(code,results=false,lossReset=false,band=false){
  else if(externalCode)u.searchParams.set('external',externalCode);
  else{
   if(band)u.searchParams.set('band','1');
-  if(code)u.searchParams.set('quote',code);
+  if(release&&code)u.searchParams.set('release',code);
+  else if(code)u.searchParams.set('quote',code);
  }
  const signal=AbortSignal.timeout(20000);
  try{
@@ -188,7 +189,7 @@ function verifySlip(text,quote,now=Date.now()){
   ||slip.match(/\b(\d+\.\d+)\s+(?:total\s+)?odds\b/)?.[1];
  if(!slip||!displayed||!/\b(?:total\s+)?stake\b/.test(slip))return 'browser_slip_not_confirmed';
  if(!Array.isArray(quote.legs)||quote.legs.length<1||quote.legs.length>RULES.maxLegs||
-    !quote.legs.every(leg=>Date.parse(leg.kickoffUtc)>now+20000))return 'browser_slip_closed_or_near_kickoff';
+    !quote.legs.every(leg=>Date.parse(leg.kickoffUtc)>now+(Number.isFinite(Number(quote.leadMs))?Number(quote.leadMs):20000)))return 'browser_slip_closed_or_near_kickoff';
  for(const leg of quote.legs){
   const pick=normalized(leg.pick).replace(/ goals$/,'');
   if(!RULES.markets.some(m=>normalized(m)===pick))return 'browser_rollover_market_not_allowed';
@@ -732,8 +733,21 @@ async function autoLoop(){
   const ticket=await request(null,false,false,true);
   if(ticket.status!=='pending'||(band.usedCodes||[]).includes(ticket.code))return false;
   let quote;
-  try{quote=await request(ticket.code,false,false,true);}catch(error){if(error.fatal)throw error;return true;}
-  if(!Array.isArray(quote.legs)||!quote.legs.length||!Number.isFinite(Number(quote.odds))){reportWait('waiting for a confirmed whitelist band quote for '+ticket.code);return true;}
+  try{quote=await request(ticket.code,false,false,true);}catch(error){if(error.fatal)throw error;return false;}
+  const odds=Number(quote.odds);
+  const inBand=odds>=1.12-1e-9&&odds<=1.19+1e-9;
+  const placeable=(quote.status==='quote_matches'||quote.status==='odds_changed')&&inBand&&Array.isArray(quote.legs)&&quote.legs.length>0;
+  if(!placeable){
+   const reason=quote.status||'no quote';
+   reportWait('whitelist band '+ticket.code+' not confirmed: '+reason+(Number.isFinite(odds)?' at '+odds.toFixed(3)+'x':''));
+   if(['closed_or_near_kickoff','selection_mismatch','selection_odds_above_cap','unsupported_rollover_selection','odds_out_of_range'].includes(quote.status)||(quote.status==='odds_changed'&&!inBand)){
+    await request(ticket.code,false,false,true,true).catch(()=>{});
+    band.usedCodes=[...(band.usedCodes||[]),ticket.code];
+    console.log('AUTO: released whitelist band',ticket.code,reason+'. The next round will be booked.');
+   }
+   return false;
+  }
+  quote.leadMs=0;
   quote.code=ticket.code;
   const kobo=band.state.stakeKobo;
   let receipt;
