@@ -259,3 +259,17 @@ test('one listed team keeps a game when either side is on any list and reads the
  assert.deepEqual(parsed[0].rows.map(row=>row.field).sort(),['gg','tu25','u25']);
  assert.equal(parsed[0].rows.find(row=>row.field==='tu25').pick,'ATM Under 2.5');
 });
+
+test('new markets use the strongest year teams because none were failure-free',()=>{
+ assert.equal(roll.rowTeamAllowed({field:'h15',home:'VCF',away:'CHE'}),true);
+ assert.equal(roll.rowTeamAllowed({field:'h25',home:'RSO',away:'SUN'}),true);
+ assert.equal(roll.rowTeamAllowed({field:'ho05',home:'LIV',away:'RAY'}),true);
+ assert.equal(roll.rowTeamAllowed({field:'o15',home:'CHE',away:'FUL'}),true);
+ assert.equal(roll.rowTeamAllowed({field:'u25',home:'ALA',away:'NEW'}),true);
+ assert.equal(roll.rowTeamAllowed({field:'gg',home:'NEW',away:'RAY'}),true);
+ assert.equal(roll.rowTeamAllowed({field:'t05',home:'MCI',away:'GET'}),true);
+ assert.equal(roll.rowTeamAllowed({field:'tu15',home:'ESP',away:'CHE'}),true);
+ assert.equal(roll.rowTeamAllowed({field:'tu25',home:'LEC',away:'MUN'}),true);
+ assert.equal(roll.rowTeamAllowed({field:'o15',home:'SUN',away:'FUL'}),false);
+ assert.equal(roll.rowTeamAllowed({field:'h15',home:'MON',away:'FIO'}),false);
+});
