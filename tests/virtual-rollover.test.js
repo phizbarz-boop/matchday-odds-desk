@@ -85,12 +85,18 @@ test('scheduled virtual End status uses the final setScore and verifies event id
  assert.equal(await read({...event,eventId:'sr:match:other'}),null);
 });
 
-test('RDP follows the virtual markets, adds under 5.5 and 1st-half under 3.5, and starts at ₦2,000 with 1.15-1.55',()=>{
+test('RDP follows the table whitelist and starts at ₦2,000 with 1.15-1.55',()=>{
  assert.equal(roll.RDP.minOdds,1.15);assert.equal(roll.RDP.maxOdds,1.55);assert.equal(roll.RDP.maxLegs,2);assert.equal(roll.RDP.opening,200000);
- assert.deepEqual([...roll.RDP.marketFields],['o05','u45','u55','h35']);
+ assert.deepEqual([...roll.RDP.marketFields],['o05','u45','u55','h35','tu25']);
+ assert.equal(roll.rdpWhitelistAllowed({field:'u55',country:'spain',home:'ESP',away:'RMA'}),true);
+ assert.equal(roll.rdpWhitelistAllowed({field:'o05',country:'england',home:'NFO',away:'ARS'}),false);
+ assert.equal(roll.rdpWhitelistAllowed({field:'tu25',country:'germany',home:'KOE',away:'BAY',side:'home'}),true);
+ assert.equal(roll.rdpWhitelistAllowed({field:'tu25',country:'spain',home:'BIL',away:'RAY',side:'home'}),false);
  assert.equal(roll.settle({stake:200000,step:0,legs:[{field:'h35',odds:1.6}]},[{h:2,a:2,fh:1}],200000).returned,320000);
  assert.equal(roll.settle({stake:200000,step:1,legs:[{field:'h35',odds:1.6}]},[{h:4,a:1,fh:4}],200000).nextBalance,200000);
  assert.equal(roll.settle({stake:200000,step:1,legs:[{field:'h35',odds:1.6}]},[{h:4,a:1}],200000),null);
+ assert.equal(roll.settle({stake:200000,step:0,legs:[{field:'tu25',side:'home',odds:1.2}]},[{h:1,a:3}],200000).status,'Won');
+ assert.equal(roll.settle({stake:200000,step:0,legs:[{field:'tu25',side:'away',odds:1.2}]},[{h:0,a:3}],200000).status,'Lost');
 });
 
 test('research list allows a bet when either team has zero fails on that market',()=>{

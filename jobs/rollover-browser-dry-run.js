@@ -192,9 +192,11 @@ function verifySlip(text,quote,now=Date.now()){
     !quote.legs.every(leg=>Date.parse(leg.kickoffUtc)>now+(Number.isFinite(Number(quote.leadMs))?Number(quote.leadMs):20000)))return 'browser_slip_closed_or_near_kickoff';
  for(const leg of quote.legs){
   const pick=normalized(leg.pick).replace(/ goals$/,'');
-  if(!RULES.markets.some(m=>normalized(m)===pick))return 'browser_rollover_market_not_allowed';
+  const teamUnder=pick.match(/^(.+) under 2\.5$/);
+  if(!teamUnder&&!RULES.markets.some(m=>normalized(m)===pick))return 'browser_rollover_market_not_allowed';
   const home=normalized(leg.home),away=normalized(leg.away);
-  if(!slip.includes(home)||!slip.includes(away)||!slip.includes(pick))return 'browser_slip_selection_mismatch';
+  const pickShown=teamUnder?slip.includes(pick)||slip.includes('under 2.5')&&slip.includes(teamUnder[1]):slip.includes(pick);
+  if(!slip.includes(home)||!slip.includes(away)||!pickShown)return 'browser_slip_selection_mismatch';
   const at=slip.indexOf(home);
   if(/\blive\b/.test(slip.slice(Math.max(0,at-16),at+home.length+away.length+32)))return 'browser_selection_displays_live_label';
  }
