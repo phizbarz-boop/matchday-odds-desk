@@ -1,12 +1,12 @@
 'use strict';
-const markets=[['o05','Over 0.5'],['o15','Over 1.5'],['u45','Under 4.5'],['u55','Under 5.5'],['h35','1st half Under 3.5'],['h25','1st half Under 2.5'],['h15','1st half Under 1.5'],['ho05','1st half Over 0.5'],['t05','Team Over 0.5'],['tu15','Team Under 1.5']];
+const markets=[['o05','Over 0.5'],['o15','Over 1.5'],['u25','Under 2.5'],['u45','Under 4.5'],['u55','Under 5.5'],['gg','GG Yes'],['h35','1st half Under 3.5'],['h25','1st half Under 2.5'],['h15','1st half Under 1.5'],['ho05','1st half Over 0.5'],['t05','Team Over 0.5'],['tu15','Team Under 1.5'],['tu25','Team Under 2.5']];
 const box=document.getElementById('virtual-ticket-markets');
 box.innerHTML=markets.map(([id,label])=>`<label class="bet-toggle"><input type="checkbox" value="${id}" checked><span>${label}</span></label>`).join('');
 const buttons=[document.getElementById('virtual-ticket-build'),document.getElementById('virtual-ticket-code')];
 let ticket=null;
 function ticketRequest(){
  const chosen=[...box.querySelectorAll('input:checked')].map(input=>input.value);
- return {session:document.getElementById('virtual-session').value,markets:chosen,minProbability:document.getElementById('virtual-min-prob').value===''?75:Number(document.getElementById('virtual-min-prob').value),minOdds:Number(document.getElementById('virtual-min-odds').value),maxOdds:Number(document.getElementById('virtual-max-odds').value),maxLegs:Number(document.getElementById('virtual-max-legs').value),trustedOnly:document.getElementById('virtual-trusted').checked};
+ return {session:document.getElementById('virtual-session').value,markets:chosen,minProbability:document.getElementById('virtual-min-prob').value===''?75:Number(document.getElementById('virtual-min-prob').value),minOdds:Number(document.getElementById('virtual-min-odds').value),maxOdds:Number(document.getElementById('virtual-max-odds').value),maxLegs:Number(document.getElementById('virtual-max-legs').value),trustedOnly:document.getElementById('virtual-trusted').checked,oneListed:document.getElementById('virtual-one-listed').checked};
 }
 function renderTicket(data){
  ticket=data;
@@ -82,8 +82,8 @@ document.getElementById('virtual-session').addEventListener('change',()=>{
  document.getElementById('virtual-max-odds').value=botMix?'1000000000':maxUnder?'1000000000':higher?'20.00':'2.00';
  document.getElementById('virtual-max-legs').value=botMix||maxUnder?'20':higher?'15':'3';
  document.getElementById('virtual-min-prob').value=botMix?'55':document.getElementById('virtual-min-prob').value||'75';
- if(botMix)document.getElementById('virtual-trusted').checked=false;
+ if(botMix){document.getElementById('virtual-trusted').checked=false;document.getElementById('virtual-one-listed').checked=true;}
  const unders=['u45','u55','h35','h25','h15'];
- const mix=['h15','ho05','o15','t05','tu15'];
+ const mix=['h15','ho05','o15','t05','tu15','u25','gg','tu25'];
  box.querySelectorAll('input').forEach(input=>{input.checked=botMix?mix.includes(input.value):maxUnder?unders.includes(input.value):true;});
 });

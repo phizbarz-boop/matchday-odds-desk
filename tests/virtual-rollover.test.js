@@ -237,3 +237,25 @@ test('bot mix can price the longer markets used on a high-odds slip',async()=>{
  assert.equal(roll.select(outside,[],now,new Set(),{minOdds:1.05,maxOdds:1e12,maxLegs:5,minProbability:55,marketFields:['h15'],stack:true,preferLong:true,maxLegOdds:20}).legs.length,1);
  assert.equal(roll.select(outside,[],now,new Set(),{minOdds:1.05,maxOdds:1e12,maxLegs:5,minProbability:55,marketFields:['h15'],stack:true,trustedOnly:true,preferLong:true,maxLegOdds:20}),null);
 });
+
+test('one listed team keeps a game when either side is on any list and reads the extra bot markets',async()=>{
+ const now=Date.now(), kick=now+600000;
+ const lane={minOdds:1.05,maxOdds:1e12,maxLegs:5,minProbability:50,marketFields:['o15','u25','gg','tu25'],stack:true,preferLong:true,maxLegOdds:20,oneListed:true};
+ const board=[
+  {fixture:{eventId:'sr:match:ful',home:'SUN',away:'FUL',league:'England',kickoffUtc:new Date(kick).toISOString()},rows:[{field:'o15',odds:1.62,home:'SUN',away:'FUL',eventId:'sr:match:ful',pick:'Over 1.5'}]},
+  {fixture:{eventId:'sr:match:bou',home:'SUN',away:'BOU',league:'England',kickoffUtc:new Date(kick).toISOString()},rows:[{field:'gg',odds:2.35,home:'SUN',away:'BOU',eventId:'sr:match:bou',pick:'GG Yes'}]}
+ ];
+ const ticket=roll.select(board,[],now,new Set(),lane);
+ assert.deepEqual(ticket.legs.map(leg=>leg.away),['BOU']);
+ const client={fetchPrematchPage:async(_sport,_page,_size,options)=>{
+  assert.match(options.marketIds,/29/);
+  return {data:{events:[{eventId:'sr:match:88011',homeTeamName:'ATM',awayTeamName:'ELC',tournamentId:'Spain',estimateStartTime:kick,sport:{id:'sr:sport:202120001'},markets:[
+   {id:'18',desc:'Over/Under',specifier:'total=2.5',status:0,outcomes:[{id:'13',desc:'Under 2.5',odds:1.91,isActive:1}]},
+   {id:'29',desc:'GG/NG',status:0,outcomes:[{id:'74',desc:'Yes',odds:1.7,isActive:1}]},
+   {id:'19',desc:'Home Total',specifier:'total=2.5',status:0,outcomes:[{id:'13',desc:'Under 2.5',odds:1.57,isActive:1}]}
+  ]}]}};
+ }};
+ const parsed=await roll.fixtures(client,now,null,{marketFields:['u25','gg','tu25'],maxOdds:1e12,maxLegOdds:20},6*3600000);
+ assert.deepEqual(parsed[0].rows.map(row=>row.field).sort(),['gg','tu25','u25']);
+ assert.equal(parsed[0].rows.find(row=>row.field==='tu25').pick,'ATM Under 2.5');
+});
