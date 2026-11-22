@@ -1,5 +1,5 @@
 'use strict';
-const markets=[['o05','Over 0.5'],['u45','Under 4.5'],['u55','Under 5.5'],['h35','1st half Under 3.5'],['h25','1st half Under 2.5'],['h15','1st half Under 1.5']];
+const markets=[['o05','Over 0.5'],['o15','Over 1.5'],['u45','Under 4.5'],['u55','Under 5.5'],['h35','1st half Under 3.5'],['h25','1st half Under 2.5'],['h15','1st half Under 1.5'],['ho05','1st half Over 0.5'],['t05','Team Over 0.5'],['tu15','Team Under 1.5']];
 const box=document.getElementById('virtual-ticket-markets');
 box.innerHTML=markets.map(([id,label])=>`<label class="bet-toggle"><input type="checkbox" value="${id}" checked><span>${label}</span></label>`).join('');
 const buttons=[document.getElementById('virtual-ticket-build'),document.getElementById('virtual-ticket-code')];
@@ -77,10 +77,13 @@ buttons[1].addEventListener('click',()=>buildVirtualTicket(true));
 
 document.getElementById('virtual-session').addEventListener('change',()=>{
  const session=document.getElementById('virtual-session').value;
- const maxUnder=session==='max-under', higher=session==='higher';
- document.getElementById('virtual-min-odds').value=maxUnder?'1.05':higher?'5.00':'1.20';
- document.getElementById('virtual-max-odds').value=maxUnder?'1000000000':higher?'20.00':'2.00';
- document.getElementById('virtual-max-legs').value=maxUnder?'20':higher?'15':'3';
- if(document.getElementById('virtual-min-prob').value==='')document.getElementById('virtual-min-prob').value='75';
- box.querySelectorAll('input').forEach(input=>{input.checked=maxUnder?input.value!=='o05':true;});
+ const maxUnder=session==='max-under', higher=session==='higher', botMix=session==='bot-mix';
+ document.getElementById('virtual-min-odds').value=botMix?'100000':maxUnder?'1.05':higher?'5.00':'1.20';
+ document.getElementById('virtual-max-odds').value=botMix?'1000000000':maxUnder?'1000000000':higher?'20.00':'2.00';
+ document.getElementById('virtual-max-legs').value=botMix||maxUnder?'20':higher?'15':'3';
+ document.getElementById('virtual-min-prob').value=botMix?'55':document.getElementById('virtual-min-prob').value||'75';
+ if(botMix)document.getElementById('virtual-trusted').checked=false;
+ const unders=['u45','u55','h35','h25','h15'];
+ const mix=['h15','ho05','o15','t05','tu15'];
+ box.querySelectorAll('input').forEach(input=>{input.checked=botMix?mix.includes(input.value):maxUnder?unders.includes(input.value):true;});
 });

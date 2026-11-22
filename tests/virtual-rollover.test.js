@@ -122,7 +122,7 @@ test('the one-year prior prices the best teams and can stand in when recent form
  assert.ok(ticket.probability>0.9);
 });
 
-test('the virtual desk applies the probability floor and rejects markets outside the four virtual bets',()=>{
+test('the virtual desk applies the probability floor and rejects an unknown market',()=>{
  const now=Date.now(), kick=new Date(now+600000).toISOString();
  const board=[{fixture:{eventId:'sr:match:desk',home:'RAY',away:'VCF',league:'Spain',kickoffUtc:kick},rows:[
   {field:'u45',odds:1.4,home:'RAY',away:'VCF',eventId:'sr:match:desk',pick:'Under 4.5'},
@@ -132,7 +132,8 @@ test('the virtual desk applies the probability floor and rejects markets outside
  assert.equal(roll.select(board,[],now,new Set(),{...lane,minProbability:99}),null);
  const ticket=roll.select(board,[],now,new Set(),{...lane,minProbability:80});
  assert.equal(ticket.legs.length,1);assert.equal(ticket.legs[0].field,'u45');
- assert.deepEqual(roll.deskOptions({markets:['o15','u45'],minProbability:200,maxLegs:20}).markets,['u45']);
+ assert.deepEqual(roll.deskOptions({markets:['corners','u45'],minProbability:200,maxLegs:20}).markets,['u45']);
+ assert.deepEqual(roll.deskOptions({markets:['o15','u45']}).markets,['o15','u45']);
  assert.equal(roll.deskOptions({minOdds:1.8,maxOdds:1.2}).maxOdds,1.8);
  assert.equal(roll.deskOptions({maxLegs:50}).maxLegs,50);
  assert.equal(roll.deskOptions({maxLegs:80}).maxLegs,50);
@@ -213,4 +214,26 @@ test('the virtual builder can target 200 million combined odds',()=>{
  assert.equal(roll.deskOptions({minOdds:1.2,maxOdds:200000000}).maxOdds,200000000);
  assert.equal(roll.deskOptions({maxOdds:1e15}).maxOdds,1e12);
  assert.equal(roll.deskSession({session:'max-under'}).maxLegOdds,20);
+});
+
+test('bot mix can price the longer markets used on a high-odds slip',async()=>{
+ const now=Date.now(), kick=now+600000;
+ let requested='';
+ const client={fetchPrematchPage:async(_sport,_page,_size,options)=>{requested=options.marketIds;return {data:{events:[{eventId:'sr:match:88001',homeTeamName:'SUN',awayTeamName:'EVE',tournamentId:'England',estimateStartTime:kick,sport:{id:'sr:sport:202120001'},markets:[
+  {id:'68',desc:'1st Half - Over/Under',specifier:'total=0.5',status:0,outcomes:[{id:'12',desc:'Over 0.5',odds:1.67,isActive:1}]},
+  {id:'18',desc:'Over/Under',specifier:'total=1.5',status:0,outcomes:[{id:'12',desc:'Over 1.5',odds:1.57,isActive:1}]},
+  {id:'20',desc:'Away Total',specifier:'total=0.5',status:0,outcomes:[{id:'12',desc:'Over 0.5',odds:1.78,isActive:1}]},
+  {id:'19',desc:'Home Total',specifier:'total=1.5',status:0,outcomes:[{id:'13',desc:'Under 1.5',odds:1.95,isActive:1}]}
+ ]}]}};}};
+ const board=await roll.fixtures(client,now,null,{marketFields:['h15','ho05','o15','t05','tu15'],maxOdds:1e12,maxLegOdds:20},6*3600000);
+ assert.match(requested,/68/);assert.match(requested,/19/);assert.match(requested,/20/);
+ assert.deepEqual(board[0].rows.map(row=>row.field).sort(),['ho05','o15','t05','tu15']);
+ assert.equal(board[0].rows.find(row=>row.field==='t05').pick,'EVE Over 0.5');
+ assert.equal(board[0].rows.find(row=>row.field==='tu15').pick,'SUN Under 1.5');
+ const priced=roll.select(board,[],now,new Set(),{minOdds:1.05,maxOdds:1e12,maxLegs:20,minProbability:55,marketFields:['h15','ho05','o15','t05','tu15'],stack:true,preferLong:true,maxLegOdds:20});
+ assert.equal(priced.legs.length,1);
+ assert.ok(priced.legs[0].odds>=1.57);
+ const outside=[{fixture:{eventId:'sr:match:88002',home:'STR',away:'NCE',league:'France',kickoffUtc:new Date(kick).toISOString()},rows:[{field:'h15',odds:1.99,home:'STR',away:'NCE',eventId:'sr:match:88002',pick:'1st Half Under 1.5'}]}];
+ assert.equal(roll.select(outside,[],now,new Set(),{minOdds:1.05,maxOdds:1e12,maxLegs:5,minProbability:55,marketFields:['h15'],stack:true,preferLong:true,maxLegOdds:20}).legs.length,1);
+ assert.equal(roll.select(outside,[],now,new Set(),{minOdds:1.05,maxOdds:1e12,maxLegs:5,minProbability:55,marketFields:['h15'],stack:true,trustedOnly:true,preferLong:true,maxLegOdds:20}),null);
 });
