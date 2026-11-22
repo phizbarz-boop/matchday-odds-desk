@@ -272,4 +272,7 @@ test('new markets use the strongest year teams because none were failure-free',(
  assert.equal(roll.rowTeamAllowed({field:'tu25',home:'LEC',away:'MUN'}),true);
  assert.equal(roll.rowTeamAllowed({field:'o15',home:'SUN',away:'FUL'}),false);
  assert.equal(roll.rowTeamAllowed({field:'h15',home:'MON',away:'FIO'}),false);
+ const listed=Object.fromEntries(roll.whitelist().map(row=>[row.field,row.teams]));
+ assert.deepEqual(listed.h15,['ALA','ESP','RAY','VCF']);
+ assert.deepEqual(listed.gg,['CHE','NEW']);
 });

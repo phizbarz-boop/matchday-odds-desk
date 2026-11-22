@@ -1,6 +1,11 @@
 'use strict';
 const markets=[['o05','Over 0.5'],['o15','Over 1.5'],['u25','Under 2.5'],['u45','Under 4.5'],['u55','Under 5.5'],['gg','GG Yes'],['h35','1st half Under 3.5'],['h25','1st half Under 2.5'],['h15','1st half Under 1.5'],['ho05','1st half Over 0.5'],['t05','Team Over 0.5'],['tu15','Team Under 1.5'],['tu25','Team Under 2.5']];
 const box=document.getElementById('virtual-ticket-markets');
+fetch('/api/sportybet/virtual-whitelist').then(response=>response.json()).then(rows=>{
+ const list=document.getElementById('virtual-whitelist');
+ if(!Array.isArray(rows))return;
+ list.replaceChildren(...rows.map(row=>{const line=document.createElement('div');line.textContent=`${row.label}: ${row.teams.join(', ')}`;return line;}));
+}).catch(()=>{const list=document.getElementById('virtual-whitelist');if(list)list.textContent='The team lists could not be loaded.';});
 box.innerHTML=markets.map(([id,label])=>`<label class="bet-toggle"><input type="checkbox" value="${id}" checked><span>${label}</span></label>`).join('');
 const buttons=[document.getElementById('virtual-ticket-build'),document.getElementById('virtual-ticket-code')];
 let ticket=null;

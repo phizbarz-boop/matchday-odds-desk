@@ -4366,6 +4366,10 @@ app.post('/api/telegram/virtual-rollover-test',express.json(),async(req,res)=>{
 });
 
 let virtualDeskBusy=false;
+app.get('/api/sportybet/virtual-whitelist',(_req,res)=>{
+ res.set('Cache-Control','no-store');
+ res.json(virtualRollOver.whitelist());
+});
 app.post('/api/sportybet/virtual-ticket',express.json({limit:'24kb'}),async(req,res)=>{
   res.set('Cache-Control','no-store');
   if(virtualDeskBusy)return res.status(429).json({error:'A virtual ticket is already being built. Wait for it to finish.'});
