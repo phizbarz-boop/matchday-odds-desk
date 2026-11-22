@@ -12,3 +12,17 @@ test('a restarted run drops the old stake and starts at ₦2,000',()=>{
  assert.equal(next.pending,null);
  assert.equal(next.awaitingReset,false);
 });
+
+test('the whitelist band returns to ₦1,500 after a loss and after 20 wins',()=>{
+ const ruleset=rules.BAND_RULES;
+ const open=rules.initial(Date.now(),ruleset);
+ assert.equal(open.stakeKobo,150000);
+ const lost=rules.settle({...open,pending:{id:'B1',stakeKobo:150000}},{id:'B1',status:'lost',payoutKobo:0},Date.now(),ruleset);
+ assert.equal(lost.stakeKobo,150000);
+ assert.equal(lost.wins,0);
+ assert.equal(lost.awaitingReset,false);
+ let state={...open,wins:19,stakeKobo:400000,pending:{id:'B2',stakeKobo:400000},runOpeningStakeKobo:150000};
+ state=rules.settle(state,{id:'B2',status:'won',payoutKobo:460000},Date.now(),ruleset);
+ assert.equal(state.stakeKobo,150000);
+ assert.equal(state.wins,0);
+});

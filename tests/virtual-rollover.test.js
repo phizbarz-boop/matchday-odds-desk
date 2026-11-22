@@ -273,3 +273,29 @@ test('new markets use the strongest year teams because none were failure-free',(
  assert.equal(roll.rowTeamAllowed({field:'o15',home:'SUN',away:'FUL'}),false);
  assert.equal(roll.rowTeamAllowed({field:'h15',home:'MON',away:'FIO'}),true);
 });
+
+test('whitelist band uses the first seven markets and banks the stake after 20 wins',()=>{
+ assert.equal(roll.BAND.opening,150000);
+ assert.equal(roll.BAND.minOdds,1.12);
+ assert.equal(roll.BAND.maxOdds,1.19);
+ assert.equal(roll.BAND.maxLegs,2);
+ assert.equal(roll.bandAllowed({field:'u55',country:'spain',home:'ESP',away:'RMA'}),true);
+ assert.equal(roll.bandAllowed({field:'h35',country:'spain',home:'GET',away:'RMA'}),true);
+ assert.equal(roll.bandAllowed({field:'u55',country:'italy',home:'FRO',away:'NAP'}),true);
+ assert.equal(roll.bandAllowed({field:'h35',country:'italy',home:'LEC',away:'MIL'}),true);
+ assert.equal(roll.bandAllowed({field:'o05',country:'england',home:'MCI',away:'FUL'}),true);
+ assert.equal(roll.bandAllowed({field:'u45',country:'italy',home:'UDI',away:'NAP'}),true);
+ assert.equal(roll.bandAllowed({field:'u55',country:'france',home:'ESP',away:'OLM'}),false);
+ assert.equal(roll.bandAllowed({field:'u25',country:'spain',home:'RAY',away:'GET'}),false);
+ const won=roll.settle({stake:150000,step:19,takeProfitWins:20,legs:[{field:'o05',odds:1.15}]},[{h:1,a:0}],150000);
+ assert.equal(won.banked,true);
+ assert.equal(won.nextBalance,150000);
+ assert.equal(won.nextStep,0);
+ const mid=roll.settle({stake:150000,step:2,takeProfitWins:20,legs:[{field:'o05',odds:1.15}]},[{h:1,a:0}],150000);
+ assert.equal(mid.nextStep,3);
+ assert.ok(mid.nextBalance>150000);
+ const lost=roll.settle({stake:180000,step:4,takeProfitWins:20,legs:[{field:'u55',odds:1.08}]},[{h:3,a:3}],150000);
+ assert.equal(lost.status,'Lost');
+ assert.equal(lost.nextBalance,150000);
+ assert.equal(lost.nextStep,0);
+});

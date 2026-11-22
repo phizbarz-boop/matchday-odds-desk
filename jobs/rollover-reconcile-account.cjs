@@ -5,9 +5,9 @@ const {settle}=require('./rollover-run-state.cjs');
 
 // Call with the signed-in order detail and independently verified final
 // scores. Only a recognized settlement can advance the rollover ledger.
-function reconcileAccount(state,orderDetail,finalResults,now=Date.now()){
+function reconcileAccount(state,orderDetail,finalResults,now=Date.now(),rules){
  const outcome=decodeAccountSettlement(orderDetail,state.pending,finalResults);
  if(outcome.state!=='settled')return {...outcome,stateAfter:state};
- return {...outcome,stateAfter:settle(state,outcome.settlement,now)};
+ return {...outcome,stateAfter:settle(state,outcome.settlement,now,rules)};
 }
 module.exports={reconcileAccount};

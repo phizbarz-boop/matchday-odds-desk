@@ -145,13 +145,16 @@ const url=new URL('/api/sportybet/virtual-rollover/worker',base);
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 let stopped=false,browser,profileContext,last=null;
 for(const sig of ['SIGINT','SIGTERM'])process.once(sig,()=>{stopped=true;});
-async function request(code,results=false,lossReset=false){
+async function request(code,results=false,lossReset=false,band=false){
  const readStep=lossReset?'loss code allowance reset':results?'final-score lookup':externalCode?'external-code verification':code?'latest-code quote verification':'latest-code lookup';
  const u=new URL(url);
  if(lossReset)u.pathname+='/loss-reset';
  else if(results)u.pathname+='/scores';
  else if(externalCode)u.searchParams.set('external',externalCode);
- else if(code)u.searchParams.set('quote',code);
+ else{
+  if(band)u.searchParams.set('band','1');
+  if(code)u.searchParams.set('quote',code);
+ }
  const signal=AbortSignal.timeout(20000);
  try{
   const r=await fetch(u,{...(results||lossReset?{method:'POST',body:JSON.stringify(lossReset?code:{legs:code})}:{}),
@@ -583,12 +586,13 @@ async function tick(){
  last=ticket.code;
 }
 const ledgerPath=join(profile,'live-rollover-state-v1.json');
-async function saveLedger(value){
- const temp=ledgerPath+'.new';
+const bandPath=join(profile,'live-band-state-v1.json');
+async function saveLedger(value,path=ledgerPath){
+ const temp=path+'.new';
  const file=await open(temp,'wx',0o600);
  try{await file.writeFile(JSON.stringify(value));await file.sync();}
  finally{await file.close();}
- await rename(temp,ledgerPath);
+ await rename(temp,path);
 }
 async function accountOrder(id){
  const page=await profileContext.newPage();
@@ -637,8 +641,8 @@ function matchHistoryOrder(body,attempt,time){
  matches.sort((a,b)=>Math.abs(a.createTime-time)-Math.abs(b.createTime-time));
  return {id:matches[0].orderId,stakeKobo:attempt.stakeKobo};
 }
-async function recoverFromBetHistory(ledger,rules){
- const when=ledger.attempt.startedAt??(await stat(ledgerPath)).mtimeMs;
+async function recoverFromBetHistory(ledger,rules,save=value=>saveLedger(value),path=ledgerPath,ruleSet=rules.RULES){
+ const when=ledger.attempt.startedAt??(await stat(path)).mtimeMs;
  const page=await profileContext.newPage();
  try{
   const response=page.waitForResponse(r=>{
@@ -668,8 +672,8 @@ async function recoverFromBetHistory(ledger,rules){
    }
   }
   if(!receipt)return false;
-  ledger.state=rules.acceptReceipt(ledger.state,receipt);
-  await saveLedger(ledger);
+  ledger.state=rules.acceptReceipt(ledger.state,receipt,Date.now(),ruleSet);
+  await save(ledger);
   console.log('AUTO: recovered existing bet',ledger.attempt.code,'₦'+decimal(receipt.stakeKobo),'; waiting for settlement');
   return true;
  }finally{await page.close();}
@@ -681,6 +685,78 @@ async function autoLoop(){
  let ledger;
  try{ledger=JSON.parse(await readFile(ledgerPath,'utf8'));}
  catch(error){if(error.code!=='ENOENT')throw error;ledger={state:rules.initial(),attempt:null,lastCode:null,usedCodes:[]};}
+ let band;
+ try{band=JSON.parse(await readFile(bandPath,'utf8'));}
+ catch(error){if(error.code!=='ENOENT')throw error;band={state:rules.initial(Date.now(),rules.BAND_RULES),attempt:null,lastCode:null,usedCodes:[]};}
+ const saveBand=value=>saveLedger(value,bandPath);
+ async function serviceBand(){
+  const ruleSet=rules.BAND_RULES;
+  band.state=rules.refresh(band.state,Date.now(),ruleSet);
+  if(band.attempt&&!band.state.pending){
+   let recovered=false;
+   try{recovered=await recoverFromBetHistory(band,rules,saveBand,bandPath,ruleSet);}
+   catch(error){if(error.fatal||band.state.pending)throw error;}
+   if(!recovered){
+    band.historyMisses=(band.historyMisses||0)+1;
+    const started=Number(band.attempt?.startedAt)||0;
+    const waited=started?Date.now()-started:band.historyMisses*10000;
+    if(waited>=8*60*1000){
+     const code=band.attempt.code;
+     band.attempt=null;band.historyMisses=0;
+     await saveBand(band);
+     console.log('AUTO: band',code,'was not placed. Taking the next whitelist ticket.');
+     return false;
+    }
+    reportWait('whitelist band is waiting for Bet History. The other rollover is paused.');
+    return true;
+   }
+   band.historyMisses=0;
+  }
+  if(band.state.pending){
+   const detail=await accountOrder(band.state.pending.id);
+   let result=reconcileAccount(band.state,detail,[],Date.now(),ruleSet);
+   if(result.reason==='zero_payout_without_verified_losing_selection'){
+    const final=await request(band.attempt.legs,true);
+    result=reconcileAccount(band.state,detail,final.status==='verified_results'?final.results:[],Date.now(),ruleSet);
+   }
+   if(result.state==='settled'){
+    band.state=result.stateAfter;band.attempt=null;
+    await saveBand(band);
+    console.log('BAND',result.settlement.status.toUpperCase(),'return ₦'+decimal(result.settlement.payoutKobo),'next ₦'+decimal(band.state.stakeKobo),band.state.wins+'/'+ruleSet.targetTicketWins+' wins');
+    return false;
+   }
+   reportWait(result.state==='pending'?'the whitelist band bet is still unsettled. The other rollover is paused.':'whitelist band settlement is not verified yet. The other rollover is paused.');
+   return true;
+  }
+  const ticket=await request(null,false,false,true);
+  if(ticket.status!=='pending')return false;
+  if((band.usedCodes||[]).includes(ticket.code))return false;
+  let quote;
+  try{quote=await request(ticket.code,false,false,true);}catch(error){if(error.fatal)throw error;return true;}
+  if(!Array.isArray(quote.legs)||!quote.legs.length||!Number.isFinite(Number(quote.odds))){reportWait('waiting for a confirmed whitelist band quote for '+ticket.code);return true;}
+  quote.code=ticket.code;
+  const kobo=band.state.stakeKobo;
+  let receipt;
+  try{
+   receipt=await inspect(ticket.code,quote,kobo,async()=>{
+    band.attempt={code:ticket.code,stakeKobo:kobo,legs:quote.legs,odds:quote.odds,startedAt:Date.now()};
+    band.lastCode=ticket.code;
+    band.usedCodes=[...(band.usedCodes||[]),ticket.code];
+    await saveBand(band);
+   });
+  }catch(error){
+   if(band.attempt){console.log('AUTO: whitelist band place clicked for',ticket.code+'. Waiting for Bet History.');return true;}
+   if(error.fatal||retryableAppRead(error))throw error;
+   console.log('AUTO: whitelist band skipped before submission:',error.message.split('\n')[0]);
+   return true;
+  }
+  if(receipt&&typeof receipt==='object'){
+   band.state=rules.acceptReceipt(band.state,receipt,Date.now(),ruleSet);
+   await saveBand(band);
+   console.log('AUTO: placed whitelist band',ticket.code,'₦'+decimal(kobo));
+  }else if(receipt) console.log('AUTO: whitelist band slip not ready for',ticket.code,receipt+'; retrying this ticket.');
+  return true;
+ }
  if(ledger.state.pending||ledger.attempt||ledger.state.awaitingReset||ledger.state.wins>0||ledger.state.stakeKobo!==RULES.openingStakeKobo){
   ledger.state=rules.beginRun(ledger.state);
   ledger.attempt=null;
@@ -700,7 +776,9 @@ async function autoLoop(){
   ledger.state=rules.refresh(previousState);
   if(ledger.state.day!==previousState.day||ledger.state.consecutiveLosses!==previousState.consecutiveLosses||
      ledger.state.awaitingReset!==previousState.awaitingReset){await saveLedger(ledger);lastWait='';}
-  if(ledger.attempt&&!ledger.state.pending){
+  const bandBusy=!ledger.attempt&&!ledger.state.pending&&!ledger.state.awaitingReset&&await serviceBand();
+  if(bandBusy){
+  }else if(ledger.attempt&&!ledger.state.pending){
    let recovered=false;
    try{recovered=await recoverFromBetHistory(ledger,rules);}
    catch(error){if(error.fatal||ledger.state.pending)throw error;}

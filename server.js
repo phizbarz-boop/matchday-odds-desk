@@ -4240,6 +4240,11 @@ const rolloverRdpScheduler=createRolloverChain({name:'RDP Virtual Roll Over',nam
   lane:virtualRollOver.RDP,enabled:process.env.VIRTUAL_ROLLOVER_RDP_ENABLED==='true',
   configured:Boolean(process.env.REDIS_URL&&process.env.ROLLOVER_WORKER_TOKEN?.length>=32),
   notify:rolloverRdpLog,bookOnBoot:true});
+const bandLog=text=>console.log('[Whitelist Band]',text.split('\n')[0]);
+const bandScheduler=createRolloverChain({name:'Whitelist Band',namespace:'virtual-rollover:band:schedule',
+  lane:virtualRollOver.BAND,enabled:process.env.VIRTUAL_ROLLOVER_RDP_ENABLED==='true',
+  configured:Boolean(process.env.REDIS_URL&&process.env.ROLLOVER_WORKER_TOKEN?.length>=32),
+  notify:bandLog,bookOnBoot:true});
 async function virtualRollOverStatus(){
   const schedule=rolloverScheduler.status();
   if(!schedule.enabled||!schedule.configured)return 'ROLL OVER · VIRTUAL FOOTBALL\nScheduled picks are not active.';
@@ -4254,8 +4259,9 @@ app.get('/api/sportybet/virtual-rollover/worker',async(req,res)=>{
   const worker=require('./lib/rolloverWorkerQuote');
   if(!worker.authorized(req.get('authorization'),process.env.ROLLOVER_WORKER_TOKEN))return res.status(401).json({error:'unauthorized'});
   try{
-    if(!rolloverRdpScheduler.status().running)return res.json({status:'rdp_rollover_disabled'});
-    const lane=virtualRollOver.RDP;
+    if(!rolloverRdpScheduler.status().running&&!bandScheduler.status().running)return res.json({status:'rdp_rollover_disabled'});
+    const lane=req.query.band==='1'?virtualRollOver.BAND:virtualRollOver.RDP;
+    if(lane===virtualRollOver.BAND?!bandScheduler.status().running:!rolloverRdpScheduler.status().running)return res.json({status:'rdp_rollover_disabled'});
     if(req.query.external!==undefined){
       const code=typeof req.query.external==='string'?req.query.external.trim().toUpperCase():'';
       if(!/^[A-Z0-9]{4,32}$/.test(code))return res.status(400).json({status:'invalid_external_code'});
@@ -4388,7 +4394,7 @@ app.post('/api/sportybet/virtual-ticket',express.json({limit:'24kb'}),async(req,
 
 const httpServer=app.listen(PORT, () => {
   console.log(`Matchday site listening on :${PORT}`);
-  publicCacheScheduler.start();floorScheduler.start();rolloverScheduler.start();rolloverRdpScheduler.start();
+  publicCacheScheduler.start();floorScheduler.start();rolloverScheduler.start();rolloverRdpScheduler.start();bandScheduler.start();
   console.log(`[SportyBet access] Public data reads; booking mode=${sportyDirect.sessionStatus().bookingMode}`);
   void (async()=>{
     try{
