@@ -195,3 +195,16 @@ test('website under tickets can price first-half under 2.5 and 1.5 for a trusted
 });
 
 test("kept virtual games can be booked again without the removed ones",()=>{const board=[{fixture:{eventId:"sr:match:1"},rows:[{eventId:"sr:match:1",marketId:"68",outcomeId:"13",specifier:"total=2.5",odds:1.4,home:"RAY",away:"MON",pick:"1st Half Under 2.5"}]},{fixture:{eventId:"sr:match:2"},rows:[{eventId:"sr:match:2",marketId:"18",outcomeId:"13",specifier:"total=4.5",odds:1.2,home:"NAP",away:"BFC",pick:"Under 4.5"}]}];const kept=roll.matchKept(board,[{eventId:"sr:match:1",marketId:"68",outcomeId:"13",specifier:"total=2.5",home:"RAY",away:"MON"}]);assert.equal(kept.legs[0].home,"RAY");assert.equal(roll.matchKept(board,[{eventId:"sr:match:9",marketId:"68",outcomeId:"13",specifier:"total=2.5",home:"CHE",away:"ARS"}]).missing[0].home,"CHE");});
+
+test('the trusted toggle keeps whitelist or year top 20% teams only',()=>{
+ const now=Date.now(), kick=new Date(now+600000).toISOString();
+ const board=[
+  {fixture:{eventId:'sr:match:ray',home:'RAY',away:'ZZZ',league:'Spain',kickoffUtc:kick},rows:[{field:'u45',odds:1.3,home:'RAY',away:'ZZZ',eventId:'sr:match:ray',pick:'Under 4.5'}]},
+  {fixture:{eventId:'sr:match:che',home:'CHE',away:'ZZZ',league:'England',kickoffUtc:kick},rows:[{field:'u45',odds:1.8,home:'CHE',away:'ZZZ',eventId:'sr:match:che',pick:'Under 4.5'}]}
+ ];
+ const lane={minOdds:1.05,maxOdds:20,maxLegs:5,minProbability:50,marketFields:['u45'],stack:true};
+ const open=roll.select(board,[],now,new Set(),lane);
+ const closed=roll.select(board,[],now,new Set(),{...lane,trustedOnly:true});
+ assert.ok(open.legs.some(leg=>leg.home==='CHE'));
+ assert.deepEqual(closed.legs.map(leg=>leg.home),['RAY']);
+});

@@ -6,7 +6,7 @@ const buttons=[document.getElementById('virtual-ticket-build'),document.getEleme
 let ticket=null;
 function ticketRequest(){
  const chosen=[...box.querySelectorAll('input:checked')].map(input=>input.value);
- return {session:document.getElementById('virtual-session').value,markets:chosen,minProbability:document.getElementById('virtual-min-prob').value===''?75:Number(document.getElementById('virtual-min-prob').value),minOdds:Number(document.getElementById('virtual-min-odds').value),maxOdds:Number(document.getElementById('virtual-max-odds').value),maxLegs:Number(document.getElementById('virtual-max-legs').value)};
+ return {session:document.getElementById('virtual-session').value,markets:chosen,minProbability:document.getElementById('virtual-min-prob').value===''?75:Number(document.getElementById('virtual-min-prob').value),minOdds:Number(document.getElementById('virtual-min-odds').value),maxOdds:Number(document.getElementById('virtual-max-odds').value),maxLegs:Number(document.getElementById('virtual-max-legs').value),trustedOnly:document.getElementById('virtual-trusted').checked};
 }
 function renderTicket(data){
  ticket=data;
