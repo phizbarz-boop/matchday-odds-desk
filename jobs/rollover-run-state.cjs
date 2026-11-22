@@ -7,6 +7,11 @@ const RULES=Object.freeze({openingStakeKobo:200000,targetTicketWins:5,maxConsecu
 const dateFormat=new Intl.DateTimeFormat('en-CA',{timeZone:RULES.timeZone,year:'numeric',month:'2-digit',day:'2-digit'});
 const dayOf=now=>dateFormat.format(new Date(now));
 const money=value=>Number.isSafeInteger(value)&&value>=0;
+function beginRun(state,now=Date.now()){
+ const next=refresh({...state,pending:null,awaitingReset:false},now);
+ return {...next,consecutiveLosses:0,wins:0,stakeKobo:RULES.openingStakeKobo,
+  runOpeningStakeKobo:RULES.openingStakeKobo,awaitingReset:false,pending:null,run:(Number(next.run)||0)+1};
+}
 function initial(now=Date.now()){
  return {day:dayOf(now),consecutiveLosses:0,wins:0,stakeKobo:RULES.openingStakeKobo,netKobo:0,
   run:1,runOpeningStakeKobo:RULES.openingStakeKobo,awaitingReset:false,pending:null,lastSettled:null};
@@ -57,4 +62,4 @@ function settle(state,result,now=Date.now()){
  }
  return next;
 }
-module.exports={RULES,initial,refresh,acceptReceipt,settle};
+module.exports={RULES,initial,refresh,acceptReceipt,settle,beginRun};

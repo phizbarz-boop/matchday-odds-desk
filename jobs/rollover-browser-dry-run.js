@@ -681,15 +681,12 @@ async function autoLoop(){
  let ledger;
  try{ledger=JSON.parse(await readFile(ledgerPath,'utf8'));}
  catch(error){if(error.code!=='ENOENT')throw error;ledger={state:rules.initial(),attempt:null,lastCode:null,usedCodes:[]};}
- if(!ledger.attempt&&!ledger.state.pending&&!ledger.state.awaitingReset&&
-    ledger.state.wins===0&&((ledger.state.runOpeningStakeKobo==null&&ledger.state.stakeKobo===200000)||
-    (ledger.state.runOpeningStakeKobo===200000&&ledger.state.stakeKobo===200000)||
-    (ledger.state.runOpeningStakeKobo===100000&&ledger.state.stakeKobo===100000)||
-    (ledger.state.runOpeningStakeKobo===500000&&ledger.state.stakeKobo===500000)||
-    ((ledger.state.runOpeningStakeKobo==null||ledger.state.runOpeningStakeKobo===250000)&&ledger.state.stakeKobo===250000))){
-  ledger.state.stakeKobo=RULES.openingStakeKobo;
-  ledger.state.runOpeningStakeKobo=RULES.openingStakeKobo;
+ if(ledger.state.pending||ledger.attempt||ledger.state.awaitingReset||ledger.state.wins>0||ledger.state.stakeKobo!==RULES.openingStakeKobo){
+  ledger.state=rules.beginRun(ledger.state);
+  ledger.attempt=null;
+  ledger.historyMisses=0;
   await saveLedger(ledger);
+  console.log('AUTO: previous run cleared. This run starts at ₦'+(RULES.openingStakeKobo/100).toLocaleString('en-NG')+'.');
  }
  console.log(`Automatic rollover armed · ₦${(RULES.openingStakeKobo/100).toLocaleString('en-NG')} start · ${RULES.targetTicketWins} ticket wins · pause after ${RULES.maxConsecutiveLosses} consecutive losses. Real wagers enabled.`);
  console.log('AUTO: opening SportyBet to check login');
