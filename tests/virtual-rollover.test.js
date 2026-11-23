@@ -319,3 +319,19 @@ test('the seven whitelist rows keep a team only on its own bet',()=>{
  assert.equal(roll.bandAllowed({field:'h35',country:'italy',home:'UDI',away:'MIL'}),false);
  assert.equal(roll.bandAllowed({field:'u45',country:'italy',home:'UDI',away:'MIL'}),true);
 });
+
+test('November 95.8 to 98 uses the bet and team, at home or on either side',()=>{
+ const now=Date.now();
+ const row=(field,country,home,away)=>({fixture:{eventId:'sr:match:'+field+home+away,home,away,league:country,country,kickoffUtc:new Date(now+600000).toISOString()},rows:[{field,odds:1.08,home,away,country,league:country,eventId:'sr:match:'+field+home+away}]});
+ const lane={minOdds:1.05,maxOdds:10,maxLegs:5,minProbability:0,marketFields:['o05','u55','h35'],stack:true,rateSide:'home'};
+ const home=roll.select([row('u55','spain','RAY','RMA'),row('u55','spain','RMA','RAY'),row('o05','england','CHE','ARS'),row('u55','england','EVE','ARS')],[],now,new Set(),lane);
+ assert.deepEqual(home.legs.map(leg=>leg.home+':'+leg.field).sort(),['CHE:o05','RAY:u55']);
+ const either=roll.select([row('u55','spain','RMA','RAY')],[],now,new Set(),{...lane,rateSide:'any'});
+ assert.equal(either.legs[0].matchedSide,'away');
+ assert.equal(either.legs[0].matchedTeam,'RAY');
+ assert.equal(roll.novemberRateMatch({field:'u55',country:'spain',home:'RAY',away:'RMA'},true).rate,98.2);
+ assert.equal(roll.novemberRateMatch({field:'u55',country:'england',home:'EVE',away:'ARS'},false),null);
+ assert.equal(roll.deskSession({session:'rate-home'}).horizonMs,24*3600000);
+ assert.equal(roll.deskSession({session:'rate-any'}).horizonMs,24*3600000);
+ assert.equal(roll.deskSession({session:'next'}).horizonMs,1800000);
+});

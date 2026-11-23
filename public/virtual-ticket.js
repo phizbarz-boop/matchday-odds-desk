@@ -86,6 +86,19 @@ buttons[0].addEventListener('click',()=>{
 document.getElementById('virtual-session').addEventListener('change',()=>{
  const session=document.getElementById('virtual-session').value;
  const maxUnder=session==='max-under', higher=session==='higher', botMix=session==='bot-mix';
+ const rate=session==='rate-home'||session==='rate-any';
+ if(rate){
+  document.getElementById('virtual-min-odds').value='1.05';
+  document.getElementById('virtual-max-odds').value='10';
+  document.getElementById('virtual-max-legs').value='15';
+  document.getElementById('virtual-min-prob').value='0';
+  document.getElementById('virtual-trusted').checked=false;
+  document.getElementById('virtual-one-listed').checked=false;
+  document.getElementById('virtual-table-only').checked=false;
+  const rows=['o05','u55','h35'];
+  box.querySelectorAll('input').forEach(input=>{input.checked=rows.includes(input.value);});
+  return;
+ }
  document.getElementById('virtual-min-odds').value=botMix?'100000':maxUnder?'1.05':higher?'5.00':'1.20';
  document.getElementById('virtual-max-odds').value=botMix?'1000000000':maxUnder?'1000000000':higher?'20.00':'2.00';
  document.getElementById('virtual-max-legs').value=botMix||maxUnder?'20':higher?'15':'3';
