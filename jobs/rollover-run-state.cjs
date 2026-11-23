@@ -2,9 +2,9 @@
 
 // State transitions only. The caller must persist state and supply verified
 // SportyBet receipts and actual credited payouts, never estimated returns.
-const RULES=Object.freeze({openingStakeKobo:200000,targetTicketWins:5,maxConsecutiveLosses:4,minOdds:1.11,maxOdds:1.55,maxLegs:2,
+const RULES=Object.freeze({openingStakeKobo:500000,targetTicketWins:5,maxConsecutiveLosses:4,minOdds:1.11,maxOdds:1.55,maxLegs:2,keepProfit:0.3,
  markets:Object.freeze(['Over 0.5','Under 4.5','Under 5.5','1st Half Under 3.5','Halftime Under 3.5']),timeZone:'Africa/Lagos'});
-const BAND_RULES=Object.freeze({openingStakeKobo:150000,targetTicketWins:20,maxConsecutiveLosses:1,resetEveryLoss:true,minOdds:1.12,maxOdds:1.19,maxLegs:2,
+const BAND_RULES=Object.freeze({openingStakeKobo:500000,targetTicketWins:20,maxConsecutiveLosses:1,resetEveryLoss:true,minOdds:1.12,maxOdds:1.19,maxLegs:2,keepProfit:0.3,
  markets:RULES.markets,timeZone:RULES.timeZone});
 const dateFormat=new Intl.DateTimeFormat('en-CA',{timeZone:RULES.timeZone,year:'numeric',month:'2-digit',day:'2-digit'});
 const dayOf=now=>dateFormat.format(new Date(now));
@@ -56,7 +56,9 @@ function settle(state,result,now=Date.now(),rules=RULES){
  const runEnded=completed||status==='lost';
  next.lastSettled={id:result.id,status,stakeKobo,payoutKobo,profitKobo,ticketWins:next.wins,run:next.run,
   runNetKobo:runEnded?payoutKobo-(next.runOpeningStakeKobo??rules.openingStakeKobo):null,endReason:completed?'target_reached':status==='lost'?'lost':null};
- next.stakeKobo=payoutKobo;
+ const kept=status==='won'&&rules.keepProfit>0?Math.round(profitKobo*rules.keepProfit):profitKobo;
+ next.stakeKobo=stakeKobo+kept;
+ if(status==='won')next.lastSettled.takenKobo=profitKobo-kept;
  if(runEnded){
   if(!rules.resetEveryLoss&&next.consecutiveLosses>=rules.maxConsecutiveLosses)next.awaitingReset=true;
   else Object.assign(next,{wins:0,run:next.run+1,stakeKobo:rules.openingStakeKobo,runOpeningStakeKobo:rules.openingStakeKobo});

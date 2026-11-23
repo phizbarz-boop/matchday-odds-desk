@@ -692,13 +692,13 @@ async function autoLoop(){
  try{band=JSON.parse(await readFile(bandPath,'utf8'));}
  catch(error){if(error.code!=='ENOENT')throw error;band={state:rules.initial(Date.now(),rules.BAND_RULES),attempt:null,lastCode:null,usedCodes:[]};}
  const saveBand=value=>saveLedger(value,bandPath);
- if(band.capitalReset!==1){
+ if(band.capitalReset!==2){
   band.state=rules.initial(Date.now(),rules.BAND_RULES);
   band.attempt=null;
   band.historyMisses=0;
-  band.capitalReset=1;
+  band.capitalReset=2;
   await saveBand(band);
-  console.log('AUTO: whitelist band reset to ₦1,500.');
+  console.log('AUTO: whitelist band reset to ₦'+(rules.BAND_RULES.openingStakeKobo/100).toLocaleString('en-NG')+'.');
  }
  async function serviceBand({allowPlace=true}={}){
   const ruleSet=rules.BAND_RULES;
@@ -733,7 +733,7 @@ async function autoLoop(){
    if(result.state==='settled'){
     band.state=result.stateAfter;band.attempt=null;
     await saveBand(band);
-    console.log('BAND',result.settlement.status.toUpperCase(),'return ₦'+decimal(result.settlement.payoutKobo),'next ₦'+decimal(band.state.stakeKobo),band.state.wins+'/'+ruleSet.targetTicketWins+' wins');
+    console.log('BAND',result.settlement.status.toUpperCase(),'return ₦'+decimal(result.settlement.payoutKobo),'next ₦'+decimal(band.state.stakeKobo),band.state.wins+'/'+ruleSet.targetTicketWins+' wins'+(result.settlement.status==='won'&&band.state.lastSettled?.takenKobo?' · banked ₦'+decimal(band.state.lastSettled.takenKobo):''));
    }else{
     reportWait(result.state==='pending'?'whitelist band bet is still unsettled.':'whitelist band settlement is not verified yet.');
     return false;
@@ -789,7 +789,7 @@ async function autoLoop(){
   console.log('AUTO: previous run cleared. This run starts at ₦'+(RULES.openingStakeKobo/100).toLocaleString('en-NG')+'.');
  }
  console.log(`Automatic rollover armed · ₦${(RULES.openingStakeKobo/100).toLocaleString('en-NG')} start · ${RULES.targetTicketWins} ticket wins · pause after ${RULES.maxConsecutiveLosses} consecutive losses. Real wagers enabled.`);
- console.log('Whitelist band runs at the same time · ₦1,500 start · separate stake and order.');
+ console.log('Whitelist band runs at the same time · ₦'+(rules.BAND_RULES.openingStakeKobo/100).toLocaleString('en-NG')+' start · separate stake and order.');
  console.log('AUTO: opening SportyBet to check login');
  const home=profileContext.pages()[0]??await profileContext.newPage();
  await restoreSessionFromHome(home);
@@ -835,7 +835,7 @@ async function autoLoop(){
     await saveLedger(ledger);
     console.log(result.settlement.status.toUpperCase(),'return ₦'+decimal(result.settlement.payoutKobo),
       ledger.state.awaitingReset?'next run at 00:00 WAT':'next ₦'+decimal(ledger.state.stakeKobo),
-      ledger.state.wins+'/'+RULES.targetTicketWins+' wins',ledger.state.consecutiveLosses+'/'+RULES.maxConsecutiveLosses+' consecutive losses');
+      ledger.state.wins+'/'+RULES.targetTicketWins+' wins',ledger.state.consecutiveLosses+'/'+RULES.maxConsecutiveLosses+' consecutive losses'+(result.settlement.status==='won'&&ledger.state.lastSettled?.takenKobo?' · banked ₦'+decimal(ledger.state.lastSettled.takenKobo):''));
     if(!stopped&&!ledger.state.awaitingReset)continue;
    }else if(result.state!=='pending'){
     reportWait('waiting for verified account settlement: '+result.reason);

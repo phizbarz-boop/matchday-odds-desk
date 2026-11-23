@@ -85,8 +85,8 @@ test('scheduled virtual End status uses the final setScore and verifies event id
  assert.equal(await read({...event,eventId:'sr:match:other'}),null);
 });
 
-test('RDP follows the table whitelist and starts at ₦2,000 with 1.11-1.55',()=>{
- assert.equal(roll.RDP.minOdds,1.11);assert.equal(roll.RDP.maxOdds,1.55);assert.equal(roll.RDP.maxLegs,2);assert.equal(roll.RDP.opening,200000);
+test('RDP follows the table whitelist and starts at ₦5,000 with 1.11-1.55',()=>{
+ assert.equal(roll.RDP.minOdds,1.11);assert.equal(roll.RDP.maxOdds,1.55);assert.equal(roll.RDP.maxLegs,2);assert.equal(roll.RDP.opening,500000);
  assert.deepEqual([...roll.RDP.marketFields],['o05','u45','u55','h35']);
  assert.equal(roll.rdpWhitelistAllowed({field:'u55',country:'spain',home:'ESP',away:'RMA'}),true);
  assert.equal(roll.rdpWhitelistAllowed({field:'o05',country:'england',home:'NFO',away:'ARS'}),false);
@@ -281,7 +281,7 @@ test('new markets use the strongest year teams because none were failure-free',(
 });
 
 test('whitelist band uses the first seven markets and banks the stake after 20 wins',()=>{
- assert.equal(roll.BAND.opening,150000);
+ assert.equal(roll.BAND.opening,500000);
  assert.equal(roll.BAND.minOdds,1.12);
  assert.equal(roll.BAND.maxOdds,1.19);
  assert.equal(roll.BAND.maxLegs,2);
@@ -293,15 +293,15 @@ test('whitelist band uses the first seven markets and banks the stake after 20 w
  assert.equal(roll.bandAllowed({field:'u45',country:'italy',home:'UDI',away:'NAP'}),true);
  assert.equal(roll.bandAllowed({field:'u55',country:'france',home:'ESP',away:'OLM'}),false);
  assert.equal(roll.bandAllowed({field:'u25',country:'spain',home:'RAY',away:'GET'}),false);
- const won=roll.settle({stake:150000,step:19,takeProfitWins:20,legs:[{field:'o05',odds:1.15}]},[{h:1,a:0}],150000);
+ const won=roll.settle({stake:500000,step:19,takeProfitWins:20,keepProfit:0.3,legs:[{field:'o05',odds:1.15}]},[{h:1,a:0}],500000);
  assert.equal(won.banked,true);
- assert.equal(won.nextBalance,150000);
+ assert.equal(won.nextBalance,500000);
  assert.equal(won.nextStep,0);
- const mid=roll.settle({stake:150000,step:2,takeProfitWins:20,legs:[{field:'o05',odds:1.15}]},[{h:1,a:0}],150000);
+ const mid=roll.settle({stake:500000,step:2,takeProfitWins:20,keepProfit:0.3,legs:[{field:'o05',odds:1.15}]},[{h:1,a:0}],500000);
  assert.equal(mid.nextStep,3);
- assert.ok(mid.nextBalance>150000);
- const lost=roll.settle({stake:180000,step:4,takeProfitWins:20,legs:[{field:'u55',odds:1.08}]},[{h:3,a:3}],150000);
+ assert.equal(mid.nextBalance,522500);
+ const lost=roll.settle({stake:180000,step:4,takeProfitWins:20,legs:[{field:'u55',odds:1.08}]},[{h:3,a:3}],500000);
  assert.equal(lost.status,'Lost');
- assert.equal(lost.nextBalance,150000);
+ assert.equal(lost.nextBalance,500000);
  assert.equal(lost.nextStep,0);
 });
