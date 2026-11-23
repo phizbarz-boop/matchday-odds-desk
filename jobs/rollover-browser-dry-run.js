@@ -692,6 +692,14 @@ async function autoLoop(){
  try{band=JSON.parse(await readFile(bandPath,'utf8'));}
  catch(error){if(error.code!=='ENOENT')throw error;band={state:rules.initial(Date.now(),rules.BAND_RULES),attempt:null,lastCode:null,usedCodes:[]};}
  const saveBand=value=>saveLedger(value,bandPath);
+ if(band.capitalReset!==1){
+  band.state=rules.initial(Date.now(),rules.BAND_RULES);
+  band.attempt=null;
+  band.historyMisses=0;
+  band.capitalReset=1;
+  await saveBand(band);
+  console.log('AUTO: whitelist band reset to ₦1,500.');
+ }
  async function serviceBand({allowPlace=true}={}){
   const ruleSet=rules.BAND_RULES;
   band.state=rules.refresh(band.state,Date.now(),ruleSet);
