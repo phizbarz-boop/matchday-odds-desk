@@ -83,11 +83,11 @@ function decodeAccountSettlement(body,pending,finalResults=[]){
   return result('unverified','gift_tax_or_cashout_requires_reconciliation');
  if(payoutKobo===0){
   // The whole order can settle as lost while other legs are still running.
-  // Independent official results, keyed by event ID. A conflicting or
-  // duplicate result is not evidence. Never infer a loss from odds alone.
+  // A finished order with no return is a loss. Do not guess while a leg is open.
   if(order.status===1||combo?.status===1)
    return result('unverified','account_status_conflicts_with_zero_payout');
-  if(!hasVerifiedLosingSelection(order.selections,finalResults))
+  const finished=order.isSettled===1||order.selections.every(row=>row?.isSettled===1);
+  if(!finished&&!hasVerifiedLosingSelection(order.selections,finalResults))
    return result('unverified','zero_payout_without_verified_losing_selection');
   return {state:'settled',settlement:{id:pending.id,status:'lost',payoutKobo:0}};
  }

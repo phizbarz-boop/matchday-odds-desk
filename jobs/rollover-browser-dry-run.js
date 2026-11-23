@@ -844,7 +844,21 @@ async function autoLoop(){
     if(!Array.isArray(quote.legs))quote.legs=[];
     quote.code=ticket.code;
     const kobo=ledger.state.stakeKobo;
-    if(!quote.legs.length||!Number.isFinite(Number(quote.odds))){reportWait('waiting for a confirmed quote for '+ticket.code);continue;}
+    const odds=Number(quote.odds);
+    const dead=['closed_or_near_kickoff','selection_mismatch','selection_odds_above_cap','unsupported_rollover_selection','odds_out_of_range','ticket_changed','invalid_pending_ticket'];
+    if(dead.includes(quote.status)||!quote.legs.length||!Number.isFinite(odds)){
+     const tries=(ledger.quoteWaits?.[ticket.code]||0)+1;
+     ledger.quoteWaits={...(ledger.quoteWaits||{}),[ticket.code]:tries};
+     if(dead.includes(quote.status)||tries>=18){
+      await request(ticket.code,false,false,false,true).catch(()=>{});
+      ledger.usedCodes=[...(ledger.usedCodes||[]),ticket.code];
+      if(ledger.quoteWaits)delete ledger.quoteWaits[ticket.code];
+      await saveLedger(ledger);
+      last=ticket.code;
+      console.log('AUTO: released',ticket.code,(quote.status||'empty')+'. Waiting for the next ticket.');
+     }else reportWait('waiting for a confirmed quote for '+ticket.code);
+     continue;
+    }
      let receipt;
      try{
       receipt=await inspect(ticket.code,quote,kobo,async()=>{
