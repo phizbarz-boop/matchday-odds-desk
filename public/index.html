@@ -136,6 +136,7 @@
     <div class="bet-type-grid" id="virtual-ticket-markets"></div>
     <label class="bet-toggle" style="margin-top:12px"><input type="checkbox" id="virtual-trusted" checked><span>Only whitelist and year top 20% for that bet</span></label>
     <label class="bet-toggle"><input type="checkbox" id="virtual-one-listed"><span>One team on the whitelist or year top 20%</span></label>
+    <label class="bet-toggle"><input type="checkbox" id="virtual-table-only"><span>Only the 7 whitelist rows, matched to that bet</span></label>
     <div class="auto-grid" style="margin-top:12px">
       <label class="field"><span class="settings-label">Ticket session</span><select class="number-input" id="virtual-session"><option value="next">Next round · 30 minutes</option><option value="higher">Higher ticket · next 6 hours</option><option value="max-under">Max payout · unders only</option><option value="bot-mix">Bot mix · high odds</option></select></label>
       <label class="field"><span class="settings-label">Minimum probability</span><input class="number-input" id="virtual-min-prob" type="number" min="0" max="99" step="1" value="75"></label>
@@ -143,7 +144,7 @@
       <label class="field"><span class="settings-label">Maximum combined odds</span><input class="number-input" id="virtual-max-odds" type="number" min="1.05" max="1000000000000" step="0.01" value="2.00"></label>
       <label class="field"><span class="settings-label">Maximum selections</span><select id="virtual-max-legs"><option value="1">1 pick</option><option value="2">2 picks</option><option value="3" selected>3 picks</option><option value="4">4 picks</option><option value="6">6 picks</option><option value="8">8 picks</option><option value="10">10 picks</option><option value="15">15 picks</option><option value="20">20 picks</option><option value="25">25 picks</option><option value="30">30 picks</option><option value="35">35 picks</option><option value="40">40 picks</option><option value="45">45 picks</option><option value="50">50 picks</option></select></label>
     </div>
-    <div class="auto-actions"><button type="button" class="secondary" id="virtual-ticket-build">Build Virtual Ticket</button><button type="button" class="primary" id="virtual-ticket-code">Build + Generate Code</button></div>
+    <div class="auto-actions"><button type="button" class="secondary" id="virtual-ticket-whitelist">Whitelist rows only</button><button type="button" class="secondary" id="virtual-ticket-build">Build Virtual Ticket</button><button type="button" class="primary" id="virtual-ticket-code">Build + Generate Code</button></div>
     <div class="auto-status" id="virtual-ticket-status" role="status"></div>
     <div class="analyzer-results" id="virtual-ticket-results"></div>
   </section>

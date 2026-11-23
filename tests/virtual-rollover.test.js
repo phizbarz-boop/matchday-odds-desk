@@ -305,3 +305,17 @@ test('whitelist band uses the first seven markets and banks the stake after 20 w
  assert.equal(lost.nextBalance,500000);
  assert.equal(lost.nextStep,0);
 });
+
+test('the seven whitelist rows keep a team only on its own bet',()=>{
+ const now=Date.now();
+ const row=(field,country,home,away)=>({fixture:{eventId:'sr:match:'+field+home,home,away,league:country,country,kickoffUtc:new Date(now+600000).toISOString()},rows:[{field,odds:1.2,home,away,country,league:country,eventId:'sr:match:'+field+home}]});
+ const lane={minOdds:1.05,maxOdds:5,maxLegs:2,minProbability:0,marketFields:['o05','u45','u55','h35'],stack:true,tableOnly:true};
+ const spain=roll.select([row('u45','spain','RAY','RMA'),row('o05','spain','RAY','RMA')],[],now,new Set(),lane);
+ assert.equal(spain.legs.length,1);
+ assert.equal(spain.legs[0].field,'u45');
+ const england=roll.select([row('o05','england','CHE','ARS'),row('u55','england','CHE','ARS')],[],now,new Set(),lane);
+ assert.equal(england.legs.length,1);
+ assert.equal(england.legs[0].field,'o05');
+ assert.equal(roll.bandAllowed({field:'h35',country:'italy',home:'UDI',away:'MIL'}),false);
+ assert.equal(roll.bandAllowed({field:'u45',country:'italy',home:'UDI',away:'MIL'}),true);
+});
