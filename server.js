@@ -4226,7 +4226,7 @@ function createRolloverChain({name,namespace,lane,enabled,configured,notify,book
           dateKey:watParts().date,signal:AbortSignal.timeout(60000),shouldAbort:()=>!scheduler.status().running});
         if(!['awaiting_settlement','pending_changed','rollover_busy'].includes(result.reason))
           console.log('['+name+' ticket]',pending.code,result.reason??'booked','tickets='+result.ticketsSent);
-        }else if(lane?.band&&!pending){
+        }else if((lane?.band||lane?.whitelist)&&!pending){
           const result=await run({redis,slotKey:'next:'+Date.now(),dateKey:watParts().date,signal:AbortSignal.timeout(90000),shouldAbort:()=>!scheduler.status().running});
           if(result?.ticketsSent)console.log('['+name+' ticket]',result.reason??'booked','tickets='+result.ticketsSent);
         }
