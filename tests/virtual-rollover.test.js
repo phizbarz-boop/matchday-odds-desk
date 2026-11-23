@@ -85,8 +85,8 @@ test('scheduled virtual End status uses the final setScore and verifies event id
  assert.equal(await read({...event,eventId:'sr:match:other'}),null);
 });
 
-test('RDP follows the table whitelist and starts at ₦2,000 with 1.15-1.55',()=>{
- assert.equal(roll.RDP.minOdds,1.15);assert.equal(roll.RDP.maxOdds,1.55);assert.equal(roll.RDP.maxLegs,2);assert.equal(roll.RDP.opening,200000);
+test('RDP follows the table whitelist and starts at ₦2,000 with 1.11-1.55',()=>{
+ assert.equal(roll.RDP.minOdds,1.11);assert.equal(roll.RDP.maxOdds,1.55);assert.equal(roll.RDP.maxLegs,2);assert.equal(roll.RDP.opening,200000);
  assert.deepEqual([...roll.RDP.marketFields],['o05','u45','u55','h35']);
  assert.equal(roll.rdpWhitelistAllowed({field:'u55',country:'spain',home:'ESP',away:'RMA'}),true);
  assert.equal(roll.rdpWhitelistAllowed({field:'o05',country:'england',home:'NFO',away:'ARS'}),false);

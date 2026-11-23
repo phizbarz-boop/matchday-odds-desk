@@ -2,7 +2,7 @@
 
 // State transitions only. The caller must persist state and supply verified
 // SportyBet receipts and actual credited payouts, never estimated returns.
-const RULES=Object.freeze({openingStakeKobo:200000,targetTicketWins:5,maxConsecutiveLosses:4,minOdds:1.15,maxOdds:1.55,maxLegs:2,
+const RULES=Object.freeze({openingStakeKobo:200000,targetTicketWins:5,maxConsecutiveLosses:4,minOdds:1.11,maxOdds:1.55,maxLegs:2,
  markets:Object.freeze(['Over 0.5','Under 4.5','Under 5.5','1st Half Under 3.5','Halftime Under 3.5']),timeZone:'Africa/Lagos'});
 const BAND_RULES=Object.freeze({openingStakeKobo:150000,targetTicketWins:20,maxConsecutiveLosses:1,resetEveryLoss:true,minOdds:1.12,maxOdds:1.19,maxLegs:2,
  markets:RULES.markets,timeZone:RULES.timeZone});
