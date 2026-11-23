@@ -58,3 +58,18 @@ test('the one-year team prior is not blocked by the old league lock',()=>{
  const kept=learning.filterVirtualBoard(board,learning.train([]),'virtual-rollover-rdp')[0].rows.map(row=>row.field+':'+(row.country||row.league));
  assert.deepEqual(kept,['u45:Spain League','u55:French League','h35:spain','u45:England League','o05:England League','o05:Spain League','h35:Italy League']);
 });
+
+test('an RDP loss benches that team on that market for the next tickets',()=>{
+ const lost={id:'rdp1',strategy:'virtual-rollover-rdp',status:'lost',legs:[{home:'ESP',away:'RAY',field:'u55',status:'lost',startingOdds:1.12,modelProbability:97}]};
+ const model=learning.train([lost]);
+ const board=[{fixture:{},rows:[
+  {field:'u55',home:'ESP',away:'VCF',odds:1.1,probability:97},
+  {field:'u45',home:'ESP',away:'VCF',odds:1.2,probability:93},
+  {field:'o05',home:'CHE',away:'MUN',odds:1.16,probability:95}
+ ]}];
+ const kept=learning.filterVirtualBoard(board,model,'virtual-rollover-rdp')[0].rows.map(row=>row.field+':'+row.home);
+ assert.deepEqual(kept,['u45:ESP','o05:CHE']);
+ const won={id:'rdp2',strategy:'virtual-rollover-rdp',status:'won',legs:[{home:'ESP',away:'VCF',field:'u55',status:'won',startingOdds:1.12,modelProbability:97}]};
+ const restored=learning.filterVirtualBoard(board,learning.train([lost,won]),'virtual-rollover-rdp')[0].rows.map(row=>row.field);
+ assert.deepEqual(restored,['u55','u45','o05']);
+});
