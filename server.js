@@ -4398,7 +4398,11 @@ app.post('/api/sportybet/virtual-ticket',express.json({limit:'24kb'}),async(req,
     const signal=AbortSignal.timeout(req.body?.session==='higher'||req.body?.session==='max-under'||req.body?.session==='bot-mix'||req.body?.session==='rate-home'||req.body?.session==='rate-any'?55000:25000);
     const data=await withPublicSportyRequest(()=>virtualRollOver.buildDesk(redis,req.body||{},{signal,book:req.body?.createCode===true?book:null}),{signal});
     res.json(data);
-  }catch(err){console.warn('[Virtual ticket]',String(err.message).slice(0,180));res.status(502).json({error:'Virtual ticket did not finish. Try again in a moment.'});}
+  }catch(err){
+    const message=String(err.message||'').slice(0,180);
+    console.warn('[Virtual ticket]',message);
+    res.status(502).json({error:/booking|share code|SportyBet|no longer open|timed out/i.test(message)?message:'Virtual ticket did not finish. Try again in a moment.'});
+  }
   finally{virtualDeskBusy=false;}
 });
 
