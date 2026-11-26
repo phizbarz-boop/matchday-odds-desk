@@ -692,11 +692,11 @@ async function autoLoop(){
  try{band=JSON.parse(await readFile(bandPath,'utf8'));}
  catch(error){if(error.code!=='ENOENT')throw error;band={state:rules.initial(Date.now(),rules.BAND_RULES),attempt:null,lastCode:null,usedCodes:[]};}
  const saveBand=value=>saveLedger(value,bandPath);
- if(band.capitalReset!==2){
+ if(band.capitalReset!==3){
   band.state=rules.initial(Date.now(),rules.BAND_RULES);
   band.attempt=null;
   band.historyMisses=0;
-  band.capitalReset=2;
+  band.capitalReset=3;
   await saveBand(band);
   console.log('AUTO: whitelist band reset to ₦'+(rules.BAND_RULES.openingStakeKobo/100).toLocaleString('en-NG')+'.');
  }
